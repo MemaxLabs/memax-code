@@ -16,6 +16,7 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
 - root-confined workspace tools
 - root-confined command execution tools
 - managed command sessions for long-running processes
+- JSONL-backed conversation sessions with resume and listing
 - dry-run configuration inspection
 - event-stream rendering for assistant text, tool calls, command lifecycle,
   workspace edits, verification, usage, and final results
@@ -47,6 +48,21 @@ Run with Anthropic:
 ```sh
 export ANTHROPIC_API_KEY=...
 memax-code --provider anthropic --model claude-sonnet-4-5 "repair the test failure"
+```
+
+Resume an earlier conversation:
+
+```sh
+memax-code --list-sessions
+memax-code --resume 0123456789abcdef0123456789abcdef "continue from the last plan"
+```
+
+Session transcripts are stored under `~/.memax-code/sessions` by default. Use
+`--session-dir` when you want project-local state, temporary test state, or a
+different filesystem policy:
+
+```sh
+memax-code --session-dir .memax-code/sessions --list-sessions
 ```
 
 By default command tools do not inherit the host process environment. Enable it

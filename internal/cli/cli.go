@@ -16,8 +16,16 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if opts.ListSessions {
+		return listSessions(ctx, stdout, opts)
+	}
+	if opts.ResumeSessionID != "" {
+		if err := validateResumeSession(ctx, opts); err != nil {
+			return err
+		}
+	}
 	if opts.Prompt == "" && !opts.DryRun {
-		return fmt.Errorf("prompt is required unless --dry-run is set")
+		return fmt.Errorf("prompt is required unless --dry-run or --list-sessions is set")
 	}
 	if opts.DryRun {
 		return renderDryRun(stdout, opts)
@@ -32,6 +40,9 @@ type options struct {
 	Model             string
 	Profile           string
 	Preset            string
+	SessionDir        string
+	ResumeSessionID   string
+	ListSessions      bool
 	DryRun            bool
 	InheritCommandEnv bool
 }
@@ -50,6 +61,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	model := fs.String("model", "", "provider model name; defaults to OPENAI_MODEL or ANTHROPIC_MODEL")
 	profile := fs.String("profile", "", "coding model profile: fast, balanced, or deep")
 	preset := fs.String("preset", "interactive_dev", "coding preset: safe_local, ci_repair, or interactive_dev")
+	sessionDir := fs.String("session-dir", defaultSessionDir(), "directory for JSONL session transcripts")
+	resumeSessionID := fs.String("resume", "", "resume an existing session id")
+	listSessionsFlag := fs.Bool("list-sessions", false, "list saved sessions and exit")
 	fs.Var(cwd, "C", "alias for --cwd")
 	fs.Var(cwd, "cd", "alias for --cwd")
 	fs.Var(cwd, "cwd", "workspace root")
@@ -58,6 +72,8 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: memax-code [flags] PROMPT\n")
+		fmt.Fprintf(fs.Output(), "       memax-code --resume SESSION_ID [flags] PROMPT\n")
+		fmt.Fprintf(fs.Output(), "       memax-code --list-sessions [flags]\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --dry-run [flags] [PROMPT]\n\n")
 		fmt.Fprintf(fs.Output(), "Flags must precede PROMPT because Go flag parsing stops at the first positional argument.\n\n")
 		fs.PrintDefaults()
@@ -65,6 +81,22 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
+	}
+	resolvedSessionDir, err := resolvePath(*sessionDir)
+	if err != nil {
+		return options{}, fmt.Errorf("resolve session dir: %w", err)
+	}
+	if *listSessionsFlag {
+		if strings.TrimSpace(*resumeSessionID) != "" {
+			return options{}, fmt.Errorf("--list-sessions cannot be combined with --resume")
+		}
+		if *dryRun {
+			return options{}, fmt.Errorf("--list-sessions cannot be combined with --dry-run")
+		}
+		return options{
+			SessionDir:   resolvedSessionDir,
+			ListSessions: true,
+		}, nil
 	}
 
 	providerName, err := parseProvider(*providerRaw)
@@ -92,6 +124,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		Model:             strings.TrimSpace(*model),
 		Profile:           strings.TrimSpace(*profile),
 		Preset:            strings.TrimSpace(*preset),
+		SessionDir:        resolvedSessionDir,
+		ResumeSessionID:   strings.TrimSpace(*resumeSessionID),
+		ListSessions:      *listSessionsFlag,
 		DryRun:            *dryRun,
 		InheritCommandEnv: *inheritCommandEnv,
 	}
@@ -105,6 +140,39 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		return options{}, err
 	}
 	return opts, nil
+}
+
+func defaultSessionDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ".memax-code/sessions"
+	}
+	return filepath.Join(home, ".memax-code", "sessions")
+}
+
+func resolvePath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	if path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		path = home
+	} else if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return abs, nil
 }
 
 type stringFlag struct {
@@ -160,6 +228,8 @@ func renderDryRun(w io.Writer, opts options) error {
 	fmt.Fprintf(w, "profile_description: %s\n", profile.Description())
 	fmt.Fprintf(w, "preset: %s\n", opts.Preset)
 	fmt.Fprintf(w, "cwd: %s\n", opts.CWD)
+	fmt.Fprintf(w, "session_dir: %s\n", opts.SessionDir)
+	fmt.Fprintf(w, "resume_session: %s\n", valueOrUnset(opts.ResumeSessionID))
 	fmt.Fprintf(w, "verification: %s\n", verificationMode(opts.CWD))
 	fmt.Fprintf(w, "inherit_command_env: %t\n", opts.InheritCommandEnv)
 	fmt.Fprintf(w, "prompt: %s\n", valueOrUnset(opts.Prompt))

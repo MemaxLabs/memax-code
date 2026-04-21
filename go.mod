@@ -4,7 +4,7 @@ go 1.24.0
 
 toolchain go1.24.4
 
-require github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260421215836-a997706d38ef
+require github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260421234104-6b108f4eb0bb
 
 require (
 	github.com/creack/pty v1.1.24 // indirect

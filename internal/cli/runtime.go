@@ -7,8 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
+	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/coding"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
@@ -28,11 +31,28 @@ func runPrompt(ctx context.Context, stdout io.Writer, opts options) error {
 	if err != nil {
 		return err
 	}
-	events, err := memaxagent.Query(ctx, opts.Prompt, stack.WithModel(client))
+	agentOpts := stack.WithModel(client)
+	agentOpts.SessionID = opts.ResumeSessionID
+	events, err := memaxagent.Query(ctx, opts.Prompt, agentOpts)
 	if err != nil {
 		return err
 	}
 	return renderEvents(stdout, events)
+}
+
+func validateResumeSession(ctx context.Context, opts options) error {
+	if opts.ResumeSessionID == "" {
+		return nil
+	}
+	store := session.NewJSONLStore(opts.SessionDir)
+	exists, err := store.Exists(ctx, opts.ResumeSessionID)
+	if err != nil {
+		return fmt.Errorf("resume session %q: %w", opts.ResumeSessionID, err)
+	}
+	if !exists {
+		return fmt.Errorf("resume session %q: session not found", opts.ResumeSessionID)
+	}
+	return nil
 }
 
 func buildStack(opts options) (coding.Stack, error) {
@@ -59,15 +79,16 @@ func buildStack(opts options) (coding.Stack, error) {
 	if err != nil {
 		return coding.Stack{}, fmt.Errorf("create command runner: %w", err)
 	}
-	sessions, err := commandtools.NewOSSessionManager(opts.CWD, sessionOpts...)
+	commandSessions, err := commandtools.NewOSSessionManager(opts.CWD, sessionOpts...)
 	if err != nil {
 		return coding.Stack{}, fmt.Errorf("create command session manager: %w", err)
 	}
 
 	config.Workspace = ws
+	config.Sessions = session.NewJSONLStore(opts.SessionDir)
 	config.Tasks = tasktools.NewMemoryStore(nil)
 	config.Command.Runner = runner
-	config.CommandSessions = sessions
+	config.CommandSessions = commandSessions
 	if hasGoModule(opts.CWD) {
 		config.Verifier.Verifier = verifier(runner)
 	} else {
@@ -83,6 +104,32 @@ func buildStack(opts options) (coding.Stack, error) {
 		return coding.Stack{}, fmt.Errorf("configure runtime: %w", userFacingError(err))
 	}
 	return stack, nil
+}
+
+func listSessions(ctx context.Context, stdout io.Writer, opts options) error {
+	store := session.NewJSONLStore(opts.SessionDir)
+	sessions, err := session.List(ctx, store)
+	if err != nil {
+		return err
+	}
+	if len(sessions) == 0 {
+		_, err := fmt.Fprintln(stdout, "no sessions")
+		return err
+	}
+	table := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(table, "SESSION ID\tCREATED\tPARENT")
+	// session.List returns oldest-first; the CLI presents the newest sessions first.
+	for i := len(sessions) - 1; i >= 0; i-- {
+		s := sessions[i]
+		parent := s.ParentID
+		if parent == "" {
+			parent = "-"
+		}
+		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\n", s.ID, s.CreatedAt.Format(time.RFC3339), parent); err != nil {
+			return err
+		}
+	}
+	return table.Flush()
 }
 
 func hasGoModule(root string) bool {
