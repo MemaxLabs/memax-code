@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 )
@@ -15,11 +16,15 @@ const clearLine = "\r\x1b[2K"
 // Keep one terminal column free so the transient status does not trigger a
 // soft-wrap on common 80-column terminals.
 const defaultLiveStatusWidth = 79
+const liveStatusTickInterval = 120 * time.Millisecond
+
+var liveStatusFrames = [...]string{"-", "\\", "|", "/"}
 
 type liveRenderState struct {
-	transcript  tuiRenderState
-	statusShown bool
-	statusWidth int
+	transcript    tuiRenderState
+	statusShown   bool
+	statusWidth   int
+	spinnerOffset int
 }
 
 func (s *liveRenderState) Render(w io.Writer, event memaxagent.Event) error {
@@ -34,6 +39,20 @@ func (s *liveRenderState) Finish(w io.Writer) error {
 	return s.transcript.Finish(w)
 }
 
+func (s *liveRenderState) Tick(w io.Writer) error {
+	if !s.canDrawStatus() || s.transcript.activity.resultSeen || s.transcript.activity.terminalError {
+		return nil
+	}
+	fmt.Fprint(w, clearLine)
+	fmt.Fprint(w, s.statusLine(s.nextSpinnerFrame()))
+	s.statusShown = true
+	return nil
+}
+
+func (s *liveRenderState) TickInterval() time.Duration {
+	return liveStatusTickInterval
+}
+
 func (s *liveRenderState) clearStatus(w io.Writer) {
 	if !s.statusShown {
 		return
@@ -43,17 +62,31 @@ func (s *liveRenderState) clearStatus(w io.Writer) {
 }
 
 func (s *liveRenderState) drawStatus(w io.Writer) {
-	if !s.transcript.headerWritten || s.transcript.assistantLineOpen {
+	if !s.canDrawStatus() {
 		return
 	}
 	fmt.Fprint(w, clearLine)
-	fmt.Fprint(w, s.statusLine())
+	fmt.Fprint(w, s.statusLine(""))
 	s.statusShown = true
 }
 
-func (s *liveRenderState) statusLine() string {
+func (s *liveRenderState) canDrawStatus() bool {
+	return s.transcript.headerWritten && !s.transcript.assistantLineOpen
+}
+
+func (s *liveRenderState) nextSpinnerFrame() string {
+	frame := liveStatusFrames[s.spinnerOffset%len(liveStatusFrames)]
+	s.spinnerOffset++
+	return frame
+}
+
+func (s *liveRenderState) statusLine(frame string) string {
 	activity := &s.transcript.activity
-	parts := []string{"Memax Code", activity.phase()}
+	title := "Memax Code"
+	if frame != "" {
+		title += " " + frame
+	}
+	parts := []string{title, activity.phase()}
 	if activity.activeTool != "" {
 		parts = append(parts, "active="+statusValue(activity.activeTool))
 	} else if activity.lastTool != "" {

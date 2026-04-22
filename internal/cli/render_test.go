@@ -3,8 +3,10 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -195,6 +197,59 @@ func TestLiveRenderEventsPrintsTransientStatusAndFinalStatus(t *testing.T) {
 		"cmd=go test ./...",
 		clearLine + "\n[status]",
 		"phase=done",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("live output missing %q:\n%q", want, got)
+		}
+	}
+}
+
+func TestRenderWithTicksRendererWhileEventStreamIsIdle(t *testing.T) {
+	events := make(chan memaxagent.Event)
+	ticks := make(chan time.Time)
+	renderer := &tickSpyRenderer{ticked: make(chan struct{})}
+	done := make(chan error, 1)
+
+	go func() {
+		done <- renderWithTicks(&bytes.Buffer{}, events, renderer, ticks)
+	}()
+
+	ticks <- time.Now()
+	select {
+	case <-renderer.ticked:
+	case <-time.After(time.Second):
+		t.Fatal("renderer did not receive idle tick")
+	}
+
+	close(events)
+	if err := <-done; err != nil {
+		t.Fatalf("renderWithTicks() error = %v", err)
+	}
+	if renderer.finished != 1 {
+		t.Fatalf("Finish calls = %d, want 1", renderer.finished)
+	}
+}
+
+func TestLiveRenderTickAnimatesStatusWhileRunning(t *testing.T) {
+	var out bytes.Buffer
+	renderer := &liveRenderState{statusWidth: 80}
+	if err := renderer.Render(&out, memaxagent.Event{Kind: memaxagent.EventSessionStarted, SessionID: "00000000-0000-7000-8000-000000000001"}); err != nil {
+		t.Fatalf("Render(session) error = %v", err)
+	}
+	if err := renderer.Render(&out, memaxagent.Event{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{Name: "run_command"}}); err != nil {
+		t.Fatalf("Render(tool start) error = %v", err)
+	}
+	if err := renderer.Tick(&out); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+	if err := renderer.Tick(&out); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		clearLine + "Memax Code - | running",
+		clearLine + "Memax Code \\ | running",
+		"active=run_command",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("live output missing %q:\n%q", want, got)
@@ -523,4 +578,31 @@ func TestRenderEventHandlesNilErrorEvent(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "agent emitted error event") {
 		t.Fatalf("renderEvent() error = %v, want nil error fallback", err)
 	}
+}
+
+type tickSpyRenderer struct {
+	ticked   chan struct{}
+	ticks    int
+	finished int
+}
+
+func (r *tickSpyRenderer) Render(io.Writer, memaxagent.Event) error {
+	return nil
+}
+
+func (r *tickSpyRenderer) Finish(io.Writer) error {
+	r.finished++
+	return nil
+}
+
+func (r *tickSpyRenderer) Tick(io.Writer) error {
+	r.ticks++
+	if r.ticks == 1 {
+		close(r.ticked)
+	}
+	return nil
+}
+
+func (r *tickSpyRenderer) TickInterval() time.Duration {
+	return time.Hour
 }

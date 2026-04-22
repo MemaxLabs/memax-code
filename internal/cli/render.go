@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/MemaxLabs/memax-code/internal/cli/ui"
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
@@ -59,16 +60,53 @@ func renderEvents(w io.Writer, events <-chan memaxagent.Event) error {
 }
 
 func renderWith(w io.Writer, events <-chan memaxagent.Event, renderer ui.Renderer) error {
-	var firstErr error
-	for event := range events {
-		if err := renderer.Render(w, event); err != nil && firstErr == nil {
-			firstErr = err
+	return renderWithTicks(w, events, renderer, nil)
+}
+
+type tickRenderer interface {
+	ui.Renderer
+	Tick(io.Writer) error
+	TickInterval() time.Duration
+}
+
+func renderWithTicks(w io.Writer, events <-chan memaxagent.Event, renderer ui.Renderer, ticks <-chan time.Time) error {
+	tickerRenderer, ticking := renderer.(tickRenderer)
+	if !ticking {
+		ticks = nil
+	} else if ticks == nil {
+		interval := tickerRenderer.TickInterval()
+		if interval > 0 {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			ticks = ticker.C
 		}
 	}
-	if err := renderer.Finish(w); err != nil && firstErr == nil {
-		firstErr = err
+
+	var firstErr error
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				if err := renderer.Finish(w); err != nil && firstErr == nil {
+					firstErr = err
+				}
+				return firstErr
+			}
+			if err := renderer.Render(w, event); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		case _, ok := <-ticks:
+			if !ok {
+				ticks = nil
+				continue
+			}
+			if ticking {
+				if err := tickerRenderer.Tick(w); err != nil && firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
 	}
-	return firstErr
 }
 
 type tuiRenderState struct {
