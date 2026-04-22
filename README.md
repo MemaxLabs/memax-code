@@ -57,6 +57,11 @@ memax-code --provider anthropic --model claude-sonnet-4-5 "repair the test failu
 
 Persist local defaults in `~/.memax-code/config.json`:
 
+```sh
+memax-code config init --provider openai --model gpt-5.4 --ui live
+memax-code config show
+```
+
 ```json
 {
   "provider": "openai",

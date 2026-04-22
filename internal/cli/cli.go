@@ -14,6 +14,9 @@ import (
 
 // Run parses CLI arguments, builds the coding runtime, and executes one prompt.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "config" {
+		return runConfigCommand(args[1:], stdout, stderr)
+	}
 	opts, err := parseArgs(args, stderr)
 	if err != nil {
 		return err
@@ -96,6 +99,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		fmt.Fprintf(fs.Output(), "       memax-code --show-session SESSION_ID|latest [flags]\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --inspect-tools [flags]\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --dry-run [flags] [PROMPT]\n\n")
+		fmt.Fprintf(fs.Output(), "       memax-code config init|show [flags]\n\n")
 		fmt.Fprintf(fs.Output(), "Flags must precede PROMPT because Go flag parsing stops at the first positional argument.\n\n")
 		fs.PrintDefaults()
 	}
