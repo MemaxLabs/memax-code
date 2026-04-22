@@ -29,22 +29,36 @@ const (
 )
 
 func runPrompt(ctx context.Context, stdout io.Writer, opts options) error {
+	_, err := runPromptWithSession(ctx, stdout, opts)
+	return err
+}
+
+func runPromptWithSession(ctx context.Context, stdout io.Writer, opts options) (string, error) {
 	client, err := modelClient(opts)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	stack, err := buildStack(opts)
 	if err != nil {
-		return err
+		return "", err
 	}
 	agentOpts := stack.WithModel(client)
 	agentOpts.SessionID = opts.ResumeSessionID
 	events, err := memaxagent.Query(ctx, opts.Prompt, agentOpts)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return renderEventsWithMode(stdout, events, opts.UI)
+	var sessionID string
+	observe := func(event memaxagent.Event) {
+		if event.Kind == memaxagent.EventSessionStarted && sessionID == "" {
+			sessionID = event.SessionID
+		}
+	}
+	if err := renderEventsWithModeObserved(stdout, events, opts.UI, observe); err != nil {
+		return sessionID, err
+	}
+	return sessionID, nil
 }
 
 func resolveResumeSession(ctx context.Context, opts *options) error {

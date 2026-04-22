@@ -12,8 +12,14 @@ import (
 	"strings"
 )
 
-// Run parses CLI arguments, builds the coding runtime, and executes one prompt.
+// Run parses CLI arguments and executes the requested command using empty stdin.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	return RunWithIO(ctx, args, strings.NewReader(""), stdout, stderr)
+}
+
+// RunWithIO parses CLI arguments and executes the requested command using the
+// supplied standard streams.
+func RunWithIO(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) > 0 && args[0] == "config" {
 		return runConfigCommand(args[1:], stdout, stderr)
 	}
@@ -38,8 +44,11 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
+	if opts.Interactive {
+		return runInteractive(ctx, stdin, stdout, stderr, opts)
+	}
 	if opts.Prompt == "" && !opts.DryRun {
-		return fmt.Errorf("prompt is required unless --dry-run or --list-sessions is set")
+		return fmt.Errorf("prompt is required unless --dry-run, --interactive, or --list-sessions is set")
 	}
 	if opts.DryRun {
 		return renderDryRun(stdout, opts)
@@ -64,6 +73,7 @@ type options struct {
 	ShowSessionID     string
 	InspectTools      bool
 	DryRun            bool
+	Interactive       bool
 	InheritCommandEnv bool
 }
 
@@ -89,6 +99,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	listSessionsFlag := fs.Bool("list-sessions", false, "list saved sessions and exit")
 	showSessionID := fs.String("show-session", "", "print a saved session transcript and exit")
 	inspectTools := fs.Bool("inspect-tools", false, "print the model-facing tool contract and exit")
+	interactive := false
+	fs.BoolVar(&interactive, "interactive", false, "start a line-oriented interactive shell")
+	fs.BoolVar(&interactive, "i", false, "alias for --interactive")
 	fs.Var(cwd, "C", "alias for --cwd")
 	fs.Var(cwd, "cd", "alias for --cwd")
 	fs.Var(cwd, "cwd", "workspace root")
@@ -97,6 +110,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: memax-code [flags] PROMPT\n")
+		fmt.Fprintf(fs.Output(), "       memax-code --interactive [flags]\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --resume SESSION_ID|latest [flags] PROMPT\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --list-sessions [flags]\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --show-session SESSION_ID|latest [flags]\n")
@@ -143,6 +157,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		if *dryRun {
 			return options{}, fmt.Errorf("--show-session cannot be combined with --dry-run")
 		}
+		if interactive {
+			return options{}, fmt.Errorf("--show-session cannot be combined with --interactive")
+		}
 		if len(fs.Args()) > 0 {
 			return options{}, fmt.Errorf("--show-session does not accept a prompt")
 		}
@@ -160,6 +177,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		}
 		if *dryRun {
 			return options{}, fmt.Errorf("--list-sessions cannot be combined with --dry-run")
+		}
+		if interactive {
+			return options{}, fmt.Errorf("--list-sessions cannot be combined with --interactive")
 		}
 		return options{
 			SessionDir:   resolvedSessionDir,
@@ -212,6 +232,15 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		DryRun:            *dryRun,
 		InheritCommandEnv: inheritEnv,
 	}
+	if interactive {
+		if *dryRun {
+			return options{}, fmt.Errorf("--interactive cannot be combined with --dry-run")
+		}
+		if opts.Prompt != "" {
+			return options{}, fmt.Errorf("--interactive does not accept an initial prompt; type it after the shell starts")
+		}
+		opts.Interactive = true
+	}
 	if opts.Preset == "" {
 		opts.Preset = "interactive_dev"
 	}
@@ -239,6 +268,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		}
 		if opts.DryRun {
 			return options{}, fmt.Errorf("--inspect-tools cannot be combined with --dry-run")
+		}
+		if opts.Interactive {
+			return options{}, fmt.Errorf("--inspect-tools cannot be combined with --interactive")
 		}
 		if opts.Prompt != "" {
 			return options{}, fmt.Errorf("--inspect-tools does not accept a prompt")

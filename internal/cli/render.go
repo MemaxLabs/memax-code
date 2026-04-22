@@ -26,6 +26,10 @@ func parseRenderMode(raw string) (renderMode, error) {
 }
 
 func renderEventsWithMode(w io.Writer, events <-chan memaxagent.Event, mode renderMode) error {
+	return renderEventsWithModeObserved(w, events, mode, nil)
+}
+
+func renderEventsWithModeObserved(w io.Writer, events <-chan memaxagent.Event, mode renderMode, observe func(memaxagent.Event)) error {
 	terminal, width := terminalWriterInfo(w)
 	mode = ui.ResolveMode(mode, terminal)
 	renderer, err := ui.SelectRenderer(mode, ui.Renderers{
@@ -36,7 +40,7 @@ func renderEventsWithMode(w io.Writer, events <-chan memaxagent.Event, mode rend
 	if err != nil {
 		return err
 	}
-	return renderWith(w, events, renderer)
+	return renderWithObserved(w, events, renderer, observe)
 }
 
 func terminalWriterInfo(w io.Writer) (bool, int) {
@@ -60,7 +64,11 @@ func renderEvents(w io.Writer, events <-chan memaxagent.Event) error {
 }
 
 func renderWith(w io.Writer, events <-chan memaxagent.Event, renderer ui.Renderer) error {
-	return renderWithTicks(w, events, renderer, nil)
+	return renderWithObserved(w, events, renderer, nil)
+}
+
+func renderWithObserved(w io.Writer, events <-chan memaxagent.Event, renderer ui.Renderer, observe func(memaxagent.Event)) error {
+	return renderWithTicksObserved(w, events, renderer, nil, observe)
 }
 
 type tickRenderer interface {
@@ -70,6 +78,10 @@ type tickRenderer interface {
 }
 
 func renderWithTicks(w io.Writer, events <-chan memaxagent.Event, renderer ui.Renderer, ticks <-chan time.Time) error {
+	return renderWithTicksObserved(w, events, renderer, ticks, nil)
+}
+
+func renderWithTicksObserved(w io.Writer, events <-chan memaxagent.Event, renderer ui.Renderer, ticks <-chan time.Time, observe func(memaxagent.Event)) error {
 	tickerRenderer, ticking := renderer.(tickRenderer)
 	if !ticking {
 		ticks = nil
@@ -91,6 +103,9 @@ func renderWithTicks(w io.Writer, events <-chan memaxagent.Event, renderer ui.Re
 					firstErr = err
 				}
 				return firstErr
+			}
+			if observe != nil {
+				observe(event)
 			}
 			if err := renderer.Render(w, event); err != nil && firstErr == nil {
 				firstErr = err

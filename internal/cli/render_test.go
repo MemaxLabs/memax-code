@@ -230,6 +230,22 @@ func TestRenderWithTicksRendererWhileEventStreamIsIdle(t *testing.T) {
 	}
 }
 
+func TestRenderEventsWithModeObservedReceivesEvents(t *testing.T) {
+	events := make(chan memaxagent.Event, 2)
+	events <- memaxagent.Event{Kind: memaxagent.EventSessionStarted, SessionID: "00000000-0000-7000-8000-000000000001"}
+	close(events)
+
+	var observed []memaxagent.EventKind
+	if err := renderEventsWithModeObserved(&bytes.Buffer{}, events, renderModeTUI, func(event memaxagent.Event) {
+		observed = append(observed, event.Kind)
+	}); err != nil {
+		t.Fatalf("renderEventsWithModeObserved() error = %v", err)
+	}
+	if len(observed) != 1 || observed[0] != memaxagent.EventSessionStarted {
+		t.Fatalf("observed = %#v, want session started", observed)
+	}
+}
+
 func TestLiveRenderTickAnimatesStatusWhileRunning(t *testing.T) {
 	var out bytes.Buffer
 	start := time.Date(2026, 4, 22, 19, 0, 0, 0, time.UTC)

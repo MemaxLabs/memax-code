@@ -836,6 +836,129 @@ func TestRunRequiresPromptUnlessDryRun(t *testing.T) {
 	}
 }
 
+func TestRunInteractiveHandlesSlashCommandsWithoutProvider(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := RunWithIO(context.Background(), []string{
+		"--interactive",
+		"--session-dir", t.TempDir(),
+	}, strings.NewReader("/help\n/session\n/new\n/quit\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("RunWithIO() error = %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no transcript for slash-only session", stdout.String())
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"Memax Code interactive shell",
+		"slash commands:",
+		"no active session",
+		"started a new session",
+		"bye",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunInteractiveResumeLatestCommand(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, userMessage("resume me")); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = RunWithIO(ctx, []string{
+		"--interactive",
+		"--session-dir", sessionDir,
+	}, strings.NewReader("/resume latest\n/session\n/quit\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("RunWithIO() error = %v", err)
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"resumed session: " + sess.ID,
+		"session: " + sess.ID,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunInteractiveSlashCommandErrorPathsContinue(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, userMessage("list me")); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = RunWithIO(ctx, []string{
+		"--interactive",
+		"--session-dir", sessionDir,
+	}, strings.NewReader("/resume\n/resume not-a-session\n/sessions\n/nope\n/quit\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("RunWithIO() error = %v", err)
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"usage: /resume SESSION_ID|latest",
+		"invalid session id",
+		"SESSION ID",
+		sess.ID,
+		`unknown command "/nope"`,
+		"bye",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestInteractivePromptSlashEscape(t *testing.T) {
+	if !isInteractiveCommandLine("/help") {
+		t.Fatal("/help was not treated as a slash command")
+	}
+	if isInteractiveCommandLine("//etc/hosts is broken") {
+		t.Fatal("//etc/hosts was treated as a slash command")
+	}
+	if got := unescapeInteractivePrompt("//etc/hosts is broken"); got != "/etc/hosts is broken" {
+		t.Fatalf("unescapeInteractivePrompt() = %q, want leading slash prompt", got)
+	}
+	if got := unescapeInteractivePrompt("regular prompt"); got != "regular prompt" {
+		t.Fatalf("unescapeInteractivePrompt() = %q, want unchanged regular prompt", got)
+	}
+}
+
+func TestRunInteractiveRejectsPromptAndConflictingFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"--interactive", "initial prompt"},
+		{"--interactive", "--dry-run"},
+		{"--interactive", "--list-sessions"},
+		{"--interactive", "--show-session", "latest"},
+		{"--interactive", "--inspect-tools"},
+	} {
+		var stdout, stderr bytes.Buffer
+		err := RunWithIO(context.Background(), append(args, "--session-dir", t.TempDir()), strings.NewReader("/quit\n"), &stdout, &stderr)
+		if err == nil || !strings.Contains(err.Error(), "--interactive") {
+			t.Fatalf("RunWithIO(%v) error = %v, want interactive conflict", args, err)
+		}
+	}
+}
+
 func TestParseRejectsUnknownProvider(t *testing.T) {
 	var stderr bytes.Buffer
 	_, err := parseArgs([]string{"--dry-run", "--provider", "other"}, &stderr)

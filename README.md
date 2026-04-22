@@ -20,6 +20,7 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
   and transcript inspection
 - dry-run configuration inspection
 - local setup diagnostics with `memax-code doctor`
+- a line-oriented interactive shell with slash commands for session control
 - event-stream rendering for assistant text, tool calls, command lifecycle,
   workspace edits, verification, usage, and final results, with `auto`, `live`,
   `tui`, and `plain` renderer modes
@@ -27,9 +28,11 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
 The CLI now has the first terminal UI foundation: `auto` chooses structured
 terminal rendering for interactive output and plain rendering for logs, tests,
 and pipes. `--ui live` opts into an early live status line while preserving the
-sectioned transcript underneath. It does not yet ship the full-screen app shell,
-session picker, slash commands, or sandboxed OS execution expected from a
-mature coding-agent CLI. Those are product slices on top of this foundation.
+sectioned transcript underneath. `--interactive` starts a simple prompt loop
+with `/help`, `/session`, `/sessions`, `/resume`, `/new`, and `/quit`. It does
+not yet ship the full-screen app shell, session picker, or sandboxed OS
+execution expected from a mature coding-agent CLI. Those are product slices on
+top of this foundation.
 
 ## Usage
 
@@ -95,6 +98,27 @@ memax-code doctor --config .memax-code/config.json --cwd .
 `doctor` reports config loading, provider/model resolution, API-key presence,
 session storage, workspace verification mode, and required local binaries. It
 exits non-zero for usage errors, invalid config, or hard local setup failures.
+
+Start an interactive shell:
+
+```sh
+memax-code --interactive --ui live
+```
+
+Inside the shell, type normal prompts to continue the current session. Slash
+commands control local session state without calling a model:
+
+```text
+/help
+/sessions
+/resume latest
+/session
+/new
+/quit
+```
+
+Use `//` when a normal prompt needs to start with `/`, for example
+`//etc/hosts is broken; investigate`.
 
 Resume an earlier conversation:
 
