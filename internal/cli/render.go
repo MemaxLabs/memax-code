@@ -82,9 +82,19 @@ type tuiRenderState struct {
 	commands          int
 	patches           int
 	verifications     int
+	approvalEvents    int
+	toolErrors        int
+	terminalError     bool
 	sessionID         string
 	usage             string
 	resultSeen        bool
+	activeTool        string
+	activeTools       []string
+	lastTool          string
+	lastCommand       string
+	lastPatch         string
+	lastVerification  string
+	lastApproval      string
 }
 
 func (s *tuiRenderState) render(w io.Writer, event memaxagent.Event) error {
@@ -113,6 +123,8 @@ func (s *tuiRenderState) render(w io.Writer, event memaxagent.Event) error {
 	case memaxagent.EventToolUseStart:
 		if event.ToolUse != nil {
 			s.tools++
+			s.startActiveTool(event.ToolUse.Name)
+			s.lastTool = event.ToolUse.Name
 			s.sectionLine(w, "tool")
 			fmt.Fprintf(w, "start: %s\n", event.ToolUse.Name)
 		}
@@ -120,16 +132,20 @@ func (s *tuiRenderState) render(w io.Writer, event memaxagent.Event) error {
 		// The structured renderer waits for finalized tool-use events.
 	case memaxagent.EventToolUse:
 		if event.ToolUse != nil {
+			s.ensureActiveTool(event.ToolUse.Name)
+			s.lastTool = event.ToolUse.Name
 			s.sectionLine(w, "tool")
 			fmt.Fprintf(w, "call: %s\n", event.ToolUse.Name)
 		}
 	case memaxagent.EventToolResult:
 		if event.ToolResult != nil {
+			s.finishActiveTool(event.ToolResult.Name)
 			s.sectionLine(w, "tool")
 			content := strings.TrimSpace(event.ToolResult.Content)
 			label := "result"
 			if event.ToolResult.IsError {
 				label = "error"
+				s.toolErrors++
 				if content == "" {
 					content = "<empty tool error>"
 				}
@@ -148,6 +164,7 @@ func (s *tuiRenderState) render(w io.Writer, event memaxagent.Event) error {
 	case memaxagent.EventWorkspacePatch:
 		if event.Workspace != nil {
 			s.patches++
+			s.lastPatch = workspaceSummary(event.Workspace)
 			s.sectionLine(w, "workspace")
 			fmt.Fprintf(w, "patch: paths=%s changes=%d\n", strings.Join(event.Workspace.Paths, ","), event.Workspace.Changes)
 		}
@@ -164,14 +181,20 @@ func (s *tuiRenderState) render(w io.Writer, event memaxagent.Event) error {
 	case memaxagent.EventCommandFinished:
 		if event.Command != nil {
 			s.commands++
+			s.lastCommand = commandDisplay(event)
 			s.sectionLine(w, "command")
 			fmt.Fprintf(w, "%s exit=%d timeout=%t\n", commandDisplay(event), event.Command.ExitCode, event.Command.TimedOut)
 		}
 	case memaxagent.EventCommandStarted:
 		if event.Command != nil {
 			s.commands++
+			s.lastCommand = commandDisplay(event)
 			s.sectionLine(w, "command")
-			fmt.Fprintf(w, "started: %s pid=%d\n", event.Command.CommandID, event.Command.PID)
+			fmt.Fprintf(w, "started: %s pid=%d", event.Command.CommandID, event.Command.PID)
+			if display := commandDisplay(event); display != "" {
+				fmt.Fprintf(w, " command=%q", display)
+			}
+			fmt.Fprintln(w)
 		}
 	case memaxagent.EventCommandOutput:
 		if event.Command != nil {
@@ -196,9 +219,18 @@ func (s *tuiRenderState) render(w io.Writer, event memaxagent.Event) error {
 	case memaxagent.EventVerification:
 		if event.Verification != nil {
 			s.verifications++
+			s.lastVerification = event.Verification.Name
 			s.sectionLine(w, "verification")
 			fmt.Fprintf(w, "%s passed=%t\n", event.Verification.Name, event.Verification.Passed)
 		}
+	case memaxagent.EventApprovalRequested:
+		s.renderApproval(w, "requested", event.Approval)
+	case memaxagent.EventApprovalGranted:
+		s.renderApproval(w, "granted", event.Approval)
+	case memaxagent.EventApprovalDenied:
+		s.renderApproval(w, "denied", event.Approval)
+	case memaxagent.EventApprovalConsumed:
+		s.renderApproval(w, "consumed", event.Approval)
 	case memaxagent.EventUsage:
 		if event.Usage != nil {
 			s.usage = fmt.Sprintf("input=%d output=%d total=%d", event.Usage.InputTokens, event.Usage.OutputTokens, event.Usage.TotalTokens)
@@ -215,11 +247,81 @@ func (s *tuiRenderState) render(w io.Writer, event memaxagent.Event) error {
 		if event.Err == nil {
 			return fmt.Errorf("agent emitted error event")
 		}
+		s.terminalError = true
 		s.sectionLine(w, "error")
 		fmt.Fprintln(w, event.Err)
 		return event.Err
 	}
 	return nil
+}
+
+func (s *tuiRenderState) startActiveTool(name string) {
+	if name == "" {
+		return
+	}
+	s.activeTools = append(s.activeTools, name)
+	s.activeTool = name
+}
+
+func (s *tuiRenderState) ensureActiveTool(name string) {
+	if name == "" {
+		return
+	}
+	for _, active := range s.activeTools {
+		if active == name {
+			return
+		}
+	}
+	if s.activeTool == name {
+		return
+	}
+	s.startActiveTool(name)
+}
+
+func (s *tuiRenderState) finishActiveTool(name string) {
+	if name == "" {
+		return
+	}
+	for i := len(s.activeTools) - 1; i >= 0; i-- {
+		if s.activeTools[i] == name {
+			s.activeTools = append(s.activeTools[:i], s.activeTools[i+1:]...)
+			break
+		}
+	}
+	if s.activeTool != name {
+		return
+	}
+	s.activeTool = ""
+	if len(s.activeTools) > 0 {
+		s.activeTool = s.activeTools[len(s.activeTools)-1]
+	}
+}
+
+func (s *tuiRenderState) renderApproval(w io.Writer, action string, approval *memaxagent.ApprovalEvent) {
+	if approval == nil {
+		return
+	}
+	s.approvalEvents++
+	s.lastApproval = action
+	if approval.Action != "" {
+		s.lastApproval = action + ":" + approval.Action
+	} else if approval.Summary.Title != "" {
+		s.lastApproval = action + ":" + approval.Summary.Title
+	}
+	s.sectionLine(w, "approval")
+	if approval.Action == "" {
+		if approval.Summary.Title != "" {
+			fmt.Fprintf(w, "%s: title=%q\n", action, approval.Summary.Title)
+			return
+		}
+		fmt.Fprintf(w, "%s\n", action)
+		return
+	}
+	if approval.Summary.Title != "" {
+		fmt.Fprintf(w, "%s: %s title=%q\n", action, approval.Action, approval.Summary.Title)
+		return
+	}
+	fmt.Fprintf(w, "%s: %s\n", action, approval.Action)
 }
 
 func (s *tuiRenderState) sectionLine(w io.Writer, section string) {
@@ -259,7 +361,80 @@ func (s *tuiRenderState) finish(w io.Writer) {
 	if s.resultSeen {
 		fmt.Fprint(w, " done=true")
 	}
+	fmt.Fprintf(w, " phase=%s", s.phase())
 	fmt.Fprintln(w)
+	s.printStatusDetails(w)
+}
+
+func (s *tuiRenderState) printStatusDetails(w io.Writer) {
+	var details []string
+	if s.toolErrors > 0 {
+		details = append(details, fmt.Sprintf("tool_errors=%d", s.toolErrors))
+	}
+	if s.terminalError {
+		details = append(details, "error=true")
+	}
+	if s.approvalEvents > 0 {
+		details = append(details, fmt.Sprintf("approval_events=%d", s.approvalEvents))
+	}
+	if s.lastTool != "" {
+		details = append(details, fmt.Sprintf("last_tool=%q", statusValue(s.lastTool)))
+	}
+	if s.activeTool != "" {
+		details = append(details, fmt.Sprintf("active_tool=%q", statusValue(s.activeTool)))
+	}
+	if s.lastCommand != "" {
+		details = append(details, fmt.Sprintf("last_command=%q", statusValue(s.lastCommand)))
+	}
+	if s.lastPatch != "" {
+		details = append(details, fmt.Sprintf("last_patch=%q", statusValue(s.lastPatch)))
+	}
+	if s.lastVerification != "" {
+		details = append(details, fmt.Sprintf("last_verification=%q", statusValue(s.lastVerification)))
+	}
+	if s.lastApproval != "" {
+		details = append(details, fmt.Sprintf("last_approval=%q", statusValue(s.lastApproval)))
+	}
+	if len(details) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "activity: %s\n", strings.Join(details, " "))
+}
+
+func workspaceSummary(event *memaxagent.WorkspaceEvent) string {
+	if event == nil {
+		return ""
+	}
+	switch len(event.Paths) {
+	case 0:
+		return fmt.Sprintf("paths=0 changes=%d", event.Changes)
+	case 1:
+		return fmt.Sprintf("%s changes=%d", event.Paths[0], event.Changes)
+	default:
+		return fmt.Sprintf("paths=%d first=%s changes=%d", len(event.Paths), event.Paths[0], event.Changes)
+	}
+}
+
+func statusValue(value string) string {
+	const max = 80
+	value = strings.TrimSpace(value)
+	if len(value) <= max {
+		return value
+	}
+	if max <= 1 {
+		return value[:max]
+	}
+	return value[:max-3] + "..."
+}
+
+func (s *tuiRenderState) phase() string {
+	if s.terminalError {
+		return "error"
+	}
+	if s.resultSeen {
+		return "done"
+	}
+	return "running"
 }
 
 type renderState struct {
