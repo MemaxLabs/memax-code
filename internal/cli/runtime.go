@@ -116,6 +116,35 @@ func showSession(ctx context.Context, stdout io.Writer, opts options) error {
 	return nil
 }
 
+func inspectTools(_ context.Context, stdout io.Writer, opts options) error {
+	stack, err := buildStack(opts)
+	if err != nil {
+		return err
+	}
+	specs := append([]model.ToolSpec(nil), stack.Registry().Specs()...)
+	sort.SliceStable(specs, func(i, j int) bool {
+		return specs[i].Name < specs[j].Name
+	})
+	for _, spec := range specs {
+		fmt.Fprintf(stdout, "tool: %s\n", spec.Name)
+		if spec.Description != "" {
+			fmt.Fprintf(stdout, "description: %s\n", spec.Description)
+		}
+		fmt.Fprintf(stdout, "read_only: %t\n", spec.ReadOnly)
+		fmt.Fprintf(stdout, "destructive: %t\n", spec.Destructive)
+		fmt.Fprintf(stdout, "concurrency_safe: %t\n", spec.ConcurrencySafe)
+		if spec.MaxResultBytes > 0 {
+			fmt.Fprintf(stdout, "max_result_bytes: %d\n", spec.MaxResultBytes)
+		}
+		schema, err := json.Marshal(spec.InputSchema)
+		if err != nil {
+			return fmt.Errorf("inspect tool %q schema: %w", spec.Name, err)
+		}
+		fmt.Fprintf(stdout, "input_schema: %s\n\n", schema)
+	}
+	return nil
+}
+
 func renderTranscriptMessage(w io.Writer, index int, msg model.Message) error {
 	fmt.Fprintf(w, "\n[%d] %s", index, msg.Role)
 	if msg.ID != "" {
@@ -254,6 +283,7 @@ func buildStack(opts options) (coding.Stack, error) {
 	config.Tasks = tasktools.NewMemoryStore(nil)
 	config.Command.Runner = runner
 	config.CommandSessions = commandSessions
+	config.CommandSessionStartInputMode = coding.CommandSessionStartInputShellCommand
 	if hasGoModule(opts.CWD) {
 		config.Verifier.Verifier = verifier(runner)
 	} else {

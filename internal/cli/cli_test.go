@@ -61,6 +61,49 @@ func TestDryRunPrintsUI(t *testing.T) {
 	}
 }
 
+func TestInspectToolsPrintsModelFacingContracts(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--inspect-tools",
+		"--cwd", t.TempDir(),
+		"--provider", "openai",
+		"--model", "example-model",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"tool: run_command\n",
+		`"command":{"description":"Shell command string`,
+		`"type":"string"`,
+		"tool: start_command\n",
+		`configured or default platform shell`,
+		"tool: workspace_apply_patch\n",
+		`"unified_diff"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("inspect-tools output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `"operations"`) {
+		t.Fatalf("inspect-tools output exposed structured patch operations:\n%s", out)
+	}
+}
+
+func TestInspectToolsRejectsPrompt(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--inspect-tools",
+		"--provider", "openai",
+		"--model", "example-model",
+		"inspect",
+	}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "--inspect-tools does not accept a prompt") {
+		t.Fatalf("Run() error = %v, want prompt rejection", err)
+	}
+}
+
 func TestDryRunPrintsSessionConfig(t *testing.T) {
 	sessionDir := t.TempDir()
 	store := session.NewJSONLStore(sessionDir)

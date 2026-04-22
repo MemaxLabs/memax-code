@@ -22,6 +22,9 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if opts.ShowSessionID != "" {
 		return showSession(ctx, stdout, opts)
 	}
+	if opts.InspectTools {
+		return inspectTools(ctx, stdout, opts)
+	}
 	if opts.ResumeSessionID != "" {
 		if err := resolveResumeSession(ctx, &opts); err != nil {
 			return err
@@ -48,6 +51,7 @@ type options struct {
 	ResumeSessionID   string
 	ListSessions      bool
 	ShowSessionID     string
+	InspectTools      bool
 	DryRun            bool
 	InheritCommandEnv bool
 }
@@ -71,6 +75,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	resumeSessionID := fs.String("resume", "", "resume an existing session id, or latest")
 	listSessionsFlag := fs.Bool("list-sessions", false, "list saved sessions and exit")
 	showSessionID := fs.String("show-session", "", "print a saved session transcript and exit")
+	inspectTools := fs.Bool("inspect-tools", false, "print the model-facing tool contract and exit")
 	fs.Var(cwd, "C", "alias for --cwd")
 	fs.Var(cwd, "cd", "alias for --cwd")
 	fs.Var(cwd, "cwd", "workspace root")
@@ -82,6 +87,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		fmt.Fprintf(fs.Output(), "       memax-code --resume SESSION_ID|latest [flags] PROMPT\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --list-sessions [flags]\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --show-session SESSION_ID|latest [flags]\n")
+		fmt.Fprintf(fs.Output(), "       memax-code --inspect-tools [flags]\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --dry-run [flags] [PROMPT]\n\n")
 		fmt.Fprintf(fs.Output(), "Flags must precede PROMPT because Go flag parsing stops at the first positional argument.\n\n")
 		fs.PrintDefaults()
@@ -99,6 +105,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		if *listSessionsFlag {
 			return options{}, fmt.Errorf("--show-session cannot be combined with --list-sessions")
 		}
+		if *inspectTools {
+			return options{}, fmt.Errorf("--show-session cannot be combined with --inspect-tools")
+		}
 		if strings.TrimSpace(*resumeSessionID) != "" {
 			return options{}, fmt.Errorf("--show-session cannot be combined with --resume")
 		}
@@ -114,6 +123,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		}, nil
 	}
 	if *listSessionsFlag {
+		if *inspectTools {
+			return options{}, fmt.Errorf("--list-sessions cannot be combined with --inspect-tools")
+		}
 		if strings.TrimSpace(*resumeSessionID) != "" {
 			return options{}, fmt.Errorf("--list-sessions cannot be combined with --resume")
 		}
@@ -154,6 +166,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		SessionDir:        resolvedSessionDir,
 		ResumeSessionID:   strings.TrimSpace(*resumeSessionID),
 		ListSessions:      *listSessionsFlag,
+		InspectTools:      *inspectTools,
 		DryRun:            *dryRun,
 		InheritCommandEnv: *inheritCommandEnv,
 	}
@@ -165,6 +178,17 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	}
 	if _, err := parsePreset(opts.Preset); err != nil {
 		return options{}, err
+	}
+	if opts.InspectTools {
+		if opts.ResumeSessionID != "" {
+			return options{}, fmt.Errorf("--inspect-tools cannot be combined with --resume")
+		}
+		if opts.DryRun {
+			return options{}, fmt.Errorf("--inspect-tools cannot be combined with --dry-run")
+		}
+		if opts.Prompt != "" {
+			return options{}, fmt.Errorf("--inspect-tools does not accept a prompt")
+		}
 	}
 	ui, err := parseRenderMode(*uiRaw)
 	if err != nil {
