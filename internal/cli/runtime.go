@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -51,27 +52,153 @@ func resolveResumeSession(ctx context.Context, opts *options) error {
 		return nil
 	}
 	store := session.NewJSONLStore(opts.SessionDir)
-	if strings.EqualFold(opts.ResumeSessionID, resumeLatest) {
-		id, err := latestSessionID(ctx, store, opts.SessionDir)
-		if err != nil {
-			return fmt.Errorf("resume latest: %w", err)
-		}
-		opts.ResumeSessionID = id
-		return nil
-	}
-	exists, err := store.Exists(ctx, opts.ResumeSessionID)
+	id, err := resolveSessionID(ctx, store, opts.SessionDir, opts.ResumeSessionID, "resume")
 	if err != nil {
-		return fmt.Errorf("resume session %q: %w", opts.ResumeSessionID, err)
+		return err
+	}
+	opts.ResumeSessionID = id
+	return nil
+}
+
+func resolveSessionID(ctx context.Context, store *session.JSONLStore, dir, raw, action string) (string, error) {
+	if strings.EqualFold(raw, resumeLatest) {
+		id, err := latestSessionID(ctx, store, dir)
+		if err != nil {
+			return "", fmt.Errorf("%s latest: %w", action, err)
+		}
+		return id, nil
+	}
+	canonical, ok := session.CanonicalID(raw)
+	if !ok {
+		return "", fmt.Errorf("%s session %q: invalid session id", action, raw)
+	}
+	exists, err := store.Exists(ctx, canonical)
+	if err != nil {
+		return "", fmt.Errorf("%s session %q: %w", action, raw, err)
 	}
 	if !exists {
-		return fmt.Errorf("resume session %q: session not found", opts.ResumeSessionID)
+		return "", fmt.Errorf("%s session %q: session not found", action, raw)
 	}
-	canonical, ok := session.CanonicalID(opts.ResumeSessionID)
-	if !ok {
-		return fmt.Errorf("resume session %q: invalid session id", opts.ResumeSessionID)
+	return canonical, nil
+}
+
+func showSession(ctx context.Context, stdout io.Writer, opts options) error {
+	store := session.NewJSONLStore(opts.SessionDir)
+	id, err := resolveSessionID(ctx, store, opts.SessionDir, opts.ShowSessionID, "show")
+	if err != nil {
+		return err
 	}
-	opts.ResumeSessionID = canonical
+	sess, err := store.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("show session %q: %w", id, err)
+	}
+	messages, err := store.Messages(ctx, sess.ID)
+	if err != nil {
+		return fmt.Errorf("show session %q messages: %w", id, err)
+	}
+	parent := sess.ParentID
+	if parent == "" {
+		parent = "-"
+	}
+	fmt.Fprintf(stdout, "session: %s\n", sess.ID)
+	created := "-"
+	if !sess.CreatedAt.IsZero() {
+		created = sess.CreatedAt.Format(time.RFC3339)
+	}
+	fmt.Fprintf(stdout, "created: %s\n", created)
+	fmt.Fprintf(stdout, "parent: %s\n", parent)
+	fmt.Fprintf(stdout, "messages: %d\n", len(messages))
+	for i, msg := range messages {
+		if err := renderTranscriptMessage(stdout, i+1, msg); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func renderTranscriptMessage(w io.Writer, index int, msg model.Message) error {
+	fmt.Fprintf(w, "\n[%d] %s", index, msg.Role)
+	if msg.ID != "" {
+		fmt.Fprintf(w, " id=%s", msg.ID)
+	}
+	fmt.Fprintln(w)
+	for _, block := range msg.Content {
+		switch block.Type {
+		case model.ContentText:
+			writeIndented(w, sanitizeTranscriptText(block.Text))
+		case model.ContentToolUse:
+			if block.ToolUse == nil {
+				continue
+			}
+			fmt.Fprintf(w, "  tool_use: %s id=%s\n", block.ToolUse.Name, block.ToolUse.ID)
+			if input := compactJSON(block.ToolUse.Input); input != "" {
+				writeIndented(w, "input: "+input)
+			}
+		case model.ContentProviderArtifact:
+			if block.ProviderArtifact == nil {
+				continue
+			}
+			artifact := block.ProviderArtifact
+			fmt.Fprintf(w, "  provider_artifact: provider=%s type=%s", artifact.Provider, artifact.Type)
+			if artifact.ID != "" {
+				fmt.Fprintf(w, " id=%s", artifact.ID)
+			}
+			fmt.Fprintln(w)
+		default:
+			fmt.Fprintf(w, "  content: type=%s\n", block.Type)
+		}
+	}
+	if msg.ToolResult != nil {
+		result := msg.ToolResult
+		label := "tool_result"
+		if result.IsError {
+			label = "tool_error"
+		}
+		fmt.Fprintf(w, "  %s: %s id=%s\n", label, result.Name, result.ToolUseID)
+		writeIndented(w, sanitizeTranscriptText(result.Content))
+	}
+	return nil
+}
+
+func writeIndented(w io.Writer, text string) {
+	text = strings.TrimRight(text, "\n")
+	if text == "" {
+		return
+	}
+	for _, line := range strings.Split(text, "\n") {
+		fmt.Fprintf(w, "  %s\n", line)
+	}
+}
+
+func compactJSON(raw json.RawMessage) string {
+	raw = json.RawMessage(strings.TrimSpace(string(raw)))
+	if len(raw) == 0 {
+		return ""
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return sanitizeTranscriptText(string(raw))
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return sanitizeTranscriptText(string(raw))
+	}
+	return string(encoded)
+}
+
+func sanitizeTranscriptText(text string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '\n', '\t':
+			return r
+		case '\r':
+			return -1
+		}
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, text)
 }
 
 func latestSessionID(ctx context.Context, store *session.JSONLStore, dir string) (string, error) {

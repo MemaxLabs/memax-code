@@ -326,6 +326,201 @@ func TestListSessionsStripsTitleControlBytes(t *testing.T) {
 	}
 }
 
+func TestShowSessionPrintsTranscript(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, userMessage("inspect this session")); err != nil {
+		t.Fatalf("Append() user error = %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, model.Message{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{
+			{Type: model.ContentText, Text: "I will read the file.\r\nThen continue."},
+			{
+				Type: model.ContentToolUse,
+				ToolUse: &model.ToolUse{
+					ID:    "tool-1",
+					Name:  "read_file",
+					Input: []byte(`{"path":"README.md"}`),
+				},
+			},
+			{Type: model.ContentType("future_block")},
+		},
+	}); err != nil {
+		t.Fatalf("Append() assistant error = %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, model.Message{
+		Role: model.RoleTool,
+		ToolResult: &model.ToolResult{
+			ToolUseID: "tool-1",
+			Name:      "read_file",
+			Content:   "file contents",
+		},
+	}); err != nil {
+		t.Fatalf("Append() tool error = %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = Run(ctx, []string{
+		"--show-session", sess.ID,
+		"--session-dir", sessionDir,
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"session: " + sess.ID,
+		"messages: 3",
+		"[1] user",
+		"inspect this session",
+		"[2] assistant",
+		"I will read the file.",
+		"Then continue.",
+		"tool_use: read_file id=tool-1",
+		`input: {"path":"README.md"}`,
+		"content: type=future_block",
+		"[3] tool",
+		"tool_result: read_file id=tool-1",
+		"file contents",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("show output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "\n\n  Then continue.") {
+		t.Fatalf("show output expanded CRLF into a blank line:\n%q", out)
+	}
+}
+
+func TestShowSessionResolvesLatestAndIgnoresModelConfig(t *testing.T) {
+	t.Setenv("MEMAX_CODE_PROVIDER", "not-a-provider")
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	older, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() older error = %v", err)
+	}
+	newer, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() newer error = %v", err)
+	}
+	if err := store.Append(ctx, older.ID, userMessage("older prompt")); err != nil {
+		t.Fatalf("Append() older error = %v", err)
+	}
+	if err := store.Append(ctx, newer.ID, userMessage("newer prompt")); err != nil {
+		t.Fatalf("Append() newer error = %v", err)
+	}
+	setTranscriptModTime(t, sessionDir, older.ID, time.Unix(100, 0))
+	setTranscriptModTime(t, sessionDir, newer.ID, time.Unix(200, 0))
+
+	var stdout, stderr bytes.Buffer
+	err = Run(ctx, []string{
+		"--show-session", "latest",
+		"--session-dir", sessionDir,
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "session: "+newer.ID) || !strings.Contains(out, "newer prompt") {
+		t.Fatalf("show latest did not resolve newest session:\n%s", out)
+	}
+	if strings.Contains(out, older.ID) || strings.Contains(out, "older prompt") {
+		t.Fatalf("show latest included older session:\n%s", out)
+	}
+}
+
+func TestShowSessionRejectsConflictingFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"--show-session", "latest", "--list-sessions"},
+		{"--show-session", "latest", "--resume", "00000000-0000-7000-8000-000000000000"},
+		{"--show-session", "latest", "--dry-run"},
+		{"--show-session", "latest", "prompt"},
+	} {
+		var stdout, stderr bytes.Buffer
+		err := Run(context.Background(), append(args, "--session-dir", t.TempDir()), &stdout, &stderr)
+		if err == nil || !strings.Contains(err.Error(), "--show-session") {
+			t.Fatalf("Run(%v) error = %v, want show-session conflict", args, err)
+		}
+	}
+}
+
+func TestShowSessionReportsInvalidMissingAndCorruptSessions(t *testing.T) {
+	sessionDir := t.TempDir()
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "invalid id",
+			args: []string{"--show-session", "not-a-session", "--session-dir", sessionDir},
+			want: "invalid session id",
+		},
+		{
+			name: "missing id",
+			args: []string{"--show-session", "00000000-0000-7000-8000-000000000077", "--session-dir", sessionDir},
+			want: "session not found",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			err := Run(context.Background(), tc.args, &stdout, &stderr)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Run() error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+
+	corruptID := "00000000-0000-7000-8000-000000000078"
+	if err := os.WriteFile(transcriptPath(sessionDir, corruptID), []byte("{not json}\n"), 0o600); err != nil {
+		t.Fatalf("write corrupt transcript: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--show-session", corruptID,
+		"--session-dir", sessionDir,
+	}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "decode transcript line") {
+		t.Fatalf("Run() error = %v, want decode error", err)
+	}
+}
+
+func TestShowSessionHandlesTranscriptWithoutSessionEntry(t *testing.T) {
+	sessionDir := t.TempDir()
+	id := "00000000-0000-7000-8000-000000000079"
+	transcript := `{"type":"message","timestamp":"2026-04-22T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"message only"}]}}` + "\n"
+	if err := os.WriteFile(transcriptPath(sessionDir, id), []byte(transcript), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--show-session", id,
+		"--session-dir", sessionDir,
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"session: " + id, "created: -", "message only"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("show output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "0001-01-01") {
+		t.Fatalf("show output rendered zero time:\n%s", out)
+	}
+}
+
 func TestRunValidatesResumeSessionBeforeProvider(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{
