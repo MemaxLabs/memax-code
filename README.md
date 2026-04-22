@@ -55,6 +55,30 @@ export ANTHROPIC_API_KEY=...
 memax-code --provider anthropic --model claude-sonnet-4-5 "repair the test failure"
 ```
 
+Persist local defaults in `~/.memax-code/config.json`:
+
+```json
+{
+  "provider": "openai",
+  "model": "gpt-5.4",
+  "profile": "balanced",
+  "effort": "auto",
+  "ui": "live",
+  "session_dir": "~/.memax-code/sessions",
+  "inherit_command_env": false
+}
+```
+
+Use a project-local config when needed:
+
+```sh
+memax-code --config .memax-code/config.json --dry-run "inspect this repository"
+```
+
+Configuration precedence is `flag > environment > config file > built-in
+default`. The default config file is optional; an explicitly supplied
+`--config` path must exist and decode as strict JSON.
+
 Resume an earlier conversation:
 
 ```sh
@@ -103,10 +127,22 @@ memax-code --inherit-command-env "run the relevant tests and fix failures"
 Configuration environment variables:
 
 - `MEMAX_CODE_PROVIDER`: default provider, `openai` or `anthropic`.
+- `MEMAX_CODE_CONFIG`: path to the JSON config file.
+- `MEMAX_CODE_PROFILE`: default coding model profile.
+- `MEMAX_CODE_EFFORT`: default reasoning effort, `auto`, `low`, `medium`,
+  `high`, or `xhigh`.
+- `MEMAX_CODE_PRESET`: default coding preset.
+- `MEMAX_CODE_UI`: default renderer, `auto`, `live`, `tui`, or `plain`.
+- `MEMAX_CODE_SESSION_DIR`: default JSONL session transcript directory.
+- `MEMAX_CODE_INHERIT_COMMAND_ENV`: default command environment inheritance,
+  accepting `1/0`, `t/f`, `true/false`, and case variants.
 - `OPENAI_API_KEY`: OpenAI API key.
 - `OPENAI_MODEL`: default OpenAI model when `--model` is omitted.
 - `ANTHROPIC_API_KEY`: Anthropic API key.
 - `ANTHROPIC_MODEL`: default Anthropic model when `--model` is omitted.
+
+Relative paths in flags, environment variables, and config files resolve
+against the process working directory at startup.
 
 Verification is enabled automatically for Go workspaces with a root `go.mod`
 and currently runs `go test ./...` or `go vet ./...` through the SDK verifier

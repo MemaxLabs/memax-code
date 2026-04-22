@@ -68,6 +68,196 @@ func TestDryRunPrintsEffortOverride(t *testing.T) {
 	}
 }
 
+func TestDryRunLoadsConfigFileDefaults(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+		"provider": "anthropic",
+		"model": "claude-test",
+		"profile": "deep",
+		"effort": "high",
+		"preset": "safe_local",
+		"ui": "plain",
+		"session_dir": "./sessions",
+		"inherit_command_env": true
+	}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--dry-run",
+		"--config", configPath,
+		"--cwd", repoRoot(t),
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"provider: anthropic",
+		"model: claude-test",
+		"profile: deep",
+		"effort: high",
+		"preset: safe_local",
+		"ui: plain",
+		"config_loaded: true",
+		"inherit_command_env: true",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestParseFlagAndEnvOverrideConfigFile(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+		"provider": "anthropic",
+		"model": "config-model",
+		"profile": "deep",
+		"effort": "high",
+		"ui": "plain"
+	}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("OPENAI_MODEL", "env-model")
+	t.Setenv("MEMAX_CODE_EFFORT", "low")
+
+	var stderr bytes.Buffer
+	opts, err := parseArgs([]string{
+		"--dry-run",
+		"--config", configPath,
+		"--provider", "openai",
+		"--profile", "fast",
+	}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if opts.Provider != providerOpenAI {
+		t.Fatalf("Provider = %q, want openai", opts.Provider)
+	}
+	if opts.Model != "env-model" {
+		t.Fatalf("Model = %q, want env override", opts.Model)
+	}
+	if opts.Profile != "fast" {
+		t.Fatalf("Profile = %q, want flag override", opts.Profile)
+	}
+	if opts.Effort != "low" {
+		t.Fatalf("Effort = %q, want env override", opts.Effort)
+	}
+	if opts.UI != renderModePlain {
+		t.Fatalf("UI = %q, want config value", opts.UI)
+	}
+}
+
+func TestParseRejectsBadConfigFile(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"provider": "openai", "surprise": true}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stderr bytes.Buffer
+	_, err := parseArgs([]string{"--dry-run", "--config", configPath}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("parseArgs() error = %v, want unknown field", err)
+	}
+}
+
+func TestParseRejectsConfigValidationWithOrigin(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "provider",
+			body: `{"provider": "other"}`,
+			want: "invalid config",
+		},
+		{
+			name: "profile",
+			body: `{"profile": "huge-brain"}`,
+			want: "invalid config",
+		},
+		{
+			name: "effort",
+			body: `{"effort": "maximum"}`,
+			want: "invalid config",
+		},
+		{
+			name: "preset",
+			body: `{"preset": "risky"}`,
+			want: "invalid config",
+		},
+		{
+			name: "ui",
+			body: `{"ui": "fancy"}`,
+			want: "invalid config",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, key := range []string{"MEMAX_CODE_PROVIDER", "MEMAX_CODE_PROFILE", "MEMAX_CODE_EFFORT", "MEMAX_CODE_PRESET", "MEMAX_CODE_UI"} {
+				t.Setenv(key, "")
+			}
+			configPath := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(configPath, []byte(tt.body), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			var stderr bytes.Buffer
+			_, err := parseArgs([]string{"--dry-run", "--config", configPath}, &stderr)
+			if err == nil || !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), configPath) {
+				t.Fatalf("parseArgs() error = %v, want %q and config path", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseRejectsConfigDirectory(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.Mkdir(configPath, 0o700); err != nil {
+		t.Fatalf("mkdir config path: %v", err)
+	}
+
+	var stderr bytes.Buffer
+	_, err := parseArgs([]string{"--dry-run", "--config", configPath}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("parseArgs() error = %v, want not a regular file", err)
+	}
+}
+
+func TestParseReportsBrokenDefaultConfigWithRecoveryHint(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configPath := filepath.Join(home, ".memax-code", "config.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"surprise": true}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stderr bytes.Buffer
+	_, err := parseArgs([]string{"--list-sessions"}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "fix or remove the default config file") {
+		t.Fatalf("parseArgs() error = %v, want recovery hint", err)
+	}
+}
+
+func TestParseIgnoresMissingDefaultConfigFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	var stderr bytes.Buffer
+	opts, err := parseArgs([]string{"--dry-run"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if opts.ConfigLoaded {
+		t.Fatal("ConfigLoaded = true, want false for missing default config")
+	}
+}
+
 func TestDryRunPrintsUI(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{

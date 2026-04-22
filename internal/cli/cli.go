@@ -2,11 +2,13 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -48,6 +50,8 @@ type options struct {
 	Effort            string
 	Preset            string
 	UI                renderMode
+	ConfigPath        string
+	ConfigLoaded      bool
 	SessionDir        string
 	ResumeSessionID   string
 	ListSessions      bool
@@ -67,10 +71,11 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		return options{}, fmt.Errorf("get cwd: %w", err)
 	}
 	cwd := &stringFlag{value: defaultCWD}
-	providerRaw := fs.String("provider", envDefault("MEMAX_CODE_PROVIDER", string(providerOpenAI)), "model provider: openai or anthropic")
+	configRaw := fs.String("config", envDefault("MEMAX_CODE_CONFIG", defaultConfigPath()), "path to JSON config file")
+	providerRaw := fs.String("provider", string(providerOpenAI), "model provider: openai or anthropic")
 	model := fs.String("model", "", "provider model name; defaults to OPENAI_MODEL or ANTHROPIC_MODEL")
 	profile := fs.String("profile", "", "coding model profile: fast, balanced, or deep")
-	effort := fs.String("effort", envDefault("MEMAX_CODE_EFFORT", ""), "override reasoning effort: auto, low, medium, high, or xhigh")
+	effort := fs.String("effort", "", "override reasoning effort: auto, low, medium, high, or xhigh")
 	preset := fs.String("preset", "interactive_dev", "coding preset: safe_local, ci_repair, or interactive_dev")
 	uiRaw := fs.String("ui", string(renderModeAuto), "event renderer: auto, live, tui, or plain")
 	sessionDir := fs.String("session-dir", defaultSessionDir(), "directory for JSONL session transcripts")
@@ -98,7 +103,21 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
-	resolvedSessionDir, err := resolvePath(*sessionDir)
+	configPath, err := resolvePath(*configRaw)
+	if err != nil {
+		return options{}, fmt.Errorf("resolve config path: %w", err)
+	}
+	configExplicit := flagWasSet(fs, "config") || strings.TrimSpace(os.Getenv("MEMAX_CODE_CONFIG")) != ""
+	cfg, configLoaded, err := loadConfig(configPath, configExplicit)
+	if err != nil {
+		if !configExplicit {
+			return options{}, fmt.Errorf("%w (fix or remove the default config file, or pass --config with a valid config path)", err)
+		}
+		return options{}, err
+	}
+	sessionDirSetting := stringSetting(*sessionDir, flagWasSet(fs, "session-dir"), "MEMAX_CODE_SESSION_DIR", cfg.SessionDir, defaultSessionDir())
+	sessionDirRaw := sessionDirSetting.Value
+	resolvedSessionDir, err := resolvePath(sessionDirRaw)
 	if err != nil {
 		return options{}, fmt.Errorf("resolve session dir: %w", err)
 	}
@@ -140,10 +159,14 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		}, nil
 	}
 
-	providerName, err := parseProvider(*providerRaw)
+	providerSetting := stringSetting(*providerRaw, flagWasSet(fs, "provider"), "MEMAX_CODE_PROVIDER", cfg.Provider, string(providerOpenAI))
+	providerName, err := parseProvider(providerSetting.Value)
 	if err != nil {
-		if !flagWasSet(fs, "provider") && strings.TrimSpace(os.Getenv("MEMAX_CODE_PROVIDER")) != "" {
+		if providerSetting.Source == settingSourceEnv {
 			return options{}, fmt.Errorf("invalid MEMAX_CODE_PROVIDER: %w", err)
+		}
+		if providerSetting.Source == settingSourceConfig {
+			return options{}, fmt.Errorf("invalid config %s provider: %w", configPath, err)
 		}
 		return options{}, err
 	}
@@ -154,35 +177,52 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	if _, err := os.Stat(absCWD); err != nil {
 		return options{}, fmt.Errorf("stat cwd: %w", err)
 	}
-	if *model == "" {
-		*model = defaultModel(providerName)
+	modelValue := stringSetting(*model, flagWasSet(fs, "model"), providerName.modelEnv(), cfg.Model, "").Value
+	profileSetting := stringSetting(*profile, flagWasSet(fs, "profile"), "MEMAX_CODE_PROFILE", cfg.Profile, "")
+	effortSetting := stringSetting(*effort, flagWasSet(fs, "effort"), "MEMAX_CODE_EFFORT", cfg.Effort, "")
+	presetSetting := stringSetting(*preset, flagWasSet(fs, "preset"), "MEMAX_CODE_PRESET", cfg.Preset, "interactive_dev")
+	uiSetting := stringSetting(*uiRaw, flagWasSet(fs, "ui"), "MEMAX_CODE_UI", cfg.UI, string(renderModeAuto))
+	inheritEnv, err := boolSetting(*inheritCommandEnv, flagWasSet(fs, "inherit-command-env"), "MEMAX_CODE_INHERIT_COMMAND_ENV", cfg.InheritCommandEnv, false)
+	if err != nil {
+		return options{}, err
 	}
 
 	opts = options{
 		Prompt:            strings.TrimSpace(strings.Join(fs.Args(), " ")),
 		CWD:               absCWD,
 		Provider:          providerName,
-		Model:             strings.TrimSpace(*model),
-		Profile:           strings.TrimSpace(*profile),
-		Effort:            strings.TrimSpace(*effort),
-		Preset:            strings.TrimSpace(*preset),
+		Model:             strings.TrimSpace(modelValue),
+		Profile:           strings.TrimSpace(profileSetting.Value),
+		Effort:            strings.TrimSpace(effortSetting.Value),
+		Preset:            strings.TrimSpace(presetSetting.Value),
+		ConfigPath:        configPath,
+		ConfigLoaded:      configLoaded,
 		SessionDir:        resolvedSessionDir,
 		ResumeSessionID:   strings.TrimSpace(*resumeSessionID),
 		ListSessions:      *listSessionsFlag,
 		InspectTools:      *inspectTools,
 		DryRun:            *dryRun,
-		InheritCommandEnv: *inheritCommandEnv,
+		InheritCommandEnv: inheritEnv,
 	}
 	if opts.Preset == "" {
 		opts.Preset = "interactive_dev"
 	}
 	if _, err := parseModelProfile(opts.Profile); err != nil {
+		if profileSetting.Source == settingSourceConfig {
+			return options{}, fmt.Errorf("invalid config %s profile: %w", configPath, err)
+		}
 		return options{}, fmt.Errorf("unknown model profile %q (want one of: %s)", opts.Profile, validModelProfiles())
 	}
 	if _, err := parseModelEffort(opts.Effort); err != nil {
+		if effortSetting.Source == settingSourceConfig {
+			return options{}, fmt.Errorf("invalid config %s effort: %w", configPath, err)
+		}
 		return options{}, fmt.Errorf("unknown model effort %q (want one of: %s)", opts.Effort, validModelEfforts())
 	}
 	if _, err := parsePreset(opts.Preset); err != nil {
+		if presetSetting.Source == settingSourceConfig {
+			return options{}, fmt.Errorf("invalid config %s preset: %w", configPath, err)
+		}
 		return options{}, err
 	}
 	if opts.InspectTools {
@@ -196,8 +236,11 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 			return options{}, fmt.Errorf("--inspect-tools does not accept a prompt")
 		}
 	}
-	ui, err := parseRenderMode(*uiRaw)
+	ui, err := parseRenderMode(uiSetting.Value)
 	if err != nil {
+		if uiSetting.Source == settingSourceConfig {
+			return options{}, fmt.Errorf("invalid config %s ui: %w", configPath, err)
+		}
 		return options{}, err
 	}
 	opts.UI = ui
@@ -210,6 +253,102 @@ func defaultSessionDir() string {
 		return ".memax-code/sessions"
 	}
 	return filepath.Join(home, ".memax-code", "sessions")
+}
+
+func defaultConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ".memax-code/config.json"
+	}
+	return filepath.Join(home, ".memax-code", "config.json")
+}
+
+type fileConfig struct {
+	Provider          string `json:"provider,omitempty"`
+	Model             string `json:"model,omitempty"`
+	Profile           string `json:"profile,omitempty"`
+	Effort            string `json:"effort,omitempty"`
+	Preset            string `json:"preset,omitempty"`
+	UI                string `json:"ui,omitempty"`
+	SessionDir        string `json:"session_dir,omitempty"`
+	InheritCommandEnv *bool  `json:"inherit_command_env,omitempty"`
+}
+
+func loadConfig(path string, explicit bool) (fileConfig, bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) && !explicit {
+			return fileConfig{}, false, nil
+		}
+		return fileConfig{}, false, fmt.Errorf("open config %s: %w", path, err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return fileConfig{}, false, fmt.Errorf("stat config %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fileConfig{}, false, fmt.Errorf("config %s is not a regular file", path)
+	}
+
+	var cfg fileConfig
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
+		return fileConfig{}, false, fmt.Errorf("decode config %s: %w", path, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return fileConfig{}, false, fmt.Errorf("decode config %s: %w", path, err)
+		}
+		return fileConfig{}, false, fmt.Errorf("decode config %s: trailing JSON value", path)
+	}
+	return cfg, true, nil
+}
+
+type settingSource string
+
+const (
+	settingSourceFlag     settingSource = "flag"
+	settingSourceEnv      settingSource = "env"
+	settingSourceConfig   settingSource = "config"
+	settingSourceFallback settingSource = "fallback"
+)
+
+type stringSettingValue struct {
+	Value  string
+	Source settingSource
+}
+
+func stringSetting(flagValue string, flagSet bool, envKey, configValue, fallback string) stringSettingValue {
+	if flagSet {
+		return stringSettingValue{Value: strings.TrimSpace(flagValue), Source: settingSourceFlag}
+	}
+	if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+		return stringSettingValue{Value: value, Source: settingSourceEnv}
+	}
+	if value := strings.TrimSpace(configValue); value != "" {
+		return stringSettingValue{Value: value, Source: settingSourceConfig}
+	}
+	return stringSettingValue{Value: fallback, Source: settingSourceFallback}
+}
+
+func boolSetting(flagValue bool, flagSet bool, envKey string, configValue *bool, fallback bool) (bool, error) {
+	if flagSet {
+		return flagValue, nil
+	}
+	if raw := strings.TrimSpace(os.Getenv(envKey)); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return false, fmt.Errorf("invalid %s: %w", envKey, err)
+		}
+		return value, nil
+	}
+	if configValue != nil {
+		return *configValue, nil
+	}
+	return fallback, nil
 }
 
 func resolvePath(path string) (string, error) {
@@ -296,6 +435,8 @@ func renderDryRun(w io.Writer, opts options) error {
 	fmt.Fprintf(w, "effort_description: %s\n", effort.Description())
 	fmt.Fprintf(w, "preset: %s\n", opts.Preset)
 	fmt.Fprintf(w, "ui: %s\n", opts.UI)
+	fmt.Fprintf(w, "config: %s\n", opts.ConfigPath)
+	fmt.Fprintf(w, "config_loaded: %t\n", opts.ConfigLoaded)
 	fmt.Fprintf(w, "cwd: %s\n", opts.CWD)
 	fmt.Fprintf(w, "session_dir: %s\n", opts.SessionDir)
 	fmt.Fprintf(w, "resume_session: %s\n", valueOrUnset(opts.ResumeSessionID))
