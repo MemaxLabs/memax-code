@@ -249,6 +249,7 @@ func buildStack(opts options) (coding.Stack, error) {
 	}
 
 	config.Workspace = ws
+	config.WorkspacePatchInputMode = coding.WorkspacePatchInputUnifiedDiff
 	config.Sessions = session.NewJSONLStore(opts.SessionDir)
 	config.Tasks = tasktools.NewMemoryStore(nil)
 	config.Command.Runner = runner
