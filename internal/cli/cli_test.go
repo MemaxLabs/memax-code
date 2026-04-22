@@ -979,6 +979,55 @@ func TestRunInteractivePickAndResumeIndexErrorPaths(t *testing.T) {
 	}
 }
 
+func TestRunInteractiveShowSessionTargets(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	older, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() older error = %v", err)
+	}
+	newer, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() newer error = %v", err)
+	}
+	if err := store.Append(ctx, older.ID, userMessage("older transcript prompt")); err != nil {
+		t.Fatalf("Append() older error = %v", err)
+	}
+	if err := store.Append(ctx, newer.ID, userMessage("newer transcript prompt")); err != nil {
+		t.Fatalf("Append() newer error = %v", err)
+	}
+	setTranscriptModTime(t, sessionDir, older.ID, time.Unix(100, 0))
+	setTranscriptModTime(t, sessionDir, newer.ID, time.Unix(200, 0))
+
+	var stdout, stderr bytes.Buffer
+	err = RunWithIO(ctx, []string{
+		"--interactive",
+		"--session-dir", sessionDir,
+	}, strings.NewReader("/show\n/show garbage\n/show 99\n/show latest\n/show 2\n/resume 2\n/show\n/show current\n/quit\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("RunWithIO() error = %v", err)
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"show session: no active session",
+		`show session "garbage": invalid session id`,
+		"show session index 99 out of range; choose 1-2",
+		"session: " + newer.ID,
+		"newer transcript prompt",
+		"session: " + older.ID,
+		"older transcript prompt",
+		"resumed session: " + older.ID,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+	if count := strings.Count(out, "session: "+older.ID); count < 3 {
+		t.Fatalf("show current did not print active older session twice after resume; count=%d:\n%s", count, out)
+	}
+}
+
 func TestRunInteractiveSlashCommandErrorPathsContinue(t *testing.T) {
 	ctx := context.Background()
 	sessionDir := t.TempDir()

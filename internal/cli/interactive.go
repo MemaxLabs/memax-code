@@ -88,12 +88,16 @@ func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, cu
 		} else {
 			fmt.Fprintf(w, "session: %s\n", *currentSession)
 		}
+	case "/show":
+		if err := showInteractiveSession(ctx, w, opts, *currentSession, arg); err != nil {
+			fmt.Fprintf(w, "error: %v\n", err)
+		}
 	case "/resume":
 		if arg == "" {
 			fmt.Fprintln(w, "usage: /resume SESSION_ID|latest|N")
 			return false
 		}
-		id, err := resolveInteractiveSessionID(ctx, opts, arg)
+		id, err := resolveInteractiveSessionID(ctx, opts, arg, "resume")
 		if err != nil {
 			fmt.Fprintf(w, "error: %v\n", err)
 			return false
@@ -114,23 +118,53 @@ func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, cu
 	return false
 }
 
-func resolveInteractiveSessionID(ctx context.Context, opts options, raw string) (string, error) {
+func showInteractiveSession(ctx context.Context, w io.Writer, opts options, currentSession, raw string) error {
 	raw = strings.TrimSpace(raw)
+	switch strings.ToLower(raw) {
+	case "":
+		if strings.TrimSpace(currentSession) == "" {
+			return fmt.Errorf("show session: no active session; use /show latest, /show N, or /show SESSION_ID")
+		}
+		raw = currentSession
+	case "current":
+		if strings.TrimSpace(currentSession) == "" {
+			return fmt.Errorf("show current session: no active session")
+		}
+		raw = currentSession
+	}
+	id, err := resolveInteractiveSessionID(ctx, opts, raw, "show")
+	if err != nil {
+		return err
+	}
+	// Interactive shell commands write to stderr so stdout remains the agent
+	// transcript stream. The standalone --show-session command still writes to
+	// stdout for scriptability.
+	showOpts := opts
+	showOpts.ShowSessionID = id
+	return showSession(ctx, w, showOpts)
+}
+
+func resolveInteractiveSessionID(ctx context.Context, opts options, raw, action string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	action = strings.TrimSpace(action)
+	if action == "" {
+		action = "resolve"
+	}
 	if index, ok := parseSessionIndex(raw); ok {
 		rows, err := loadSessionRows(ctx, session.NewJSONLStore(opts.SessionDir), opts.SessionDir)
 		if err != nil {
 			return "", err
 		}
 		if len(rows) == 0 {
-			return "", fmt.Errorf("resume session index %d: no sessions", index)
+			return "", fmt.Errorf("%s session index %d: no sessions", action, index)
 		}
 		if index < 1 || index > len(rows) {
-			return "", fmt.Errorf("resume session index %d out of range; choose 1-%d", index, len(rows))
+			return "", fmt.Errorf("%s session index %d out of range; choose 1-%d", action, index, len(rows))
 		}
 		return rows[index-1].Session.ID, nil
 	}
 	store := session.NewJSONLStore(opts.SessionDir)
-	return resolveSessionID(ctx, store, opts.SessionDir, raw, "resume")
+	return resolveSessionID(ctx, store, opts.SessionDir, raw, action)
 }
 
 func parseSessionIndex(raw string) (int, bool) {
@@ -198,6 +232,7 @@ func printInteractiveHelp(w io.Writer) {
 	fmt.Fprintln(w, "  /help              show this help")
 	fmt.Fprintln(w, "  /session           show the active session")
 	fmt.Fprintln(w, "  /pick              list recent sessions with numbers")
+	fmt.Fprintln(w, "  /show [TARGET]     show current, latest, number, or ID")
 	fmt.Fprintln(w, "  /sessions          list saved sessions")
 	fmt.Fprintln(w, "  /resume TARGET     resume by ID, latest, or number")
 	fmt.Fprintln(w, "  /new               start the next prompt in a new session")

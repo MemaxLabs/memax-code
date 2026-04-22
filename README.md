@@ -111,6 +111,7 @@ commands control local session state without calling a model:
 ```text
 /help
 /pick
+/show latest
 /sessions
 /resume latest
 /resume 1
