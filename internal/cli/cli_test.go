@@ -3,11 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 )
 
@@ -85,6 +87,85 @@ func TestDryRunValidatesResumeSession(t *testing.T) {
 	}
 }
 
+func TestDryRunResolvesLatestResumeSession(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	first, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() first error = %v", err)
+	}
+	second, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() second error = %v", err)
+	}
+	if err := store.Append(ctx, first.ID, userMessage("continue the investigation")); err != nil {
+		t.Fatalf("Append() first error = %v", err)
+	}
+	setTranscriptModTime(t, sessionDir, second.ID, time.Unix(200, 0))
+	setTranscriptModTime(t, sessionDir, first.ID, time.Unix(300, 0))
+
+	var stdout, stderr bytes.Buffer
+	err = Run(ctx, []string{
+		"--dry-run",
+		"--provider", "openai",
+		"--model", "example-model",
+		"--session-dir", sessionDir,
+		"--resume", "latest",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "resume_session: "+first.ID) {
+		t.Fatalf("dry-run did not resolve latest to updated session %q:\n%s", first.ID, out)
+	}
+}
+
+func TestDryRunResumeLatestSkipsCorruptNewestTranscript(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	valid, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	setTranscriptModTime(t, sessionDir, valid.ID, time.Unix(100, 0))
+	corruptID := "00000000-0000-7000-8000-000000000099"
+	if err := os.WriteFile(transcriptPath(sessionDir, corruptID), []byte("{not json}\n"), 0o600); err != nil {
+		t.Fatalf("write corrupt transcript: %v", err)
+	}
+	setTranscriptModTime(t, sessionDir, corruptID, time.Unix(200, 0))
+
+	var stdout, stderr bytes.Buffer
+	err = Run(ctx, []string{
+		"--dry-run",
+		"--provider", "openai",
+		"--model", "example-model",
+		"--session-dir", sessionDir,
+		"--resume", "latest",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "resume_session: "+valid.ID) {
+		t.Fatalf("dry-run did not skip corrupt latest transcript %q:\n%s", corruptID, out)
+	}
+}
+
+func TestDryRunResumeLatestRequiresExistingSession(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--dry-run",
+		"--provider", "openai",
+		"--model", "example-model",
+		"--session-dir", t.TempDir(),
+		"--resume", "latest",
+	}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "resume latest: no sessions") {
+		t.Fatalf("Run() error = %v, want no sessions", err)
+	}
+}
+
 func TestListSessionsDoesNotRequirePromptOrModel(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{
@@ -137,11 +218,12 @@ func TestListSessionsPrintsNewestFirst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() first error = %v", err)
 	}
-	time.Sleep(10 * time.Millisecond)
 	second, err := store.Create(ctx)
 	if err != nil {
 		t.Fatalf("Create() second error = %v", err)
 	}
+	setTranscriptModTime(t, sessionDir, first.ID, time.Unix(100, 0))
+	setTranscriptModTime(t, sessionDir, second.ID, time.Unix(200, 0))
 
 	var stdout, stderr bytes.Buffer
 	err = Run(ctx, []string{
@@ -160,6 +242,87 @@ func TestListSessionsPrintsNewestFirst(t *testing.T) {
 	}
 	if secondIndex > firstIndex {
 		t.Fatalf("sessions not newest-first:\n%s", out)
+	}
+}
+
+func TestListSessionsPrintsTitleAndOrdersByActivity(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	first, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() first error = %v", err)
+	}
+	second, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() second error = %v", err)
+	}
+	if err := store.Append(ctx, second.ID, userMessage("older visible prompt")); err != nil {
+		t.Fatalf("Append() second error = %v", err)
+	}
+	if err := store.Append(ctx, first.ID, userMessage("newer visible prompt")); err != nil {
+		t.Fatalf("Append() first error = %v", err)
+	}
+	setTranscriptModTime(t, sessionDir, second.ID, time.Unix(200, 0))
+	setTranscriptModTime(t, sessionDir, first.ID, time.Unix(300, 0))
+	corruptID := "00000000-0000-7000-8000-000000000098"
+	if err := os.WriteFile(transcriptPath(sessionDir, corruptID), []byte("{not json}\n"), 0o600); err != nil {
+		t.Fatalf("write corrupt transcript: %v", err)
+	}
+	setTranscriptModTime(t, sessionDir, corruptID, time.Unix(400, 0))
+
+	var stdout, stderr bytes.Buffer
+	err = Run(ctx, []string{
+		"--list-sessions",
+		"--provider", "openai",
+		"--session-dir", sessionDir,
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"UPDATED", "CREATED", "TITLE", "newer visible prompt", "older visible prompt"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("list output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, corruptID) {
+		t.Fatalf("list output included corrupt transcript:\n%s", out)
+	}
+	firstIndex := strings.Index(out, first.ID)
+	secondIndex := strings.Index(out, second.ID)
+	if firstIndex < 0 || secondIndex < 0 || firstIndex > secondIndex {
+		t.Fatalf("list output not ordered by latest activity:\n%s", out)
+	}
+}
+
+func TestListSessionsStripsTitleControlBytes(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, userMessage("hello \x1b[31mred\x07 world")); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = Run(ctx, []string{
+		"--list-sessions",
+		"--provider", "openai",
+		"--session-dir", sessionDir,
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	if strings.Contains(out, "\x1b") || strings.Contains(out, "\x07") {
+		t.Fatalf("list output contains terminal control bytes:\n%q", out)
+	}
+	if !strings.Contains(out, "hello [31mred world") {
+		t.Fatalf("list output missing sanitized title:\n%s", out)
 	}
 }
 
@@ -321,4 +484,24 @@ func repoRoot(t *testing.T) string {
 		t.Fatalf("resolve repo root: %v", err)
 	}
 	return root
+}
+
+func userMessage(text string) model.Message {
+	return model.Message{
+		Role: model.RoleUser,
+		Content: []model.ContentBlock{
+			{Type: model.ContentText, Text: text},
+		},
+	}
+}
+
+func transcriptPath(dir, id string) string {
+	return filepath.Join(dir, id+".jsonl")
+}
+
+func setTranscriptModTime(t *testing.T, dir, id string, ts time.Time) {
+	t.Helper()
+	if err := os.Chtimes(transcriptPath(dir, id), ts, ts); err != nil {
+		t.Fatalf("set transcript mtime for %s: %v", id, err)
+	}
 }

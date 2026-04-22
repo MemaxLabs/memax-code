@@ -20,7 +20,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return listSessions(ctx, stdout, opts)
 	}
 	if opts.ResumeSessionID != "" {
-		if err := validateResumeSession(ctx, opts); err != nil {
+		if err := resolveResumeSession(ctx, &opts); err != nil {
 			return err
 		}
 	}
@@ -62,7 +62,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	profile := fs.String("profile", "", "coding model profile: fast, balanced, or deep")
 	preset := fs.String("preset", "interactive_dev", "coding preset: safe_local, ci_repair, or interactive_dev")
 	sessionDir := fs.String("session-dir", defaultSessionDir(), "directory for JSONL session transcripts")
-	resumeSessionID := fs.String("resume", "", "resume an existing session id")
+	resumeSessionID := fs.String("resume", "", "resume an existing session id, or latest")
 	listSessionsFlag := fs.Bool("list-sessions", false, "list saved sessions and exit")
 	fs.Var(cwd, "C", "alias for --cwd")
 	fs.Var(cwd, "cd", "alias for --cwd")
@@ -72,7 +72,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: memax-code [flags] PROMPT\n")
-		fmt.Fprintf(fs.Output(), "       memax-code --resume SESSION_ID [flags] PROMPT\n")
+		fmt.Fprintf(fs.Output(), "       memax-code --resume SESSION_ID|latest [flags] PROMPT\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --list-sessions [flags]\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --dry-run [flags] [PROMPT]\n\n")
 		fmt.Fprintf(fs.Output(), "Flags must precede PROMPT because Go flag parsing stops at the first positional argument.\n\n")

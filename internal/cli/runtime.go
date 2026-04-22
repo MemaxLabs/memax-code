@@ -6,11 +6,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/coding"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools"
@@ -19,7 +21,11 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/workspace"
 )
 
-const maxVerificationOutputBytes = 16 * 1024
+const (
+	maxVerificationOutputBytes = 16 * 1024
+	resumeLatest               = "latest"
+	maxSessionTitleRunes       = 80
+)
 
 func runPrompt(ctx context.Context, stdout io.Writer, opts options) error {
 	client, err := modelClient(opts)
@@ -40,11 +46,19 @@ func runPrompt(ctx context.Context, stdout io.Writer, opts options) error {
 	return renderEvents(stdout, events)
 }
 
-func validateResumeSession(ctx context.Context, opts options) error {
+func resolveResumeSession(ctx context.Context, opts *options) error {
 	if opts.ResumeSessionID == "" {
 		return nil
 	}
 	store := session.NewJSONLStore(opts.SessionDir)
+	if strings.EqualFold(opts.ResumeSessionID, resumeLatest) {
+		id, err := latestSessionID(ctx, store, opts.SessionDir)
+		if err != nil {
+			return fmt.Errorf("resume latest: %w", err)
+		}
+		opts.ResumeSessionID = id
+		return nil
+	}
 	exists, err := store.Exists(ctx, opts.ResumeSessionID)
 	if err != nil {
 		return fmt.Errorf("resume session %q: %w", opts.ResumeSessionID, err)
@@ -52,7 +66,30 @@ func validateResumeSession(ctx context.Context, opts options) error {
 	if !exists {
 		return fmt.Errorf("resume session %q: session not found", opts.ResumeSessionID)
 	}
+	canonical, ok := session.CanonicalID(opts.ResumeSessionID)
+	if !ok {
+		return fmt.Errorf("resume session %q: invalid session id", opts.ResumeSessionID)
+	}
+	opts.ResumeSessionID = canonical
 	return nil
+}
+
+func latestSessionID(ctx context.Context, store *session.JSONLStore, dir string) (string, error) {
+	candidates, err := sessionCandidates(dir)
+	if err != nil {
+		return "", err
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no sessions")
+	}
+	for _, candidate := range candidates {
+		sess, err := store.Get(ctx, candidate.ID)
+		if err != nil {
+			continue
+		}
+		return sess.ID, nil
+	}
+	return "", fmt.Errorf("no readable sessions")
 }
 
 func buildStack(opts options) (coding.Stack, error) {
@@ -108,28 +145,161 @@ func buildStack(opts options) (coding.Stack, error) {
 
 func listSessions(ctx context.Context, stdout io.Writer, opts options) error {
 	store := session.NewJSONLStore(opts.SessionDir)
-	sessions, err := session.List(ctx, store)
+	rows, err := loadSessionRows(ctx, store, opts.SessionDir)
 	if err != nil {
 		return err
 	}
-	if len(sessions) == 0 {
+	if len(rows) == 0 {
 		_, err := fmt.Fprintln(stdout, "no sessions")
 		return err
 	}
 	table := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "SESSION ID\tCREATED\tPARENT")
-	// session.List returns oldest-first; the CLI presents the newest sessions first.
-	for i := len(sessions) - 1; i >= 0; i-- {
-		s := sessions[i]
+	fmt.Fprintln(table, "SESSION ID\tUPDATED\tCREATED\tPARENT\tTITLE")
+	for _, row := range rows {
+		s := row.Session
 		parent := s.ParentID
 		if parent == "" {
 			parent = "-"
 		}
-		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\n", s.ID, s.CreatedAt.Format(time.RFC3339), parent); err != nil {
+		title := row.Title
+		if title == "" {
+			title = "-"
+		}
+		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n",
+			s.ID,
+			row.UpdatedAt.Format(time.RFC3339),
+			s.CreatedAt.Format(time.RFC3339),
+			parent,
+			title,
+		); err != nil {
 			return err
 		}
 	}
 	return table.Flush()
+}
+
+type sessionRow struct {
+	Session   session.Session
+	UpdatedAt time.Time
+	Title     string
+}
+
+type sessionCandidate struct {
+	ID        string
+	UpdatedAt time.Time
+}
+
+func loadSessionRows(ctx context.Context, store *session.JSONLStore, dir string) ([]sessionRow, error) {
+	candidates, err := sessionCandidates(dir)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]sessionRow, 0, len(candidates))
+	for _, candidate := range candidates {
+		sess, err := store.Get(ctx, candidate.ID)
+		if err != nil {
+			continue
+		}
+		messages, err := store.Messages(ctx, sess.ID)
+		if err != nil {
+			continue
+		}
+		rows = append(rows, sessionRow{
+			Session:   sess,
+			UpdatedAt: candidate.UpdatedAt,
+			Title:     sessionTitle(messages),
+		})
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		left := rows[i]
+		right := rows[j]
+		if !left.UpdatedAt.Equal(right.UpdatedAt) {
+			return left.UpdatedAt.After(right.UpdatedAt)
+		}
+		if !left.Session.CreatedAt.Equal(right.Session.CreatedAt) {
+			return left.Session.CreatedAt.After(right.Session.CreatedAt)
+		}
+		return left.Session.ID > right.Session.ID
+	})
+	return rows, nil
+}
+
+func sessionCandidates(dir string) ([]sessionCandidate, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list session directory: %w", err)
+	}
+	candidates := make([]sessionCandidate, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".jsonl" {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".jsonl")
+		if !session.ValidID(id) {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, sessionCandidate{
+			ID:        id,
+			UpdatedAt: info.ModTime().UTC(),
+		})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		left := candidates[i]
+		right := candidates[j]
+		if !left.UpdatedAt.Equal(right.UpdatedAt) {
+			return left.UpdatedAt.After(right.UpdatedAt)
+		}
+		return left.ID > right.ID
+	})
+	return candidates, nil
+}
+
+func sessionTitle(messages []model.Message) string {
+	for _, msg := range messages {
+		if msg.Role != model.RoleUser {
+			continue
+		}
+		text := strings.Join(strings.Fields(sanitizeTitleText(msg.PlainText())), " ")
+		if text == "" {
+			continue
+		}
+		return truncateRunes(text, maxSessionTitleRunes)
+	}
+	return ""
+}
+
+func sanitizeTitleText(text string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '\t', '\n', '\r':
+			return ' '
+		}
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, text)
+}
+
+func truncateRunes(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	if limit <= 3 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-3]) + "..."
 }
 
 func hasGoModule(root string) bool {

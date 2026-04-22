@@ -16,7 +16,7 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
 - root-confined workspace tools
 - root-confined command execution tools
 - managed command sessions for long-running processes
-- JSONL-backed conversation sessions with resume and listing
+- JSONL-backed conversation sessions with resume, `latest`, and activity listing
 - dry-run configuration inspection
 - event-stream rendering for assistant text, tool calls, command lifecycle,
   workspace edits, verification, usage, and final results
@@ -55,6 +55,7 @@ Resume an earlier conversation:
 ```sh
 memax-code --list-sessions
 memax-code --resume 0194d9a4-7b8c-7d20-9a1b-4f6c6f4f7a01 "continue from the last plan"
+memax-code --resume latest "continue the most recent active session"
 ```
 
 Session transcripts are stored under `~/.memax-code/sessions` by default. Use
@@ -64,6 +65,9 @@ different filesystem policy:
 ```sh
 memax-code --session-dir .memax-code/sessions --list-sessions
 ```
+
+`--list-sessions` prints sessions newest activity first, including the updated
+time, created time, parent session, and the first user prompt as a short title.
 
 By default command tools do not inherit the host process environment. Enable it
 only when the agent needs local toolchains that depend on environment variables:
