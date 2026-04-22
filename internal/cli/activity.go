@@ -182,6 +182,26 @@ func (s *activityState) countsLine() string {
 	return b.String()
 }
 
+func (s *activityState) liveCountsLine() string {
+	var counts []string
+	if s.tools > 0 {
+		counts = append(counts, fmt.Sprintf("tools=%d", s.tools))
+	}
+	if s.commands > 0 {
+		counts = append(counts, fmt.Sprintf("commands=%d", s.commands))
+	}
+	if s.patches > 0 {
+		counts = append(counts, fmt.Sprintf("patches=%d", s.patches))
+	}
+	if s.verifications > 0 {
+		counts = append(counts, fmt.Sprintf("checks=%d", s.verifications))
+	}
+	if len(counts) == 0 {
+		return ""
+	}
+	return strings.Join(counts, " ")
+}
+
 func (s *activityState) detailsLine() string {
 	var details []string
 	if s.toolErrors > 0 {

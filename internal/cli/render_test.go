@@ -232,16 +232,20 @@ func TestRenderWithTicksRendererWhileEventStreamIsIdle(t *testing.T) {
 
 func TestLiveRenderTickAnimatesStatusWhileRunning(t *testing.T) {
 	var out bytes.Buffer
-	renderer := &liveRenderState{statusWidth: 80}
+	start := time.Date(2026, 4, 22, 19, 0, 0, 0, time.UTC)
+	now := start
+	renderer := &liveRenderState{statusWidth: 120, now: func() time.Time { return now }}
 	if err := renderer.Render(&out, memaxagent.Event{Kind: memaxagent.EventSessionStarted, SessionID: "00000000-0000-7000-8000-000000000001"}); err != nil {
 		t.Fatalf("Render(session) error = %v", err)
 	}
 	if err := renderer.Render(&out, memaxagent.Event{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{Name: "run_command"}}); err != nil {
 		t.Fatalf("Render(tool start) error = %v", err)
 	}
+	now = start.Add(90 * time.Second)
 	if err := renderer.Tick(&out); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
+	now = start.Add(91 * time.Second)
 	if err := renderer.Tick(&out); err != nil {
 		t.Fatalf("Tick() error = %v", err)
 	}
@@ -249,6 +253,9 @@ func TestLiveRenderTickAnimatesStatusWhileRunning(t *testing.T) {
 	for _, want := range []string{
 		clearLine + "Memax Code - | running",
 		clearLine + "Memax Code \\ | running",
+		"elapsed=1m30s",
+		"elapsed=1m31s",
+		"tools=1",
 		"active=run_command",
 	} {
 		if !strings.Contains(got, want) {
@@ -308,6 +315,103 @@ func TestLiveRenderUsesConfiguredTerminalWidth(t *testing.T) {
 		if len([]rune(status)) > 24 {
 			t.Fatalf("status line width = %d, want <= 24: %q", len([]rune(status)), status)
 		}
+	}
+}
+
+func TestLiveRenderStatusIncludesCompactCounts(t *testing.T) {
+	start := time.Date(2026, 4, 22, 19, 0, 0, 0, time.UTC)
+	now := start.Add(3 * time.Second)
+	renderer := &liveRenderState{
+		statusWidth: 160,
+		startedAt:   start,
+		now:         func() time.Time { return now },
+	}
+	renderer.transcript.headerWritten = true
+	renderer.transcript.activity.apply(memaxagent.Event{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{Name: "run_command"}})
+	renderer.transcript.activity.apply(memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Command:   "go test ./...",
+		PID:       123,
+	}})
+	renderer.transcript.activity.apply(memaxagent.Event{Kind: memaxagent.EventWorkspacePatch, Workspace: &memaxagent.WorkspaceEvent{
+		Paths:   []string{"README.md"},
+		Changes: 1,
+	}})
+	renderer.transcript.activity.apply(memaxagent.Event{Kind: memaxagent.EventVerification, Verification: &memaxagent.VerificationEvent{
+		Name:   "go test ./...",
+		Passed: true,
+	}})
+	renderer.transcript.activity.apply(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		Name:    "run_command",
+		IsError: true,
+	}})
+
+	got := renderer.statusLine("")
+	for _, want := range []string{
+		"Memax Code | running",
+		"tool_errors=1",
+		"elapsed=3s",
+		"last_tool=run_command",
+		"cmd=go test ./...",
+		"tools=1 commands=1 patches=1 checks=1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("statusLine() missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestLiveRenderPrioritizesErrorsUnderNarrowWidth(t *testing.T) {
+	start := time.Date(2026, 4, 22, 19, 0, 0, 0, time.UTC)
+	renderer := &liveRenderState{
+		statusWidth: 60,
+		startedAt:   start,
+		now:         func() time.Time { return start.Add(3 * time.Second) },
+	}
+	renderer.transcript.headerWritten = true
+	renderer.transcript.activity.apply(memaxagent.Event{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{Name: "very_long_tool_name_that_would_wrap_status"}})
+	renderer.transcript.activity.apply(memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Command:   "go test ./... && go vet ./... && go test ./...",
+		PID:       123,
+	}})
+	renderer.transcript.activity.apply(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		Name:    "very_long_tool_name_that_would_wrap_status",
+		IsError: true,
+	}})
+
+	got := renderer.statusLine("")
+	if len([]rune(got)) > 60 {
+		t.Fatalf("statusLine() width = %d, want <= 60: %q", len([]rune(got)), got)
+	}
+	for _, want := range []string{
+		"Memax Code | running",
+		"tool_errors=1",
+		"elapsed=3s",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("statusLine() missing priority field %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestFormatElapsed(t *testing.T) {
+	tests := []struct {
+		name    string
+		elapsed time.Duration
+		want    string
+	}{
+		{name: "seconds", elapsed: 3 * time.Second, want: "3s"},
+		{name: "truncated seconds", elapsed: 1500 * time.Millisecond, want: "1s"},
+		{name: "minutes", elapsed: 90 * time.Second, want: "1m30s"},
+		{name: "hours", elapsed: 3*time.Hour + 5*time.Minute + 59*time.Second, want: "3h05m"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatElapsed(tt.elapsed); got != tt.want {
+				t.Fatalf("formatElapsed(%v) = %q, want %q", tt.elapsed, got, tt.want)
+			}
+		})
 	}
 }
 

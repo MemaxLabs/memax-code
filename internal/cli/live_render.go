@@ -25,9 +25,12 @@ type liveRenderState struct {
 	statusShown   bool
 	statusWidth   int
 	spinnerOffset int
+	startedAt     time.Time
+	now           func() time.Time
 }
 
 func (s *liveRenderState) Render(w io.Writer, event memaxagent.Event) error {
+	s.markStarted()
 	s.clearStatus(w)
 	err := s.transcript.Render(w, event)
 	s.drawStatus(w)
@@ -43,6 +46,7 @@ func (s *liveRenderState) Tick(w io.Writer) error {
 	if !s.canDrawStatus() || s.transcript.activity.resultSeen || s.transcript.activity.terminalError {
 		return nil
 	}
+	s.markStarted()
 	fmt.Fprint(w, clearLine)
 	fmt.Fprint(w, s.statusLine(s.nextSpinnerFrame()))
 	s.statusShown = true
@@ -80,6 +84,20 @@ func (s *liveRenderState) nextSpinnerFrame() string {
 	return frame
 }
 
+func (s *liveRenderState) markStarted() {
+	if !s.startedAt.IsZero() {
+		return
+	}
+	s.startedAt = s.currentTime()
+}
+
+func (s *liveRenderState) currentTime() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
 func (s *liveRenderState) statusLine(frame string) string {
 	activity := &s.transcript.activity
 	title := "Memax Code"
@@ -87,6 +105,12 @@ func (s *liveRenderState) statusLine(frame string) string {
 		title += " " + frame
 	}
 	parts := []string{title, activity.phase()}
+	if activity.toolErrors > 0 {
+		parts = append(parts, fmt.Sprintf("tool_errors=%d", activity.toolErrors))
+	}
+	if elapsed := s.elapsedStatus(); elapsed != "" {
+		parts = append(parts, "elapsed="+elapsed)
+	}
 	if activity.activeTool != "" {
 		parts = append(parts, "active="+statusValue(activity.activeTool))
 	} else if activity.lastTool != "" {
@@ -98,10 +122,24 @@ func (s *liveRenderState) statusLine(frame string) string {
 	if activity.approvals > 0 && activity.lastApproval != "" {
 		parts = append(parts, "approval="+statusValue(activity.lastApproval))
 	}
+	if counts := activity.liveCountsLine(); counts != "" {
+		parts = append(parts, counts)
+	}
 	if activity.usage != "" {
 		parts = append(parts, activity.usage)
 	}
 	return truncateStatusLine(strings.Join(parts, " | "), s.width())
+}
+
+func (s *liveRenderState) elapsedStatus() string {
+	if s.startedAt.IsZero() {
+		return ""
+	}
+	elapsed := s.currentTime().Sub(s.startedAt)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return formatElapsed(elapsed)
 }
 
 func (s *liveRenderState) width() int {
@@ -117,6 +155,21 @@ func liveStatusWidth() int {
 		return defaultLiveStatusWidth
 	}
 	return columns - 1
+}
+
+func formatElapsed(elapsed time.Duration) string {
+	seconds := int(elapsed / time.Second)
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	minutes := seconds / 60
+	seconds = seconds % 60
+	if minutes < 60 {
+		return fmt.Sprintf("%dm%02ds", minutes, seconds)
+	}
+	hours := minutes / 60
+	minutes = minutes % 60
+	return fmt.Sprintf("%dh%02dm", hours, minutes)
 }
 
 func truncateStatusLine(line string, width int) string {

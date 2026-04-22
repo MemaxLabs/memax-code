@@ -127,7 +127,9 @@ CI logs and redirected output remain stable.
 
 `--ui live` is opt-in while the terminal UX is maturing. When output is
 redirected, it falls back to the plain renderer so scripts never receive live
-terminal control sequences.
+terminal control sequences. Its transient status line reports phase, elapsed
+time, tool errors, active tool, command, approval, compact activity counts, and
+usage while preserving the sectioned transcript underneath.
 
 `--list-sessions` prints sessions newest activity first, including the updated
 time, created time, parent session, and the first user prompt as a short title.
