@@ -6,40 +6,32 @@ import (
 	"os"
 	"strings"
 
+	"github.com/MemaxLabs/memax-code/internal/cli/ui"
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 )
 
-type renderMode string
+type renderMode = ui.Mode
 
 const (
-	renderModeAuto  renderMode = "auto"
-	renderModeTUI   renderMode = "tui"
-	renderModePlain renderMode = "plain"
+	renderModeAuto  = ui.ModeAuto
+	renderModeTUI   = ui.ModeStructured
+	renderModePlain = ui.ModePlain
 )
 
 func parseRenderMode(raw string) (renderMode, error) {
-	switch mode := renderMode(strings.ToLower(strings.TrimSpace(raw))); mode {
-	case "", renderModeAuto:
-		return renderModeAuto, nil
-	case renderModeTUI, renderModePlain:
-		return mode, nil
-	default:
-		return "", fmt.Errorf("unknown ui %q (want one of: auto, tui, plain)", raw)
-	}
+	return ui.ParseMode(raw)
 }
 
 func renderEventsWithMode(w io.Writer, events <-chan memaxagent.Event, mode renderMode) error {
-	if mode == renderModeAuto {
-		if isTerminalWriter(w) {
-			mode = renderModeTUI
-		} else {
-			mode = renderModePlain
-		}
+	mode = ui.ResolveMode(mode, isTerminalWriter(w))
+	renderer, err := ui.SelectRenderer(mode, ui.Renderers{
+		Plain:      &renderState{},
+		Structured: &tuiRenderState{},
+	})
+	if err != nil {
+		return err
 	}
-	if mode == renderModeTUI {
-		return renderTUIEvents(w, events)
-	}
-	return renderEvents(w, events)
+	return renderWith(w, events, renderer)
 }
 
 func isTerminalWriter(w io.Writer) bool {
@@ -52,25 +44,19 @@ func isTerminalWriter(w io.Writer) bool {
 }
 
 func renderEvents(w io.Writer, events <-chan memaxagent.Event) error {
-	var firstErr error
-	state := renderState{}
-	for event := range events {
-		if err := state.render(w, event); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
+	return renderWith(w, events, &renderState{})
 }
 
-func renderTUIEvents(w io.Writer, events <-chan memaxagent.Event) error {
+func renderWith(w io.Writer, events <-chan memaxagent.Event, renderer ui.Renderer) error {
 	var firstErr error
-	state := tuiRenderState{}
 	for event := range events {
-		if err := state.render(w, event); err != nil && firstErr == nil {
+		if err := renderer.Render(w, event); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
-	state.finish(w)
+	if err := renderer.Finish(w); err != nil && firstErr == nil {
+		firstErr = err
+	}
 	return firstErr
 }
 
@@ -81,7 +67,7 @@ type tuiRenderState struct {
 	activity          activityState
 }
 
-func (s *tuiRenderState) render(w io.Writer, event memaxagent.Event) error {
+func (s *tuiRenderState) Render(w io.Writer, event memaxagent.Event) error {
 	if !s.headerWritten {
 		fmt.Fprintln(w, "Memax Code")
 		fmt.Fprintln(w, "----------")
@@ -249,9 +235,9 @@ func (s *tuiRenderState) closeAssistantLine(w io.Writer) {
 	}
 }
 
-func (s *tuiRenderState) finish(w io.Writer) {
+func (s *tuiRenderState) Finish(w io.Writer) error {
 	if !s.headerWritten {
-		return
+		return nil
 	}
 	s.closeAssistantLine(w)
 	if s.section != "" {
@@ -265,13 +251,14 @@ func (s *tuiRenderState) finish(w io.Writer) {
 	if details := s.activity.detailsLine(); details != "" {
 		fmt.Fprintln(w, details)
 	}
+	return nil
 }
 
 type renderState struct {
 	assistantLineOpen bool
 }
 
-func (s *renderState) render(w io.Writer, event memaxagent.Event) error {
+func (s *renderState) Render(w io.Writer, event memaxagent.Event) error {
 	if event.Kind != memaxagent.EventAssistant && event.Kind != memaxagent.EventToolUseDelta {
 		s.closeAssistantLine(w)
 	}
@@ -283,6 +270,10 @@ func (s *renderState) render(w io.Writer, event memaxagent.Event) error {
 		}
 	}
 	return err
+}
+
+func (s *renderState) Finish(io.Writer) error {
+	return nil
 }
 
 func (s *renderState) closeAssistantLine(w io.Writer) {
