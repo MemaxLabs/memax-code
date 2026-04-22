@@ -43,12 +43,13 @@ func (s *liveRenderState) Finish(w io.Writer) error {
 }
 
 func (s *liveRenderState) Tick(w io.Writer) error {
-	if !s.canDrawStatus() || s.transcript.activity.resultSeen || s.transcript.activity.terminalError {
+	activity := s.transcript.activity.snapshot()
+	if !s.canDrawStatus() || activity.ResultSeen || activity.TerminalError {
 		return nil
 	}
 	s.markStarted()
 	fmt.Fprint(w, clearLine)
-	fmt.Fprint(w, s.statusLine(s.nextSpinnerFrame()))
+	fmt.Fprint(w, s.statusLine(s.nextSpinnerFrame(), activity))
 	s.statusShown = true
 	return nil
 }
@@ -69,8 +70,9 @@ func (s *liveRenderState) drawStatus(w io.Writer) {
 	if !s.canDrawStatus() {
 		return
 	}
+	activity := s.transcript.activity.snapshot()
 	fmt.Fprint(w, clearLine)
-	fmt.Fprint(w, s.statusLine(""))
+	fmt.Fprint(w, s.statusLine("", activity))
 	s.statusShown = true
 }
 
@@ -98,35 +100,34 @@ func (s *liveRenderState) currentTime() time.Time {
 	return time.Now()
 }
 
-func (s *liveRenderState) statusLine(frame string) string {
-	activity := &s.transcript.activity
+func (s *liveRenderState) statusLine(frame string, activity activitySnapshot) string {
 	title := "Memax Code"
 	if frame != "" {
 		title += " " + frame
 	}
-	parts := []string{title, activity.phase()}
-	if activity.toolErrors > 0 {
-		parts = append(parts, fmt.Sprintf("tool_errors=%d", activity.toolErrors))
+	parts := []string{title, activity.Phase}
+	if activity.ToolErrors > 0 {
+		parts = append(parts, fmt.Sprintf("tool_errors=%d", activity.ToolErrors))
 	}
 	if elapsed := s.elapsedStatus(); elapsed != "" {
 		parts = append(parts, "elapsed="+elapsed)
 	}
-	if activity.activeTool != "" {
-		parts = append(parts, "active="+statusValue(activity.activeTool))
-	} else if activity.lastTool != "" {
-		parts = append(parts, "last_tool="+statusValue(activity.lastTool))
+	if activity.ActiveTool != "" {
+		parts = append(parts, "active="+statusValue(activity.ActiveTool))
+	} else if activity.LastTool != "" {
+		parts = append(parts, "last_tool="+statusValue(activity.LastTool))
 	}
-	if activity.lastCommand != "" {
-		parts = append(parts, "cmd="+statusValue(activity.lastCommand))
+	if activity.LastCommand != "" {
+		parts = append(parts, "cmd="+statusValue(activity.LastCommand))
 	}
-	if activity.approvals > 0 && activity.lastApproval != "" {
-		parts = append(parts, "approval="+statusValue(activity.lastApproval))
+	if activity.Approvals > 0 && activity.LastApproval != "" {
+		parts = append(parts, "approval="+statusValue(activity.LastApproval))
 	}
 	if counts := activity.liveCountsLine(); counts != "" {
 		parts = append(parts, counts)
 	}
-	if activity.usage != "" {
-		parts = append(parts, activity.usage)
+	if activity.Usage != "" {
+		parts = append(parts, activity.Usage)
 	}
 	return truncateStatusLine(strings.Join(parts, " | "), s.width())
 }

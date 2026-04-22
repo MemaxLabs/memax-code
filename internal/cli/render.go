@@ -246,7 +246,7 @@ func (s *tuiRenderState) Render(w io.Writer, event memaxagent.Event) error {
 	case memaxagent.EventUsage:
 		if event.Usage != nil {
 			s.sectionLine(w, "usage")
-			fmt.Fprintln(w, s.activity.usage)
+			fmt.Fprintln(w, s.activity.snapshot().Usage)
 		}
 	case memaxagent.EventResult:
 		if strings.TrimSpace(event.Result) != "" {
@@ -371,12 +371,13 @@ func (s *tuiRenderState) Finish(w io.Writer) error {
 	if s.section != "" {
 		fmt.Fprintln(w)
 	}
+	activity := s.activity.snapshot()
 	fmt.Fprintln(w, "[status]")
-	if s.activity.sessionID != "" {
-		fmt.Fprintf(w, "session: %s\n", s.activity.sessionID)
+	if activity.SessionID != "" {
+		fmt.Fprintf(w, "session: %s\n", activity.SessionID)
 	}
-	fmt.Fprintln(w, s.activity.countsLine())
-	if details := s.activity.detailsLine(); details != "" {
+	fmt.Fprintln(w, activity.countsLine())
+	if details := activity.detailsLine(); details != "" {
 		fmt.Fprintln(w, details)
 	}
 	return nil

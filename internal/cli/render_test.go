@@ -354,7 +354,7 @@ func TestLiveRenderStatusIncludesCompactCounts(t *testing.T) {
 		IsError: true,
 	}})
 
-	got := renderer.statusLine("")
+	got := renderer.statusLine("", renderer.transcript.activity.snapshot())
 	for _, want := range []string{
 		"Memax Code | running",
 		"tool_errors=1",
@@ -388,7 +388,7 @@ func TestLiveRenderPrioritizesErrorsUnderNarrowWidth(t *testing.T) {
 		IsError: true,
 	}})
 
-	got := renderer.statusLine("")
+	got := renderer.statusLine("", renderer.transcript.activity.snapshot())
 	if len([]rune(got)) > 60 {
 		t.Fatalf("statusLine() width = %d, want <= 60: %q", len([]rune(got)), got)
 	}

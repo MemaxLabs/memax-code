@@ -30,6 +30,29 @@ type activityState struct {
 	lastApproval     string
 }
 
+type activitySnapshot struct {
+	Tools         int
+	Commands      int
+	Patches       int
+	Verifications int
+	Approvals     int
+	ToolErrors    int
+
+	SessionID     string
+	Usage         string
+	Phase         string
+	ResultSeen    bool
+	TerminalError bool
+
+	ActiveTool       string
+	LastTool         string
+	LastCommand      string
+	LastPatch        string
+	LastVerification string
+	LastApproval     string
+	ActiveTools      []string
+}
+
 func (s *activityState) apply(event memaxagent.Event) {
 	switch event.Kind {
 	case memaxagent.EventSessionStarted:
@@ -91,6 +114,31 @@ func (s *activityState) apply(event memaxagent.Event) {
 			s.terminalError = true
 		}
 	}
+}
+
+func (s *activityState) snapshot() activitySnapshot {
+	snapshot := activitySnapshot{
+		Tools:            s.tools,
+		Commands:         s.commands,
+		Patches:          s.patches,
+		Verifications:    s.verifications,
+		Approvals:        s.approvals,
+		ToolErrors:       s.toolErrors,
+		SessionID:        s.sessionID,
+		Usage:            s.usage,
+		ResultSeen:       s.resultSeen,
+		TerminalError:    s.terminalError,
+		ActiveTool:       s.activeTool,
+		LastTool:         s.lastTool,
+		LastCommand:      s.lastCommand,
+		LastPatch:        s.lastPatch,
+		LastVerification: s.lastVerification,
+		LastApproval:     s.lastApproval,
+	}
+	snapshot.ActiveTools = make([]string, len(s.activeTools))
+	copy(snapshot.ActiveTools, s.activeTools)
+	snapshot.Phase = snapshot.phase()
+	return snapshot
 }
 
 func (s *activityState) startActiveTool(name string) {
@@ -159,42 +207,42 @@ func (s *activityState) observeCommand(event memaxagent.Event) {
 	s.commands++
 }
 
-func (s *activityState) phase() string {
-	if s.terminalError {
+func (s activitySnapshot) phase() string {
+	if s.TerminalError {
 		return "error"
 	}
-	if s.resultSeen {
+	if s.ResultSeen {
 		return "done"
 	}
 	return "running"
 }
 
-func (s *activityState) countsLine() string {
+func (s activitySnapshot) countsLine() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "tools=%d commands=%d patches=%d verifications=%d", s.tools, s.commands, s.patches, s.verifications)
-	if s.usage != "" {
-		fmt.Fprintf(&b, " usage=%s", s.usage)
+	fmt.Fprintf(&b, "tools=%d commands=%d patches=%d verifications=%d", s.Tools, s.Commands, s.Patches, s.Verifications)
+	if s.Usage != "" {
+		fmt.Fprintf(&b, " usage=%s", s.Usage)
 	}
-	if s.resultSeen {
+	if s.ResultSeen {
 		b.WriteString(" done=true")
 	}
-	fmt.Fprintf(&b, " phase=%s", s.phase())
+	fmt.Fprintf(&b, " phase=%s", s.Phase)
 	return b.String()
 }
 
-func (s *activityState) liveCountsLine() string {
+func (s activitySnapshot) liveCountsLine() string {
 	var counts []string
-	if s.tools > 0 {
-		counts = append(counts, fmt.Sprintf("tools=%d", s.tools))
+	if s.Tools > 0 {
+		counts = append(counts, fmt.Sprintf("tools=%d", s.Tools))
 	}
-	if s.commands > 0 {
-		counts = append(counts, fmt.Sprintf("commands=%d", s.commands))
+	if s.Commands > 0 {
+		counts = append(counts, fmt.Sprintf("commands=%d", s.Commands))
 	}
-	if s.patches > 0 {
-		counts = append(counts, fmt.Sprintf("patches=%d", s.patches))
+	if s.Patches > 0 {
+		counts = append(counts, fmt.Sprintf("patches=%d", s.Patches))
 	}
-	if s.verifications > 0 {
-		counts = append(counts, fmt.Sprintf("checks=%d", s.verifications))
+	if s.Verifications > 0 {
+		counts = append(counts, fmt.Sprintf("checks=%d", s.Verifications))
 	}
 	if len(counts) == 0 {
 		return ""
@@ -202,34 +250,34 @@ func (s *activityState) liveCountsLine() string {
 	return strings.Join(counts, " ")
 }
 
-func (s *activityState) detailsLine() string {
+func (s activitySnapshot) detailsLine() string {
 	var details []string
-	if s.toolErrors > 0 {
-		details = append(details, fmt.Sprintf("tool_errors=%d", s.toolErrors))
+	if s.ToolErrors > 0 {
+		details = append(details, fmt.Sprintf("tool_errors=%d", s.ToolErrors))
 	}
-	if s.terminalError {
+	if s.TerminalError {
 		details = append(details, "error=true")
 	}
-	if s.approvals > 0 {
-		details = append(details, fmt.Sprintf("approval_events=%d", s.approvals))
+	if s.Approvals > 0 {
+		details = append(details, fmt.Sprintf("approval_events=%d", s.Approvals))
 	}
-	if s.lastTool != "" {
-		details = append(details, fmt.Sprintf("last_tool=%q", statusValue(s.lastTool)))
+	if s.LastTool != "" {
+		details = append(details, fmt.Sprintf("last_tool=%q", statusValue(s.LastTool)))
 	}
-	if s.activeTool != "" {
-		details = append(details, fmt.Sprintf("active_tool=%q", statusValue(s.activeTool)))
+	if s.ActiveTool != "" {
+		details = append(details, fmt.Sprintf("active_tool=%q", statusValue(s.ActiveTool)))
 	}
-	if s.lastCommand != "" {
-		details = append(details, fmt.Sprintf("last_command=%q", statusValue(s.lastCommand)))
+	if s.LastCommand != "" {
+		details = append(details, fmt.Sprintf("last_command=%q", statusValue(s.LastCommand)))
 	}
-	if s.lastPatch != "" {
-		details = append(details, fmt.Sprintf("last_patch=%q", statusValue(s.lastPatch)))
+	if s.LastPatch != "" {
+		details = append(details, fmt.Sprintf("last_patch=%q", statusValue(s.LastPatch)))
 	}
-	if s.lastVerification != "" {
-		details = append(details, fmt.Sprintf("last_verification=%q", statusValue(s.lastVerification)))
+	if s.LastVerification != "" {
+		details = append(details, fmt.Sprintf("last_verification=%q", statusValue(s.LastVerification)))
 	}
-	if s.lastApproval != "" {
-		details = append(details, fmt.Sprintf("last_approval=%q", statusValue(s.lastApproval)))
+	if s.LastApproval != "" {
+		details = append(details, fmt.Sprintf("last_approval=%q", statusValue(s.LastApproval)))
 	}
 	if len(details) == 0 {
 		return ""
