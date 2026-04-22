@@ -97,7 +97,11 @@ func renderEvent(w io.Writer, event memaxagent.Event) error {
 		}
 	case memaxagent.EventCommandFinished:
 		if event.Command != nil {
-			fmt.Fprintf(w, "command: %s exit=%d timeout=%t\n", strings.Join(event.Command.Argv, " "), event.Command.ExitCode, event.Command.TimedOut)
+			command := strings.TrimSpace(event.Command.Command)
+			if command == "" {
+				command = strings.Join(event.Command.Argv, " ")
+			}
+			fmt.Fprintf(w, "command: %s exit=%d timeout=%t\n", command, event.Command.ExitCode, event.Command.TimedOut)
 		}
 	case memaxagent.EventCommandStarted:
 		if event.Command != nil {
