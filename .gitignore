@@ -1,0 +1,34 @@
+# Build outputs
+/bin/
+/build/
+/dist/
+/out/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+
+# Go test and coverage artifacts
+*.out
+*.prof
+*.coverprofile
+coverage.out
+coverage.html
+
+# Project-local Memax session/runtime state
+.memax-code/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
