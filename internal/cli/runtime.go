@@ -302,6 +302,9 @@ func buildStack(opts options) (coding.Stack, error) {
 	return stack, nil
 }
 
+// cliToolContractGuidance intentionally names the fixed default tool names
+// registered by buildStack. Update this guidance if the CLI ever exposes tool
+// name customization.
 const cliToolContractGuidance = `CLI tool contract:
 - Use run_command with command as one shell command string, not an argv array.
 - Use start_command with command as one shell command string for long-running processes such as dev servers, test watchers, and REPLs.

@@ -95,6 +95,7 @@ func TestBuildStackUsesModelFriendlyToolContracts(t *testing.T) {
 
 	prompt := stack.Options().AppendSystemPrompt
 	for _, want := range []string{
+		"Use managed command sessions when continuous feedback helps",
 		"CLI tool contract:",
 		"Use run_command with command as one shell command string",
 		"Use start_command with command as one shell command string",
