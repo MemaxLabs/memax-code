@@ -78,7 +78,7 @@ func TestDryRunValidatesResumeSession(t *testing.T) {
 		"--provider", "openai",
 		"--model", "example-model",
 		"--session-dir", t.TempDir(),
-		"--resume", "fedcba9876543210fedcba9876543210",
+		"--resume", "00000000-0000-7000-8000-000000000001",
 	}, &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "session not found") {
 		t.Fatalf("Run() error = %v, want missing session", err)
@@ -118,7 +118,7 @@ func TestListSessionsIgnoresModelConfig(t *testing.T) {
 
 func TestListSessionsRejectsConflictingFlags(t *testing.T) {
 	for _, args := range [][]string{
-		{"--list-sessions", "--resume", "0123456789abcdef0123456789abcdef"},
+		{"--list-sessions", "--resume", "00000000-0000-7000-8000-000000000000"},
 		{"--list-sessions", "--dry-run"},
 	} {
 		var stdout, stderr bytes.Buffer

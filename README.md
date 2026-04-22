@@ -54,7 +54,7 @@ Resume an earlier conversation:
 
 ```sh
 memax-code --list-sessions
-memax-code --resume 0123456789abcdef0123456789abcdef "continue from the last plan"
+memax-code --resume 0194d9a4-7b8c-7d20-9a1b-4f6c6f4f7a01 "continue from the last plan"
 ```
 
 Session transcripts are stored under `~/.memax-code/sessions` by default. Use
