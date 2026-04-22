@@ -157,9 +157,9 @@ func TestRenderTUIEventsPrintsStructuredSectionsAndStatus(t *testing.T) {
 		"Memax Code\n----------",
 		"[session]\nid: 00000000-0000-7000-8000-000000000001",
 		"[assistant]\nI will test it.\n",
-		"[tool]\nstart: run_command",
-		"[command]\ngo test ./... exit=0 timeout=false",
-		"[workspace]\npatch: paths=README.md changes=1",
+		"[activity]\n> tool run_command",
+		`+ command command="go test ./..." exit=0 timeout=false`,
+		"~ patch README.md changes=1",
 		"[result]\ndone",
 		"[status]\nsession: 00000000-0000-7000-8000-000000000001\ntools=1 commands=1 patches=1 verifications=0 done=true",
 		`last_tool="run_command"`,
@@ -280,11 +280,7 @@ func TestLiveRenderTruncatesTransientStatusToTerminalWidth(t *testing.T) {
 	if err := renderWith(&out, events, &liveRenderState{}); err != nil {
 		t.Fatalf("renderWith() error = %v", err)
 	}
-	for _, line := range strings.Split(out.String(), clearLine) {
-		if line == "" || strings.HasPrefix(line, "\n") {
-			continue
-		}
-		status, _, _ := strings.Cut(line, "\n")
+	for _, status := range liveStatusLines(out.String()) {
 		if len([]rune(status)) > 39 {
 			t.Fatalf("status line width = %d, want <= 39: %q", len([]rune(status)), status)
 		}
@@ -307,11 +303,7 @@ func TestLiveRenderUsesConfiguredTerminalWidth(t *testing.T) {
 	if err := renderWith(&out, events, &liveRenderState{statusWidth: 24}); err != nil {
 		t.Fatalf("renderWith() error = %v", err)
 	}
-	for _, line := range strings.Split(out.String(), clearLine) {
-		if line == "" || strings.HasPrefix(line, "\n") {
-			continue
-		}
-		status, _, _ := strings.Cut(line, "\n")
+	for _, status := range liveStatusLines(out.String()) {
 		if len([]rune(status)) > 24 {
 			t.Fatalf("status line width = %d, want <= 24: %q", len([]rune(status)), status)
 		}
@@ -474,10 +466,13 @@ func TestRenderTUIEventsTracksActivityStatus(t *testing.T) {
 	}
 	got := out.String()
 	for _, want := range []string{
-		`started: cmd-1 pid=123 command="npm test -- --watch"`,
-		`[approval]`,
-		`requested: workspace_apply_patch title="Apply patch"`,
-		`granted: workspace_apply_patch`,
+		`$ command id=cmd-1 pid=123 command="npm test -- --watch"`,
+		`[activity]`,
+		`? approval requested: workspace_apply_patch title="Apply patch"`,
+		`+ approval granted: workspace_apply_patch`,
+		`+ check go test ./... passed=true`,
+		`< tool start_command ok`,
+		`  result: started`,
 		`approval_events=2`,
 		`last_tool="start_command"`,
 		`last_command="npm test -- --watch"`,
@@ -491,6 +486,51 @@ func TestRenderTUIEventsTracksActivityStatus(t *testing.T) {
 	}
 	if strings.Contains(got, `active_tool="start_command"`) {
 		t.Fatalf("tui output = %q, want active tool cleared after result", got)
+	}
+}
+
+func TestRenderTUIEventsQuotesCommandAndHandlesEmptyDisplay(t *testing.T) {
+	events := make(chan memaxagent.Event, 3)
+	events <- memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Command:   `grep -RInE "id=123|timeout=false" README.md`,
+		PID:       123,
+	}}
+	events <- memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{ExitCode: 0}}
+	close(events)
+
+	var out bytes.Buffer
+	if err := renderEventsWithMode(&out, events, renderModeTUI); err != nil {
+		t.Fatalf("renderEventsWithMode() error = %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		`$ command id=cmd-1 pid=123 command="grep -RInE \"id=123|timeout=false\" README.md"`,
+		`+ command exit=0 timeout=false`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("tui output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "command  exit") {
+		t.Fatalf("tui output = %q, want no double-space command row", got)
+	}
+}
+
+func TestRenderTUIEventsIndentsMultilineToolResult(t *testing.T) {
+	events := make(chan memaxagent.Event, 1)
+	events <- memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		Name:    "run_command",
+		Content: "line one\nline two\nline three",
+	}}
+	close(events)
+
+	var out bytes.Buffer
+	if err := renderEventsWithMode(&out, events, renderModeTUI); err != nil {
+		t.Fatalf("renderEventsWithMode() error = %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "< tool run_command ok\n  result: line one\n  line two\n  line three\n") {
+		t.Fatalf("tui output = %q, want all result lines indented", got)
 	}
 }
 
@@ -616,7 +656,7 @@ func TestRenderTUIEventsCoalescesAssistantStreamChunks(t *testing.T) {
 	if !strings.Contains(got, "[assistant]\nhello world\n") {
 		t.Fatalf("tui output = %q, want coalesced assistant text", got)
 	}
-	if !strings.Contains(got, "[tool]\nresult: ok\n") {
+	if !strings.Contains(got, "[activity]\n< tool <unknown> ok\n  result: ok\n") {
 		t.Fatalf("tui output = %q, want following event on its own section", got)
 	}
 }
@@ -682,6 +722,20 @@ func TestRenderEventHandlesNilErrorEvent(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "agent emitted error event") {
 		t.Fatalf("renderEvent() error = %v, want nil error fallback", err)
 	}
+}
+
+func liveStatusLines(output string) []string {
+	var lines []string
+	for _, chunk := range strings.Split(output, clearLine) {
+		if chunk == "" || strings.HasPrefix(chunk, "\n") {
+			continue
+		}
+		line, _, _ := strings.Cut(chunk, "\n")
+		if strings.HasPrefix(line, "Memax Code") && strings.Contains(line, " | ") {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 type tickSpyRenderer struct {

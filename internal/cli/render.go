@@ -144,91 +144,81 @@ func (s *tuiRenderState) Render(w io.Writer, event memaxagent.Event) error {
 		}
 	case memaxagent.EventToolUseStart:
 		if event.ToolUse != nil {
-			s.sectionLine(w, "tool")
-			fmt.Fprintf(w, "start: %s\n", event.ToolUse.Name)
+			s.renderActivity(w, "> tool "+event.ToolUse.Name)
 		}
 	case memaxagent.EventToolUseDelta:
 		// The structured renderer waits for finalized tool-use events.
 	case memaxagent.EventToolUse:
 		if event.ToolUse != nil {
-			s.sectionLine(w, "tool")
-			fmt.Fprintf(w, "call: %s\n", event.ToolUse.Name)
+			s.renderActivity(w, "> tool "+event.ToolUse.Name+" call")
 		}
 	case memaxagent.EventToolResult:
 		if event.ToolResult != nil {
-			s.sectionLine(w, "tool")
 			content := strings.TrimSpace(event.ToolResult.Content)
-			label := "result"
+			name := timelineToolName(event.ToolResult.Name)
+			line := "< tool " + name + " ok"
 			if event.ToolResult.IsError {
-				label = "error"
+				line = "! tool " + name + " error"
 				if content == "" {
 					content = "<empty tool error>"
 				}
 			}
-			if content == "" {
-				fmt.Fprintf(w, "%s: %s\n", label, event.ToolResult.Name)
-			} else {
-				fmt.Fprintf(w, "%s: %s\n", label, content)
+			s.renderActivity(w, line)
+			if content != "" {
+				if event.ToolResult.IsError {
+					renderTimelineDetail(w, "error", content)
+				} else {
+					renderTimelineDetail(w, "result", content)
+				}
 			}
 		}
 	case memaxagent.EventWorkspaceCheckpoint:
 		if event.Workspace != nil {
-			s.sectionLine(w, "workspace")
-			fmt.Fprintf(w, "checkpoint: %s\n", event.Workspace.CheckpointID)
+			s.renderActivity(w, "~ checkpoint "+event.Workspace.CheckpointID)
 		}
 	case memaxagent.EventWorkspacePatch:
 		if event.Workspace != nil {
-			s.sectionLine(w, "workspace")
-			fmt.Fprintf(w, "patch: paths=%s changes=%d\n", strings.Join(event.Workspace.Paths, ","), event.Workspace.Changes)
+			s.renderActivity(w, "~ patch "+workspaceSummary(event.Workspace))
 		}
 	case memaxagent.EventWorkspaceDiff:
 		if event.Workspace != nil {
-			s.sectionLine(w, "workspace")
-			fmt.Fprintf(w, "diff: paths=%s changes=%d\n", strings.Join(event.Workspace.Paths, ","), event.Workspace.Changes)
+			s.renderActivity(w, "~ diff "+workspaceSummary(event.Workspace))
 		}
 	case memaxagent.EventWorkspaceRestore:
 		if event.Workspace != nil {
-			s.sectionLine(w, "workspace")
-			fmt.Fprintf(w, "restore: %s\n", event.Workspace.CheckpointID)
+			s.renderActivity(w, "~ restore "+event.Workspace.CheckpointID)
 		}
 	case memaxagent.EventCommandFinished:
 		if event.Command != nil {
-			s.sectionLine(w, "command")
-			fmt.Fprintf(w, "%s exit=%d timeout=%t\n", commandDisplay(event), event.Command.ExitCode, event.Command.TimedOut)
+			s.renderActivity(w, timelineCommandFinishedLine(event))
 		}
 	case memaxagent.EventCommandStarted:
 		if event.Command != nil {
-			s.sectionLine(w, "command")
-			fmt.Fprintf(w, "started: %s pid=%d", event.Command.CommandID, event.Command.PID)
-			if display := commandDisplay(event); display != "" {
-				fmt.Fprintf(w, " command=%q", display)
-			}
-			fmt.Fprintln(w)
+			s.renderActivity(w, timelineCommandStartedLine(event))
 		}
 	case memaxagent.EventCommandOutput:
 		if event.Command != nil {
-			s.sectionLine(w, "command")
-			fmt.Fprintf(w, "output: %s chunks=%d next_seq=%d\n", event.Command.CommandID, event.Command.OutputChunks, event.Command.NextSeq)
+			s.renderActivity(w, fmt.Sprintf("$ output %s chunks=%d next_seq=%d", event.Command.CommandID, event.Command.OutputChunks, event.Command.NextSeq))
 		}
 	case memaxagent.EventCommandInput:
 		if event.Command != nil {
-			s.sectionLine(w, "command")
-			fmt.Fprintf(w, "input: %s bytes=%d\n", event.Command.CommandID, event.Command.InputBytes)
+			s.renderActivity(w, fmt.Sprintf("$ input %s bytes=%d", event.Command.CommandID, event.Command.InputBytes))
 		}
 	case memaxagent.EventCommandResized:
 		if event.Command != nil {
-			s.sectionLine(w, "command")
-			fmt.Fprintf(w, "resize: %s cols=%d rows=%d\n", event.Command.CommandID, event.Command.Cols, event.Command.Rows)
+			s.renderActivity(w, fmt.Sprintf("$ resize %s cols=%d rows=%d", event.Command.CommandID, event.Command.Cols, event.Command.Rows))
 		}
 	case memaxagent.EventCommandStopped:
 		if event.Command != nil {
-			s.sectionLine(w, "command")
-			fmt.Fprintf(w, "stopped: %s status=%s\n", event.Command.CommandID, event.Command.Status)
+			s.renderActivity(w, fmt.Sprintf("! command %s stopped status=%s", event.Command.CommandID, event.Command.Status))
 		}
 	case memaxagent.EventVerification:
 		if event.Verification != nil {
-			s.sectionLine(w, "verification")
-			fmt.Fprintf(w, "%s passed=%t\n", event.Verification.Name, event.Verification.Passed)
+			prefix := "+"
+			if !event.Verification.Passed {
+				prefix = "!"
+			}
+			s.renderActivity(w, fmt.Sprintf("%s check %s passed=%t", prefix, event.Verification.Name, event.Verification.Passed))
 		}
 	case memaxagent.EventApprovalRequested:
 		s.renderApproval(w, "requested", event.Approval)
@@ -264,8 +254,80 @@ func (s *tuiRenderState) renderApproval(w io.Writer, action string, approval *me
 	if line == "" {
 		return
 	}
-	s.sectionLine(w, "approval")
+	prefix := approvalTimelinePrefix(action)
+	s.renderActivity(w, prefix+" approval "+line)
+}
+
+func (s *tuiRenderState) renderActivity(w io.Writer, line string) {
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	s.sectionLine(w, "activity")
 	fmt.Fprintln(w, line)
+}
+
+func approvalTimelinePrefix(action string) string {
+	switch action {
+	case "requested":
+		return "?"
+	case "denied":
+		return "!"
+	default:
+		return "+"
+	}
+}
+
+func timelineToolName(name string) string {
+	name = statusValue(name)
+	if name == "" {
+		return "<unknown>"
+	}
+	return name
+}
+
+func renderTimelineDetail(w io.Writer, label, content string) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return
+	}
+	lines := strings.Split(content, "\n")
+	fmt.Fprintf(w, "  %s: %s\n", label, lines[0])
+	for _, line := range lines[1:] {
+		fmt.Fprintf(w, "  %s\n", line)
+	}
+}
+
+func timelineCommandStartedLine(event memaxagent.Event) string {
+	parts := []string{"$ command"}
+	if event.Command == nil {
+		return strings.Join(parts, " ")
+	}
+	if event.Command.CommandID != "" {
+		parts = append(parts, "id="+event.Command.CommandID)
+	}
+	if event.Command.PID != 0 {
+		parts = append(parts, fmt.Sprintf("pid=%d", event.Command.PID))
+	}
+	if display := commandDisplay(event); display != "" {
+		parts = append(parts, fmt.Sprintf("command=%q", display))
+	}
+	return strings.Join(parts, " ")
+}
+
+func timelineCommandFinishedLine(event memaxagent.Event) string {
+	prefix := "+"
+	if event.Command != nil && (event.Command.ExitCode != 0 || event.Command.TimedOut) {
+		prefix = "!"
+	}
+	parts := []string{prefix, "command"}
+	if event.Command == nil {
+		return strings.Join(parts, " ")
+	}
+	if display := commandDisplay(event); display != "" {
+		parts = append(parts, fmt.Sprintf("command=%q", display))
+	}
+	parts = append(parts, fmt.Sprintf("exit=%d", event.Command.ExitCode), fmt.Sprintf("timeout=%t", event.Command.TimedOut))
+	return strings.Join(parts, " ")
 }
 
 func (s *tuiRenderState) sectionLine(w io.Writer, section string) {
