@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
@@ -89,17 +90,20 @@ func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, cu
 		}
 	case "/resume":
 		if arg == "" {
-			fmt.Fprintln(w, "usage: /resume SESSION_ID|latest")
+			fmt.Fprintln(w, "usage: /resume SESSION_ID|latest|N")
 			return false
 		}
-		store := session.NewJSONLStore(opts.SessionDir)
-		id, err := resolveSessionID(ctx, store, opts.SessionDir, arg, "resume")
+		id, err := resolveInteractiveSessionID(ctx, opts, arg)
 		if err != nil {
 			fmt.Fprintf(w, "error: %v\n", err)
 			return false
 		}
 		*currentSession = id
 		fmt.Fprintf(w, "resumed session: %s\n", id)
+	case "/pick":
+		if err := printInteractiveSessionPicker(ctx, w, opts); err != nil {
+			fmt.Fprintf(w, "error: %v\n", err)
+		}
 	case "/sessions":
 		if err := listSessions(ctx, w, opts); err != nil {
 			fmt.Fprintf(w, "error: %v\n", err)
@@ -108,6 +112,67 @@ func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, cu
 		fmt.Fprintf(w, "unknown command %q; type /help\n", name)
 	}
 	return false
+}
+
+func resolveInteractiveSessionID(ctx context.Context, opts options, raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if index, ok := parseSessionIndex(raw); ok {
+		rows, err := loadSessionRows(ctx, session.NewJSONLStore(opts.SessionDir), opts.SessionDir)
+		if err != nil {
+			return "", err
+		}
+		if len(rows) == 0 {
+			return "", fmt.Errorf("resume session index %d: no sessions", index)
+		}
+		if index < 1 || index > len(rows) {
+			return "", fmt.Errorf("resume session index %d out of range; choose 1-%d", index, len(rows))
+		}
+		return rows[index-1].Session.ID, nil
+	}
+	store := session.NewJSONLStore(opts.SessionDir)
+	return resolveSessionID(ctx, store, opts.SessionDir, raw, "resume")
+}
+
+func parseSessionIndex(raw string) (int, bool) {
+	if raw == "" {
+		return 0, false
+	}
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	index, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false
+	}
+	return index, true
+}
+
+func printInteractiveSessionPicker(ctx context.Context, w io.Writer, opts options) error {
+	rows, err := loadSessionRows(ctx, session.NewJSONLStore(opts.SessionDir), opts.SessionDir)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		_, err := fmt.Fprintln(w, "no sessions")
+		return err
+	}
+	fmt.Fprintln(w, "recent sessions:")
+	for i, row := range rows {
+		title := row.Title
+		if title == "" {
+			title = "-"
+		}
+		fmt.Fprintf(w, "  %d) %s  %s  %s\n",
+			i+1,
+			row.Session.ID,
+			row.UpdatedAt.Format("2006-01-02 15:04"),
+			title,
+		)
+	}
+	fmt.Fprintln(w, "Use /resume N, /resume latest, or /resume SESSION_ID.")
+	return nil
 }
 
 func splitInteractiveCommand(line string) (string, string) {
@@ -132,8 +197,9 @@ func printInteractiveHelp(w io.Writer) {
 	fmt.Fprintln(w, "slash commands:")
 	fmt.Fprintln(w, "  /help              show this help")
 	fmt.Fprintln(w, "  /session           show the active session")
+	fmt.Fprintln(w, "  /pick              list recent sessions with numbers")
 	fmt.Fprintln(w, "  /sessions          list saved sessions")
-	fmt.Fprintln(w, "  /resume ID|latest  resume a saved session")
+	fmt.Fprintln(w, "  /resume TARGET     resume by ID, latest, or number")
 	fmt.Fprintln(w, "  /new               start the next prompt in a new session")
 	fmt.Fprintln(w, "  /quit              exit")
 	fmt.Fprintln(w, "  //PROMPT           send a prompt that starts with /")

@@ -29,10 +29,10 @@ The CLI now has the first terminal UI foundation: `auto` chooses structured
 terminal rendering for interactive output and plain rendering for logs, tests,
 and pipes. `--ui live` opts into an early live status line while preserving the
 sectioned transcript underneath. `--interactive` starts a simple prompt loop
-with `/help`, `/session`, `/sessions`, `/resume`, `/new`, and `/quit`. It does
-not yet ship the full-screen app shell, session picker, or sandboxed OS
-execution expected from a mature coding-agent CLI. Those are product slices on
-top of this foundation.
+with `/help`, `/session`, `/pick`, `/sessions`, `/resume`, `/new`, and `/quit`.
+It does not yet ship the full-screen app shell or sandboxed OS execution
+expected from a mature coding-agent CLI. Those are product slices on top of
+this foundation.
 
 ## Usage
 
@@ -110,8 +110,10 @@ commands control local session state without calling a model:
 
 ```text
 /help
+/pick
 /sessions
 /resume latest
+/resume 1
 /session
 /new
 /quit

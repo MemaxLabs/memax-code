@@ -893,6 +893,92 @@ func TestRunInteractiveResumeLatestCommand(t *testing.T) {
 	}
 }
 
+func TestRunInteractivePickAndResumeByIndex(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	older, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() older error = %v", err)
+	}
+	newer, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() newer error = %v", err)
+	}
+	if err := store.Append(ctx, older.ID, userMessage("older task")); err != nil {
+		t.Fatalf("Append() older error = %v", err)
+	}
+	if err := store.Append(ctx, newer.ID, userMessage("newer task")); err != nil {
+		t.Fatalf("Append() newer error = %v", err)
+	}
+	setTranscriptModTime(t, sessionDir, older.ID, time.Unix(100, 0))
+	setTranscriptModTime(t, sessionDir, newer.ID, time.Unix(200, 0))
+
+	var stdout, stderr bytes.Buffer
+	err = RunWithIO(ctx, []string{
+		"--interactive",
+		"--session-dir", sessionDir,
+	}, strings.NewReader("/pick\n/resume 1\n/session\n/resume 2\n/session\n/resume 3\n/quit\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("RunWithIO() error = %v", err)
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"recent sessions:",
+		"1) " + newer.ID,
+		"2) " + older.ID,
+		"resumed session: " + newer.ID,
+		"session: " + newer.ID,
+		"resumed session: " + older.ID,
+		"session: " + older.ID,
+		"resume session index 3 out of range; choose 1-2",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunInteractivePickAndResumeIndexErrorPaths(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	err := RunWithIO(ctx, []string{
+		"--interactive",
+		"--session-dir", sessionDir,
+	}, strings.NewReader("/pick\n/resume 3\n/quit\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("RunWithIO() empty error = %v", err)
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"no sessions",
+		"resume session index 3: no sessions",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+
+	store := session.NewJSONLStore(sessionDir)
+	if _, err := store.Create(ctx); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	err = RunWithIO(ctx, []string{
+		"--interactive",
+		"--session-dir", sessionDir,
+	}, strings.NewReader("/resume 0\n/quit\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("RunWithIO() zero error = %v", err)
+	}
+	if out := stderr.String(); !strings.Contains(out, "resume session index 0 out of range; choose 1-1") {
+		t.Fatalf("interactive stderr missing zero-index error:\n%s", out)
+	}
+}
+
 func TestRunInteractiveSlashCommandErrorPathsContinue(t *testing.T) {
 	ctx := context.Background()
 	sessionDir := t.TempDir()
@@ -915,7 +1001,7 @@ func TestRunInteractiveSlashCommandErrorPathsContinue(t *testing.T) {
 	}
 	out := stderr.String()
 	for _, want := range []string{
-		"usage: /resume SESSION_ID|latest",
+		"usage: /resume SESSION_ID|latest|N",
 		"invalid session id",
 		"SESSION ID",
 		sess.ID,
