@@ -24,6 +24,8 @@ func TestConfigInitCreatesStrictConfig(t *testing.T) {
 		"--ui", "plain",
 		"--session-dir", ".memax-code/sessions",
 		"--inherit-command-env",
+		"--verify-command", "test=npm test",
+		"--verify-command", "lint=npm run lint",
 	}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -44,6 +46,9 @@ func TestConfigInitCreatesStrictConfig(t *testing.T) {
 		`"ui": "plain"`,
 		`"session_dir": ".memax-code/sessions"`,
 		`"inherit_command_env": true`,
+		`"verify_commands": {`,
+		`"lint": "npm run lint"`,
+		`"test": "npm test"`,
 	} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("config missing %q:\n%s", want, body)

@@ -50,6 +50,8 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 	uiRaw := fs.String("ui", defaultConfigUI, "event renderer: auto, live, tui, or plain")
 	sessionDir := fs.String("session-dir", defaultConfigSessionDir, "directory for JSONL session transcripts")
 	inheritCommandEnv := fs.Bool("inherit-command-env", false, "let command tools inherit the host process environment")
+	verifyCommands := newVerifyCommandsFlag()
+	fs.Var(verifyCommands, "verify-command", "add a verification command as name=command; repeat for test, lint, typecheck, or default (default wins over test for empty/default requests)")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: memax-code config init [flags]")
 		fs.PrintDefaults()
@@ -98,6 +100,9 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 	}
 	if flagWasSet(fs, "inherit-command-env") {
 		cfg.InheritCommandEnv = boolPtr(*inheritCommandEnv)
+	}
+	if verifyCommands.set {
+		cfg.VerifyCommands = cloneStringMap(verifyCommands.values)
 	}
 	if err := writeConfigFile(configPath, cfg, *force); err != nil {
 		return err

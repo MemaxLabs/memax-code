@@ -75,6 +75,7 @@ type options struct {
 	DryRun            bool
 	Interactive       bool
 	InheritCommandEnv bool
+	VerifyCommands    map[string]string
 }
 
 func parseArgs(args []string, output io.Writer) (options, error) {
@@ -100,8 +101,10 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	showSessionID := fs.String("show-session", "", "print a saved session transcript and exit")
 	inspectTools := fs.Bool("inspect-tools", false, "print the model-facing tool contract and exit")
 	interactive := false
+	verifyCommandsFlag := newVerifyCommandsFlag()
 	fs.BoolVar(&interactive, "interactive", false, "start a line-oriented interactive shell")
 	fs.BoolVar(&interactive, "i", false, "alias for --interactive")
+	fs.Var(verifyCommandsFlag, "verify-command", "add a verification command as name=command; repeat for test, lint, typecheck, or default (default wins over test for empty/default requests)")
 	fs.Var(cwd, "C", "alias for --cwd")
 	fs.Var(cwd, "cd", "alias for --cwd")
 	fs.Var(cwd, "cwd", "workspace root")
@@ -214,6 +217,13 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	if err != nil {
 		return options{}, err
 	}
+	verifyCommands, verifyCommandsSource, err := verifyCommandsSetting(verifyCommandsFlag, "MEMAX_CODE_VERIFY_COMMANDS", cfg.VerifyCommands)
+	if err != nil {
+		if verifyCommandsSource == settingSourceConfig {
+			return options{}, fmt.Errorf("invalid config %s verify_commands: %w", configPath, err)
+		}
+		return options{}, err
+	}
 
 	opts = options{
 		Prompt:            strings.TrimSpace(strings.Join(fs.Args(), " ")),
@@ -231,6 +241,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		InspectTools:      *inspectTools,
 		DryRun:            *dryRun,
 		InheritCommandEnv: inheritEnv,
+		VerifyCommands:    verifyCommands,
 	}
 	if interactive {
 		if *dryRun {
@@ -304,14 +315,15 @@ func defaultConfigPath() string {
 }
 
 type fileConfig struct {
-	Provider          string `json:"provider,omitempty"`
-	Model             string `json:"model,omitempty"`
-	Profile           string `json:"profile,omitempty"`
-	Effort            string `json:"effort,omitempty"`
-	Preset            string `json:"preset,omitempty"`
-	UI                string `json:"ui,omitempty"`
-	SessionDir        string `json:"session_dir,omitempty"`
-	InheritCommandEnv *bool  `json:"inherit_command_env,omitempty"`
+	Provider          string            `json:"provider,omitempty"`
+	Model             string            `json:"model,omitempty"`
+	Profile           string            `json:"profile,omitempty"`
+	Effort            string            `json:"effort,omitempty"`
+	Preset            string            `json:"preset,omitempty"`
+	UI                string            `json:"ui,omitempty"`
+	SessionDir        string            `json:"session_dir,omitempty"`
+	InheritCommandEnv *bool             `json:"inherit_command_env,omitempty"`
+	VerifyCommands    map[string]string `json:"verify_commands,omitempty"`
 }
 
 func loadConfig(path string, explicit bool) (fileConfig, bool, error) {
@@ -389,6 +401,117 @@ func boolSetting(flagValue bool, flagSet bool, envKey string, configValue *bool,
 		return *configValue, nil
 	}
 	return fallback, nil
+}
+
+type verifyCommandsFlag struct {
+	values map[string]string
+	set    bool
+}
+
+func newVerifyCommandsFlag() *verifyCommandsFlag {
+	return &verifyCommandsFlag{values: map[string]string{}}
+}
+
+func (f *verifyCommandsFlag) String() string {
+	if f == nil || len(f.values) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(f.values)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+func (f *verifyCommandsFlag) Set(raw string) error {
+	name, command, err := parseVerifyCommand(raw)
+	if err != nil {
+		return err
+	}
+	if f.values == nil {
+		f.values = map[string]string{}
+	}
+	if _, exists := f.values[name]; exists {
+		return fmt.Errorf("duplicate verify command %q", name)
+	}
+	f.values[name] = command
+	f.set = true
+	return nil
+}
+
+func verifyCommandsSetting(flags *verifyCommandsFlag, envKey string, configValue map[string]string) (map[string]string, settingSource, error) {
+	if flags != nil && flags.set {
+		return cloneStringMap(flags.values), settingSourceFlag, nil
+	}
+	if raw := strings.TrimSpace(os.Getenv(envKey)); raw != "" {
+		var values map[string]string
+		if err := json.Unmarshal([]byte(raw), &values); err != nil {
+			return nil, settingSourceEnv, fmt.Errorf("invalid %s: %w", envKey, err)
+		}
+		normalized, err := normalizeVerifyCommands(values)
+		if err != nil {
+			return nil, settingSourceEnv, fmt.Errorf("invalid %s: %w", envKey, err)
+		}
+		return normalized, settingSourceEnv, nil
+	}
+	normalized, err := normalizeVerifyCommands(configValue)
+	if len(configValue) > 0 {
+		return normalized, settingSourceConfig, err
+	}
+	return normalized, settingSourceFallback, err
+}
+
+func parseVerifyCommand(raw string) (string, string, error) {
+	name, command, ok := strings.Cut(raw, "=")
+	if !ok {
+		return "", "", fmt.Errorf("verify command must be name=command")
+	}
+	name = normalizeVerifyName(name)
+	command = strings.TrimSpace(command)
+	if name == "" {
+		return "", "", fmt.Errorf("verify command name is required")
+	}
+	if command == "" {
+		return "", "", fmt.Errorf("verify command %q command is required", name)
+	}
+	return name, command, nil
+}
+
+func normalizeVerifyCommands(in map[string]string) (map[string]string, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(in))
+	for rawName, rawCommand := range in {
+		name := normalizeVerifyName(rawName)
+		command := strings.TrimSpace(rawCommand)
+		if name == "" {
+			return nil, fmt.Errorf("verify command name is required")
+		}
+		if command == "" {
+			return nil, fmt.Errorf("verify command %q command is required", name)
+		}
+		if _, exists := out[name]; exists {
+			return nil, fmt.Errorf("duplicate verify command %q", name)
+		}
+		out[name] = command
+	}
+	return out, nil
+}
+
+func normalizeVerifyName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func resolvePath(path string) (string, error) {
@@ -480,7 +603,12 @@ func renderDryRun(w io.Writer, opts options) error {
 	fmt.Fprintf(w, "cwd: %s\n", opts.CWD)
 	fmt.Fprintf(w, "session_dir: %s\n", opts.SessionDir)
 	fmt.Fprintf(w, "resume_session: %s\n", valueOrUnset(opts.ResumeSessionID))
-	fmt.Fprintf(w, "verification: %s\n", verificationMode(opts.CWD))
+	fmt.Fprintf(w, "verification: %s\n", verificationMode(opts.CWD, opts.VerifyCommands))
+	if len(opts.VerifyCommands) > 0 {
+		for _, name := range sortedMapKeys(opts.VerifyCommands) {
+			fmt.Fprintf(w, "verify_command.%s: %s\n", name, opts.VerifyCommands[name])
+		}
+	}
 	fmt.Fprintf(w, "inherit_command_env: %t\n", opts.InheritCommandEnv)
 	fmt.Fprintf(w, "prompt: %s\n", valueOrUnset(opts.Prompt))
 	return nil

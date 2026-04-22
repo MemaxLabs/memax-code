@@ -105,7 +105,7 @@ func unsupportedDoctorFlag(args []string) string {
 
 func doctorFlagTakesValue(name string) bool {
 	switch name {
-	case "--config", "--cwd", "--provider", "--model", "--profile", "--effort", "--preset", "--ui", "--session-dir", "-C", "-cd", "--C", "--cd":
+	case "--config", "--cwd", "--provider", "--model", "--profile", "--effort", "--preset", "--ui", "--session-dir", "--verify-command", "-C", "-cd", "--C", "--cd":
 		return true
 	default:
 		return false
@@ -123,11 +123,11 @@ func printDoctorUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: memax-code doctor [flags]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Runs local setup diagnostics without calling a model.")
-	fmt.Fprintln(w, "Common flags: --config, --cwd, --provider, --model, --profile, --effort, --preset, --ui, --session-dir")
+	fmt.Fprintln(w, "Common flags: --config, --cwd, --provider, --model, --profile, --effort, --preset, --ui, --session-dir, --verify-command")
 }
 
 func doctorChecks(opts options) []doctorCheck {
-	mode := verificationMode(opts.CWD)
+	mode := verificationMode(opts.CWD, opts.VerifyCommands)
 	checks := []doctorCheck{
 		configDoctorCheck(opts),
 		{Level: doctorOK, Name: "cwd", Message: opts.CWD},
@@ -135,7 +135,7 @@ func doctorChecks(opts options) []doctorCheck {
 		modelDoctorCheck(opts),
 		apiKeyDoctorCheck(opts),
 		sessionDirDoctorCheck(opts.SessionDir),
-		verificationDoctorCheck(mode),
+		verificationDoctorCheck(mode, opts.VerifyCommands),
 		commandDoctorCheck("git", false),
 		commandDoctorCheck("go", mode == "go"),
 	}
@@ -186,11 +186,19 @@ func sessionDirDoctorCheck(path string) doctorCheck {
 	return doctorCheck{Level: doctorWarn, Name: "session_dir", Message: path + " (missing; parent directory is not present)"}
 }
 
-func verificationDoctorCheck(mode string) doctorCheck {
-	if mode == "go" {
+func verificationDoctorCheck(mode string, commands map[string]string) doctorCheck {
+	switch mode {
+	case "custom":
+		names := sortedMapKeys(commands)
+		if len(names) == 0 {
+			return doctorCheck{Level: doctorOK, Name: "verification", Message: "custom commands configured"}
+		}
+		return doctorCheck{Level: doctorOK, Name: "verification", Message: "custom commands configured: " + strings.Join(names, ", ")}
+	case "go":
 		return doctorCheck{Level: doctorOK, Name: "verification", Message: "go workspace detected"}
+	default:
+		return doctorCheck{Level: doctorWarn, Name: "verification", Message: "disabled; no root go.mod detected"}
 	}
-	return doctorCheck{Level: doctorWarn, Name: "verification", Message: "disabled; no root go.mod detected"}
 }
 
 func commandDoctorCheck(name string, required bool) doctorCheck {

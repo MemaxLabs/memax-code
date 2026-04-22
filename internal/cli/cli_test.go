@@ -109,6 +109,32 @@ func TestDryRunLoadsConfigFileDefaults(t *testing.T) {
 	}
 }
 
+func TestDryRunPrintsCustomVerificationCommands(t *testing.T) {
+	cwd := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--dry-run",
+		"--cwd", cwd,
+		"--provider", "openai",
+		"--model", "example-model",
+		"--verify-command", "test=npm test",
+		"--verify-command", "lint=npm run lint",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"verification: custom",
+		"verify_command.lint: npm run lint",
+		"verify_command.test: npm test",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestParseFlagAndEnvOverrideConfigFile(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(configPath, []byte(`{
@@ -147,6 +173,70 @@ func TestParseFlagAndEnvOverrideConfigFile(t *testing.T) {
 	}
 	if opts.UI != renderModePlain {
 		t.Fatalf("UI = %q, want config value", opts.UI)
+	}
+}
+
+func TestParseVerifyCommandsFromConfigAndEnv(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+		"verify_commands": {
+			"test": "go test ./...",
+			"lint": "go vet ./..."
+		}
+	}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stderr bytes.Buffer
+	opts, err := parseArgs([]string{"--dry-run", "--config", configPath}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs(config) error = %v", err)
+	}
+	if opts.VerifyCommands["test"] != "go test ./..." || opts.VerifyCommands["lint"] != "go vet ./..." {
+		t.Fatalf("VerifyCommands from config = %#v", opts.VerifyCommands)
+	}
+
+	t.Setenv("MEMAX_CODE_VERIFY_COMMANDS", `{"test":"npm test"}`)
+	opts, err = parseArgs([]string{"--dry-run", "--config", configPath}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs(env) error = %v", err)
+	}
+	if opts.VerifyCommands["test"] != "npm test" || len(opts.VerifyCommands) != 1 {
+		t.Fatalf("VerifyCommands from env = %#v, want env override", opts.VerifyCommands)
+	}
+}
+
+func TestParseRejectsDuplicateVerifyCommands(t *testing.T) {
+	var stderr bytes.Buffer
+	_, err := parseArgs([]string{
+		"--dry-run",
+		"--verify-command", "Test=go test ./...",
+		"--verify-command", "test=npm test",
+	}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), `duplicate verify command "test"`) {
+		t.Fatalf("parseArgs(flags) error = %v, want duplicate verify command", err)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+		"verify_commands": {
+			"Test": "go test ./...",
+			"test": "npm test"
+		}
+	}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err = parseArgs([]string{"--dry-run", "--config", configPath}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), `duplicate verify command "test"`) {
+		t.Fatalf("parseArgs(config) error = %v, want duplicate verify command", err)
+	}
+}
+
+func TestParseRejectsInvalidVerifyCommand(t *testing.T) {
+	var stderr bytes.Buffer
+	_, err := parseArgs([]string{"--dry-run", "--verify-command", "missing-equals"}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "name=command") {
+		t.Fatalf("parseArgs() error = %v, want verify command validation", err)
 	}
 }
 

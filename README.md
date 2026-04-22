@@ -74,7 +74,11 @@ memax-code config show
   "effort": "auto",
   "ui": "live",
   "session_dir": "~/.memax-code/sessions",
-  "inherit_command_env": false
+  "inherit_command_env": false,
+  "verify_commands": {
+    "test": "npm test",
+    "lint": "npm run lint"
+  }
 }
 ```
 
@@ -169,6 +173,46 @@ time, created time, parent session, and the first user prompt as a short title.
 Use `--show-session SESSION_ID` or `--show-session latest` to inspect the
 readable transcript, including assistant text, tool calls, and tool results.
 
+Configure project-specific verification commands when the workspace is not a
+Go module, or when the default Go checks are not the right contract:
+
+```sh
+memax-code --verify-command 'test=npm test' \
+  --verify-command 'lint=npm run lint' \
+  "make the failing lint and test checks pass"
+```
+
+`--verify-command` accepts `name=command` and can be repeated. The names are
+the checks the agent can request through `workspace_verify`, such as `test`,
+`lint`, `typecheck`, or `default`. Empty/default verification requests use
+`default` when it is configured, otherwise `test`. Commands run through the
+same root-confined command runner as normal shell tools. For scoped checks,
+include `{target}` in the configured command; the target must be one safe
+package/path token and is passed as a single shell-quoted positional argument,
+not expanded as shell syntax:
+
+```sh
+memax-code --verify-command 'test=npm test -- {target}' \
+  "fix the tests for packages/api"
+```
+
+The same map can be stored in config:
+
+```json
+{
+  "verify_commands": {
+    "test": "npm test",
+    "lint": "npm run lint",
+    "typecheck": "npm run typecheck"
+  }
+}
+```
+
+In Go workspaces, custom commands extend the built-in Go verifier: if a custom
+map does not define `test` or `vet`, those names still fall back to `go test
+./...` and `go vet ./...`. In non-Go workspaces, only configured command names
+are available.
+
 By default command tools do not inherit the host process environment. Enable it
 only when the agent needs local toolchains that depend on environment variables:
 
@@ -188,6 +232,8 @@ Configuration environment variables:
 - `MEMAX_CODE_SESSION_DIR`: default JSONL session transcript directory.
 - `MEMAX_CODE_INHERIT_COMMAND_ENV`: default command environment inheritance,
   accepting `1/0`, `t/f`, `true/false`, and case variants.
+- `MEMAX_CODE_VERIFY_COMMANDS`: JSON object mapping verification names to shell
+  commands, for example `{"test":"npm test","lint":"npm run lint"}`.
 - `OPENAI_API_KEY`: OpenAI API key.
 - `OPENAI_MODEL`: default OpenAI model when `--model` is omitted.
 - `ANTHROPIC_API_KEY`: Anthropic API key.
@@ -197,10 +243,10 @@ Relative paths in flags, environment variables, and config files resolve
 against the process working directory at startup.
 
 Verification is enabled automatically for Go workspaces with a root `go.mod`
-and currently runs `go test ./...` or `go vet ./...` through the SDK verifier
-tool. Non-Go workspaces disable required verification for now so the agent does
-not get trapped behind an impossible Go verifier. Configurable verifier commands
-are the next product slice.
+and runs `go test ./...` or `go vet ./...` through the SDK verifier tool unless
+custom verification commands are configured. Non-Go workspaces disable required
+verification unless `--verify-command`, config `verify_commands`, or
+`MEMAX_CODE_VERIFY_COMMANDS` supplies host-owned checks.
 
 ## Development
 

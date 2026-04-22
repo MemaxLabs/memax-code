@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -299,13 +300,14 @@ func buildStack(opts options) (coding.Stack, error) {
 	config.CommandSessions = commandSessions
 	config.CommandSessionStartInputMode = coding.CommandSessionStartInputShellCommand
 	config.Base.AppendSystemPrompt = appendPromptSection(config.Base.AppendSystemPrompt, cliToolContractGuidance)
-	if hasGoModule(opts.CWD) {
-		config.Verifier.Verifier = verifier(runner)
+	hasGoWorkspace := hasGoModule(opts.CWD)
+	if len(opts.VerifyCommands) > 0 {
+		config.Verifier.Verifier = verifier(runner, opts.VerifyCommands, hasGoWorkspace)
+	} else if hasGoWorkspace {
+		config.Verifier.Verifier = verifier(runner, nil, false)
 	} else {
-		// The initial CLI ships a Go verifier because the runtime is
-		// currently Go-oriented. For other workspaces, do not trap the agent in a
-		// required verifier that can never pass; a configurable verifier is the
-		// next product slice.
+		// Without explicit host verification commands, do not trap non-Go
+		// workspaces behind a verifier that can never pass.
 		config.Policies.RequireVerificationBeforeFinal = false
 		config.Policies.RecommendRollbackOnFailedVerification = false
 	}
@@ -502,7 +504,10 @@ func hasGoModule(root string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func verificationMode(root string) string {
+func verificationMode(root string, commands map[string]string) string {
+	if len(commands) > 0 {
+		return "custom"
+	}
 	if hasGoModule(root) {
 		return "go"
 	}
@@ -519,9 +524,10 @@ func parsePreset(raw string) (coding.Preset, error) {
 	}
 }
 
-func verifier(runner commandtools.Runner) verifytools.Verifier {
+func verifier(runner commandtools.Runner, commands map[string]string, goFallback bool) verifytools.Verifier {
+	commands = cloneStringMap(commands)
 	return verifytools.VerifierFunc(func(ctx context.Context, req verifytools.Request) (verifytools.Result, error) {
-		argv, err := verificationArgv(req)
+		command, argv, err := verificationCommand(req, commands, goFallback)
 		if err != nil {
 			return verifytools.Result{
 				Name:   req.Name,
@@ -530,13 +536,13 @@ func verifier(runner commandtools.Runner) verifytools.Verifier {
 			}, nil
 		}
 		result, err := runner.RunCommand(ctx, commandtools.Request{
+			Command: command,
 			Argv:    argv,
 			Purpose: "workspace verification: " + req.Name,
 		})
 		if err != nil {
 			return verifytools.Result{}, err
 		}
-		command := strings.Join(argv, " ")
 		output := strings.TrimSpace(strings.Join(nonEmpty(result.Stdout, result.Stderr), "\n"))
 		if output == "" {
 			output = fmt.Sprintf("%s exited with code %d", command, result.ExitCode)
@@ -552,22 +558,116 @@ func verifier(runner commandtools.Runner) verifytools.Verifier {
 }
 
 func verificationArgv(req verifytools.Request) ([]string, error) {
+	_, argv, err := defaultVerificationCommand(req)
+	return argv, err
+}
+
+func verificationCommand(req verifytools.Request, commands map[string]string, goFallback bool) (string, []string, error) {
+	if len(commands) == 0 {
+		return defaultVerificationCommand(req)
+	}
+	return customVerificationCommand(req, commands, goFallback)
+}
+
+func defaultVerificationCommand(req verifytools.Request) (string, []string, error) {
 	name := strings.ToLower(strings.TrimSpace(req.Name))
 	target := strings.TrimSpace(req.Target)
 	if target == "" {
 		target = "./..."
 	}
 	if err := validateVerificationTarget(target); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	switch name {
 	case "vet":
-		return []string{"go", "vet", target}, nil
+		argv := []string{"go", "vet", target}
+		return strings.Join(argv, " "), argv, nil
 	case "test", "default", "":
-		return []string{"go", "test", target}, nil
+		argv := []string{"go", "test", target}
+		return strings.Join(argv, " "), argv, nil
 	default:
-		return nil, fmt.Errorf("unsupported verification %q; supported checks: test, vet", req.Name)
+		return "", nil, fmt.Errorf("unsupported verification %q; supported checks: test, vet", req.Name)
 	}
+}
+
+func customVerificationCommand(req verifytools.Request, commands map[string]string, goFallback bool) (string, []string, error) {
+	name := normalizeVerifyName(req.Name)
+	if name == "" || name == "default" {
+		if command := strings.TrimSpace(commands["default"]); command != "" {
+			command, err := verificationCommandWithTarget(nameOrDefault(name), command, req.Target)
+			if err != nil {
+				return "", nil, err
+			}
+			return command, shellCommandArgv(command), nil
+		}
+		name = "test"
+	}
+	command := strings.TrimSpace(commands[name])
+	if command == "" {
+		if goFallback {
+			return defaultVerificationCommand(req)
+		}
+		return "", nil, fmt.Errorf("unsupported verification %q; configured checks: %s", req.Name, strings.Join(sortedMapKeys(commands), ", "))
+	}
+	command, err := verificationCommandWithTarget(name, command, req.Target)
+	if err != nil {
+		return "", nil, err
+	}
+	return command, shellCommandArgv(command), nil
+}
+
+func verificationCommandWithTarget(name, command, target string) (string, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return command, nil
+	}
+	if err := validateVerificationTarget(target); err != nil {
+		return "", err
+	}
+	if !strings.Contains(command, "{target}") {
+		return "", fmt.Errorf("verification %q does not accept a target; include {target} in the configured command", name)
+	}
+	return strings.ReplaceAll(command, "{target}", shellQuote(target)), nil
+}
+
+func nameOrDefault(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return "default"
+	}
+	return name
+}
+
+func sortedMapKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func shellCommandArgv(command string) []string {
+	if runtime.GOOS == "windows" {
+		return []string{"cmd", "/C", command}
+	}
+	return []string{"sh", "-c", command}
+}
+
+func shellQuote(value string) string {
+	return shellQuoteForGOOS(runtime.GOOS, value)
+}
+
+func shellQuoteForGOOS(goos, value string) string {
+	if goos == "windows" {
+		if value == "" {
+			return `""`
+		}
+		return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
+	}
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func validateVerificationTarget(target string) error {
@@ -576,6 +676,9 @@ func validateVerificationTarget(target string) error {
 	}
 	if strings.ContainsAny(target, "\x00\r\n\t ") {
 		return fmt.Errorf("invalid verification target %q: target must be one package path", target)
+	}
+	if strings.ContainsAny(target, "\"'$;&|<>%!`()[]{}") {
+		return fmt.Errorf("invalid verification target %q: target must be one safe package path", target)
 	}
 	return nil
 }

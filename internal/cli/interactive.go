@@ -149,7 +149,12 @@ func printInteractiveStatus(ctx context.Context, w io.Writer, opts options, curr
 	fmt.Fprintf(w, "  session_dir: %s\n", opts.SessionDir)
 	fmt.Fprintf(w, "  active_session: %s\n", valueOrUnset(currentSession))
 	fmt.Fprintf(w, "  saved_sessions: %d\n", len(candidates))
-	fmt.Fprintf(w, "  verification: %s\n", verificationMode(opts.CWD))
+	fmt.Fprintf(w, "  verification: %s\n", verificationMode(opts.CWD, opts.VerifyCommands))
+	if len(opts.VerifyCommands) > 0 {
+		for _, name := range sortedMapKeys(opts.VerifyCommands) {
+			fmt.Fprintf(w, "  verify_command.%s: %s\n", name, opts.VerifyCommands[name])
+		}
+	}
 	fmt.Fprintf(w, "  inherit_command_env: %t\n", opts.InheritCommandEnv)
 	return nil
 }

@@ -82,6 +82,26 @@ func TestDoctorWarnsForMissingOptionalSetup(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsCustomVerification(t *testing.T) {
+	clearDoctorEnv(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("MEMAX_CODE_CONFIG", "")
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"doctor",
+		"--cwd", t.TempDir(),
+		"--verify-command", "test=npm test",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "[ok] verification: custom commands configured: test") {
+		t.Fatalf("doctor output missing custom verification:\n%s", out)
+	}
+}
+
 func TestDoctorFailsForInvalidSessionDir(t *testing.T) {
 	clearDoctorEnv(t)
 	t.Setenv("HOME", t.TempDir())
