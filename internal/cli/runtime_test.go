@@ -92,6 +92,33 @@ func TestBuildStackUsesModelFriendlyToolContracts(t *testing.T) {
 	if command["type"] == "array" {
 		t.Fatalf("start command schema = %#v, did not want argv array", spec.InputSchema)
 	}
+
+	prompt := stack.Options().AppendSystemPrompt
+	for _, want := range []string{
+		"CLI tool contract:",
+		"Use run_command with command as one shell command string",
+		"Use start_command with command as one shell command string",
+		"Use workspace_apply_patch with exactly one unified_diff string",
+		"Do not provide structured patch operations",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("AppendSystemPrompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestAppendPromptSection(t *testing.T) {
+	t.Parallel()
+
+	if got := appendPromptSection("", "next"); got != "next" {
+		t.Fatalf("appendPromptSection(empty) = %q, want next", got)
+	}
+	if got := appendPromptSection("base", "next"); got != "base\n\nnext" {
+		t.Fatalf("appendPromptSection(base) = %q, want separated sections", got)
+	}
+	if got := appendPromptSection("base", ""); got != "base" {
+		t.Fatalf("appendPromptSection(empty section) = %q, want base", got)
+	}
 }
 
 func toolSpec(registry *tool.Registry, name string) (model.ToolSpec, bool) {

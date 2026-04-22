@@ -284,6 +284,7 @@ func buildStack(opts options) (coding.Stack, error) {
 	config.Command.Runner = runner
 	config.CommandSessions = commandSessions
 	config.CommandSessionStartInputMode = coding.CommandSessionStartInputShellCommand
+	config.Base.AppendSystemPrompt = appendPromptSection(config.Base.AppendSystemPrompt, cliToolContractGuidance)
 	if hasGoModule(opts.CWD) {
 		config.Verifier.Verifier = verifier(runner)
 	} else {
@@ -299,6 +300,25 @@ func buildStack(opts options) (coding.Stack, error) {
 		return coding.Stack{}, fmt.Errorf("configure runtime: %w", userFacingError(err))
 	}
 	return stack, nil
+}
+
+const cliToolContractGuidance = `CLI tool contract:
+- Use run_command with command as one shell command string, not an argv array.
+- Use start_command with command as one shell command string for long-running processes such as dev servers, test watchers, and REPLs.
+- Use workspace_apply_patch with exactly one unified_diff string. Do not provide structured patch operations.
+- If a tool schema error says a field has the wrong type, retry with the contract above before changing strategy.`
+
+func appendPromptSection(base, section string) string {
+	base = strings.TrimSpace(base)
+	section = strings.TrimSpace(section)
+	switch {
+	case base == "":
+		return section
+	case section == "":
+		return base
+	default:
+		return base + "\n\n" + section
+	}
 }
 
 func listSessions(ctx context.Context, stdout io.Writer, opts options) error {
