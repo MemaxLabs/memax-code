@@ -54,6 +54,10 @@ func parseModelProfile(raw string) (coding.ModelProfile, error) {
 	return coding.ParseModelProfile(raw)
 }
 
+func parseModelEffort(raw string) (coding.ModelEffort, error) {
+	return coding.ParseModelEffort(raw)
+}
+
 func validModelProfiles() string {
 	profiles := coding.ModelProfiles()
 	names := make([]string, 0, len(profiles))
@@ -63,8 +67,22 @@ func validModelProfiles() string {
 	return strings.Join(names, ", ")
 }
 
+func validModelEfforts() string {
+	efforts := coding.ModelEfforts()
+	names := make([]string, 0, len(efforts)+1)
+	names = append(names, coding.ModelEffortAuto.String())
+	for _, effort := range efforts {
+		names = append(names, effort.String())
+	}
+	return strings.Join(names, ", ")
+}
+
 func modelClient(opts options) (model.Client, error) {
 	profile, err := parseModelProfile(opts.Profile)
+	if err != nil {
+		return nil, userFacingError(err)
+	}
+	effort, err := parseModelEffort(opts.Effort)
 	if err != nil {
 		return nil, userFacingError(err)
 	}
@@ -74,6 +92,11 @@ func modelClient(opts options) (model.Client, error) {
 		if err != nil {
 			return nil, userFacingError(err)
 		}
+		effortOpts, err := coding.OpenAIModelEffortOptions(effort)
+		if err != nil {
+			return nil, userFacingError(err)
+		}
+		modelOpts = append(modelOpts, effortOpts...)
 		client := openai.NewFromEnv(opts.Model, modelOpts...)
 		if strings.TrimSpace(client.APIKey) == "" {
 			return nil, fmt.Errorf("openai api key is required; set %s", opts.Provider.keyEnv())
@@ -87,6 +110,11 @@ func modelClient(opts options) (model.Client, error) {
 		if err != nil {
 			return nil, userFacingError(err)
 		}
+		effortOpts, err := coding.AnthropicModelEffortOptions(effort)
+		if err != nil {
+			return nil, userFacingError(err)
+		}
+		modelOpts = append(modelOpts, effortOpts...)
 		client := anthropic.NewFromEnv(opts.Model, modelOpts...)
 		if strings.TrimSpace(client.APIKey) == "" {
 			return nil, fmt.Errorf("anthropic api key is required; set %s", opts.Provider.keyEnv())

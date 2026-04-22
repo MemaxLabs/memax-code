@@ -1,5 +1,5 @@
-github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260422165444-b5049d84aca1 h1:E7ksqqo85nZwA/Ng2CDxbB50txm20RqpCYxwKSc7pz4=
-github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260422165444-b5049d84aca1/go.mod h1:3gwC28HU+igj2X3xDc7GEsYPU1iLqRW2y5WlecO5Oo8=
+github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260422190407-b60f71805974 h1:rnF4Uz5MhPFCFBzby9MWnnnPVRPdJscQsTgu87Pnq8w=
+github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260422190407-b60f71805974/go.mod h1:3gwC28HU+igj2X3xDc7GEsYPU1iLqRW2y5WlecO5Oo8=
 github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
 github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
 github.com/dlclark/regexp2 v1.11.0 h1:G/nrcoOa7ZXlpoa/91N3X7mM3r8eIlMBBJZvsz/mxKI=

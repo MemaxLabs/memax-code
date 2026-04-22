@@ -45,6 +45,7 @@ type options struct {
 	Provider          provider
 	Model             string
 	Profile           string
+	Effort            string
 	Preset            string
 	UI                renderMode
 	SessionDir        string
@@ -69,6 +70,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	providerRaw := fs.String("provider", envDefault("MEMAX_CODE_PROVIDER", string(providerOpenAI)), "model provider: openai or anthropic")
 	model := fs.String("model", "", "provider model name; defaults to OPENAI_MODEL or ANTHROPIC_MODEL")
 	profile := fs.String("profile", "", "coding model profile: fast, balanced, or deep")
+	effort := fs.String("effort", envDefault("MEMAX_CODE_EFFORT", ""), "override reasoning effort: auto, low, medium, high, or xhigh")
 	preset := fs.String("preset", "interactive_dev", "coding preset: safe_local, ci_repair, or interactive_dev")
 	uiRaw := fs.String("ui", string(renderModeAuto), "event renderer: auto, live, tui, or plain")
 	sessionDir := fs.String("session-dir", defaultSessionDir(), "directory for JSONL session transcripts")
@@ -162,6 +164,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		Provider:          providerName,
 		Model:             strings.TrimSpace(*model),
 		Profile:           strings.TrimSpace(*profile),
+		Effort:            strings.TrimSpace(*effort),
 		Preset:            strings.TrimSpace(*preset),
 		SessionDir:        resolvedSessionDir,
 		ResumeSessionID:   strings.TrimSpace(*resumeSessionID),
@@ -175,6 +178,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	}
 	if _, err := parseModelProfile(opts.Profile); err != nil {
 		return options{}, fmt.Errorf("unknown model profile %q (want one of: %s)", opts.Profile, validModelProfiles())
+	}
+	if _, err := parseModelEffort(opts.Effort); err != nil {
+		return options{}, fmt.Errorf("unknown model effort %q (want one of: %s)", opts.Effort, validModelEfforts())
 	}
 	if _, err := parsePreset(opts.Preset); err != nil {
 		return options{}, err
@@ -282,6 +288,12 @@ func renderDryRun(w io.Writer, opts options) error {
 	fmt.Fprintf(w, "model: %s\n", valueOrUnset(opts.Model))
 	fmt.Fprintf(w, "profile: %s\n", profile)
 	fmt.Fprintf(w, "profile_description: %s\n", profile.Description())
+	effort, err := parseModelEffort(opts.Effort)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "effort: %s\n", effort)
+	fmt.Fprintf(w, "effort_description: %s\n", effort.Description())
 	fmt.Fprintf(w, "preset: %s\n", opts.Preset)
 	fmt.Fprintf(w, "ui: %s\n", opts.UI)
 	fmt.Fprintf(w, "cwd: %s\n", opts.CWD)

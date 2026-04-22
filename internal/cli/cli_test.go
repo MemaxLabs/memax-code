@@ -32,12 +32,35 @@ func TestDryRunPrintsResolvedConfig(t *testing.T) {
 		"provider: anthropic",
 		"model: example-model",
 		"profile: deep",
+		"effort: auto",
 		"preset: safe_local",
 		"ui: auto",
 		"session_dir: ",
 		"resume_session: <unset>",
 		"verification: go",
 		"prompt: fix tests",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDryRunPrintsEffortOverride(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--dry-run",
+		"--provider", "openai",
+		"--model", "example-model",
+		"--effort", "high",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"effort: high",
+		"effort_description: Increase reasoning depth",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("dry-run output missing %q:\n%s", want, out)
@@ -646,6 +669,19 @@ func TestParseRejectsUnknownProfileWithCLIError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unknown model profile") {
 		t.Fatalf("parseArgs() error = %v, want unknown model profile", err)
 	}
+	// Keep the SDK-specific wording out of CLI-facing validation errors.
+	if strings.Contains(strings.ToLower(err.Error()), "coding"+" stack") {
+		t.Fatalf("parseArgs() leaked SDK wording: %v", err)
+	}
+}
+
+func TestParseRejectsUnknownEffortWithCLIError(t *testing.T) {
+	var stderr bytes.Buffer
+	_, err := parseArgs([]string{"--dry-run", "--effort", "maximum"}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "unknown model effort") || !strings.Contains(err.Error(), "xhigh") {
+		t.Fatalf("parseArgs() error = %v, want unknown model effort", err)
+	}
+	// Keep the SDK-specific wording out of CLI-facing validation errors.
 	if strings.Contains(strings.ToLower(err.Error()), "coding"+" stack") {
 		t.Fatalf("parseArgs() leaked SDK wording: %v", err)
 	}
@@ -738,6 +774,22 @@ func TestParseDefaultsProfileAndModelFromEnv(t *testing.T) {
 	}
 	if profile.String() != "balanced" {
 		t.Fatalf("profile = %q, want balanced", profile)
+	}
+}
+
+func TestParseDefaultsEffortFromEnv(t *testing.T) {
+	t.Setenv("MEMAX_CODE_EFFORT", "high")
+	var stderr bytes.Buffer
+	opts, err := parseArgs([]string{"--dry-run"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	effort, err := parseModelEffort(opts.Effort)
+	if err != nil {
+		t.Fatalf("parseModelEffort() error = %v", err)
+	}
+	if effort.String() != "high" {
+		t.Fatalf("effort = %q, want high", effort)
 	}
 }
 
