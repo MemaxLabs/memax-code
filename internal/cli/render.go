@@ -8,6 +8,7 @@ import (
 
 	"github.com/MemaxLabs/memax-code/internal/cli/ui"
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"golang.org/x/term"
 )
 
 type renderMode = ui.Mode
@@ -24,10 +25,11 @@ func parseRenderMode(raw string) (renderMode, error) {
 }
 
 func renderEventsWithMode(w io.Writer, events <-chan memaxagent.Event, mode renderMode) error {
-	mode = ui.ResolveMode(mode, isTerminalWriter(w))
+	terminal, width := terminalWriterInfo(w)
+	mode = ui.ResolveMode(mode, terminal)
 	renderer, err := ui.SelectRenderer(mode, ui.Renderers{
 		Plain:      &renderState{},
-		Live:       &liveRenderState{},
+		Live:       &liveRenderState{statusWidth: width},
 		Structured: &tuiRenderState{},
 	})
 	if err != nil {
@@ -36,13 +38,20 @@ func renderEventsWithMode(w io.Writer, events <-chan memaxagent.Event, mode rend
 	return renderWith(w, events, renderer)
 }
 
-func isTerminalWriter(w io.Writer) bool {
+func terminalWriterInfo(w io.Writer) (bool, int) {
 	file, ok := w.(*os.File)
 	if !ok {
-		return false
+		return false, 0
 	}
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	fd := int(file.Fd())
+	if !term.IsTerminal(fd) {
+		return false, 0
+	}
+	width, _, err := term.GetSize(fd)
+	if err != nil || width <= 1 {
+		return true, 0
+	}
+	return true, width - 1
 }
 
 func renderEvents(w io.Writer, events <-chan memaxagent.Event) error {

@@ -8,6 +8,7 @@ import (
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/creack/pty"
 )
 
 func TestRenderEventsPrintsToolErrors(t *testing.T) {
@@ -102,6 +103,26 @@ func TestRenderEventsWithModeLiveFallsBackToPlainForNonTerminal(t *testing.T) {
 	}
 	if got := out.String(); got != "hello" {
 		t.Fatalf("render output = %q, want plain fallback", got)
+	}
+}
+
+func TestTerminalWriterInfoUsesPTYWidth(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Skipf("open pty: %v", err)
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+
+	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 10, Cols: 37}); err != nil {
+		t.Skipf("set pty size: %v", err)
+	}
+	terminal, width := terminalWriterInfo(ptmx)
+	if !terminal {
+		t.Fatal("terminalWriterInfo() terminal = false, want true")
+	}
+	if width != 36 {
+		t.Fatalf("terminalWriterInfo() width = %d, want 36", width)
 	}
 }
 
@@ -202,8 +223,35 @@ func TestLiveRenderTruncatesTransientStatusToTerminalWidth(t *testing.T) {
 			continue
 		}
 		status, _, _ := strings.Cut(line, "\n")
-		if len(status) > 39 {
-			t.Fatalf("status line length = %d, want <= 39: %q", len(status), status)
+		if len([]rune(status)) > 39 {
+			t.Fatalf("status line width = %d, want <= 39: %q", len([]rune(status)), status)
+		}
+	}
+}
+
+func TestLiveRenderUsesConfiguredTerminalWidth(t *testing.T) {
+	t.Setenv("COLUMNS", "120")
+
+	events := make(chan memaxagent.Event, 4)
+	events <- memaxagent.Event{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{Name: "very_long_tool_name_that_would_wrap"}}
+	events <- memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Command:   "go test ./... && go vet ./... && go test ./...",
+		PID:       123,
+	}}
+	close(events)
+
+	var out bytes.Buffer
+	if err := renderWith(&out, events, &liveRenderState{statusWidth: 24}); err != nil {
+		t.Fatalf("renderWith() error = %v", err)
+	}
+	for _, line := range strings.Split(out.String(), clearLine) {
+		if line == "" || strings.HasPrefix(line, "\n") {
+			continue
+		}
+		status, _, _ := strings.Cut(line, "\n")
+		if len([]rune(status)) > 24 {
+			t.Fatalf("status line width = %d, want <= 24: %q", len([]rune(status)), status)
 		}
 	}
 }

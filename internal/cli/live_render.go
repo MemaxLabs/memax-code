@@ -19,6 +19,7 @@ const defaultLiveStatusWidth = 79
 type liveRenderState struct {
 	transcript  tuiRenderState
 	statusShown bool
+	statusWidth int
 }
 
 func (s *liveRenderState) Render(w io.Writer, event memaxagent.Event) error {
@@ -67,7 +68,14 @@ func (s *liveRenderState) statusLine() string {
 	if activity.usage != "" {
 		parts = append(parts, activity.usage)
 	}
-	return truncateStatusLine(strings.Join(parts, " | "), liveStatusWidth())
+	return truncateStatusLine(strings.Join(parts, " | "), s.width())
+}
+
+func (s *liveRenderState) width() int {
+	if s.statusWidth > 0 {
+		return s.statusWidth
+	}
+	return liveStatusWidth()
 }
 
 func liveStatusWidth() int {
