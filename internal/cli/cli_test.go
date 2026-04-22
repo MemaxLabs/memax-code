@@ -95,6 +95,7 @@ func TestInspectToolsRejectsPrompt(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{
 		"--inspect-tools",
+		"--cwd", t.TempDir(),
 		"--provider", "openai",
 		"--model", "example-model",
 		"inspect",
