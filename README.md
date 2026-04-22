@@ -19,6 +19,7 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
 - JSONL-backed conversation sessions with resume, `latest`, activity listing,
   and transcript inspection
 - dry-run configuration inspection
+- local setup diagnostics with `memax-code doctor`
 - event-stream rendering for assistant text, tool calls, command lifecycle,
   workspace edits, verification, usage, and final results, with `auto`, `live`,
   `tui`, and `plain` renderer modes
@@ -83,6 +84,17 @@ memax-code --config .memax-code/config.json --dry-run "inspect this repository"
 Configuration precedence is `flag > environment > config file > built-in
 default`. The default config file is optional; an explicitly supplied
 `--config` path must exist and decode as strict JSON.
+
+Check local setup without calling a model:
+
+```sh
+memax-code doctor
+memax-code doctor --config .memax-code/config.json --cwd .
+```
+
+`doctor` reports config loading, provider/model resolution, API-key presence,
+session storage, workspace verification mode, and required local binaries. It
+exits non-zero for usage errors, invalid config, or hard local setup failures.
 
 Resume an earlier conversation:
 
