@@ -852,9 +852,61 @@ func TestRunInteractiveHandlesSlashCommandsWithoutProvider(t *testing.T) {
 	for _, want := range []string{
 		"Memax Code interactive shell",
 		"slash commands:",
+		"/status",
 		"no active session",
 		"started a new session",
 		"bye",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunInteractiveStatus(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, userMessage("status prompt")); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = RunWithIO(ctx, []string{
+		"--interactive",
+		"--provider", "openai",
+		"--model", "example-model",
+		"--profile", "fast",
+		"--effort", "high",
+		"--preset", "interactive_dev",
+		"--ui", "plain",
+		"--cwd", repoRoot(t),
+		"--session-dir", sessionDir,
+	}, strings.NewReader("/status\n/resume latest\n/status\n/quit\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("RunWithIO() error = %v", err)
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"status:",
+		"provider: openai",
+		"model: example-model",
+		"profile: fast",
+		"effort: high",
+		"preset: interactive_dev",
+		"ui: plain",
+		"cwd: " + repoRoot(t),
+		"session_dir: " + sessionDir,
+		"active_session: <unset>",
+		"saved_sessions: 1",
+		"verification: go",
+		"inherit_command_env: false",
+		"resumed session: " + sess.ID,
+		"active_session: " + sess.ID,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("interactive stderr missing %q:\n%s", want, out)

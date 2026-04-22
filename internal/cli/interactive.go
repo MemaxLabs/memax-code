@@ -88,6 +88,10 @@ func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, cu
 		} else {
 			fmt.Fprintf(w, "session: %s\n", *currentSession)
 		}
+	case "/status":
+		if err := printInteractiveStatus(ctx, w, opts, *currentSession); err != nil {
+			fmt.Fprintf(w, "error: %v\n", err)
+		}
 	case "/show":
 		if err := showInteractiveSession(ctx, w, opts, *currentSession, arg); err != nil {
 			fmt.Fprintf(w, "error: %v\n", err)
@@ -116,6 +120,38 @@ func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, cu
 		fmt.Fprintf(w, "unknown command %q; type /help\n", name)
 	}
 	return false
+}
+
+func printInteractiveStatus(ctx context.Context, w io.Writer, opts options, currentSession string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	candidates, err := sessionCandidates(opts.SessionDir)
+	if err != nil {
+		return err
+	}
+	profile, err := parseModelProfile(opts.Profile)
+	if err != nil {
+		return err
+	}
+	effort, err := parseModelEffort(opts.Effort)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(w, "status:")
+	fmt.Fprintf(w, "  provider: %s\n", opts.Provider)
+	fmt.Fprintf(w, "  model: %s\n", valueOrUnset(opts.Model))
+	fmt.Fprintf(w, "  profile: %s\n", profile)
+	fmt.Fprintf(w, "  effort: %s\n", effort)
+	fmt.Fprintf(w, "  preset: %s\n", opts.Preset)
+	fmt.Fprintf(w, "  ui: %s\n", opts.UI)
+	fmt.Fprintf(w, "  cwd: %s\n", opts.CWD)
+	fmt.Fprintf(w, "  session_dir: %s\n", opts.SessionDir)
+	fmt.Fprintf(w, "  active_session: %s\n", valueOrUnset(currentSession))
+	fmt.Fprintf(w, "  saved_sessions: %d\n", len(candidates))
+	fmt.Fprintf(w, "  verification: %s\n", verificationMode(opts.CWD))
+	fmt.Fprintf(w, "  inherit_command_env: %t\n", opts.InheritCommandEnv)
+	return nil
 }
 
 func showInteractiveSession(ctx context.Context, w io.Writer, opts options, currentSession, raw string) error {
@@ -230,6 +266,7 @@ func unescapeInteractivePrompt(line string) string {
 func printInteractiveHelp(w io.Writer) {
 	fmt.Fprintln(w, "slash commands:")
 	fmt.Fprintln(w, "  /help              show this help")
+	fmt.Fprintln(w, "  /status            show active runtime settings")
 	fmt.Fprintln(w, "  /session           show the active session")
 	fmt.Fprintln(w, "  /pick              list recent sessions with numbers")
 	fmt.Fprintln(w, "  /show [TARGET]     show current, latest, number, or ID")

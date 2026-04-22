@@ -110,6 +110,7 @@ commands control local session state without calling a model:
 
 ```text
 /help
+/status
 /pick
 /show latest
 /sessions
