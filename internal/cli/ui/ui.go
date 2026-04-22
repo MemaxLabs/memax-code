@@ -20,6 +20,8 @@ const (
 	// ModeAuto selects the structured renderer for terminals and the plain
 	// transcript renderer for non-terminal writers.
 	ModeAuto Mode = "auto"
+	// ModeLive renders an interactive transcript with a live status line.
+	ModeLive Mode = "live"
 	// ModeStructured renders a sectioned terminal transcript with final status.
 	ModeStructured Mode = "tui"
 	// ModePlain renders a compact transcript suitable for pipes and logs.
@@ -35,6 +37,7 @@ type Renderer interface {
 // Renderers groups the concrete renderers available to the selector.
 type Renderers struct {
 	Plain      Renderer
+	Live       Renderer
 	Structured Renderer
 }
 
@@ -43,15 +46,18 @@ func ParseMode(raw string) (Mode, error) {
 	switch mode := Mode(strings.ToLower(strings.TrimSpace(raw))); mode {
 	case "", ModeAuto:
 		return ModeAuto, nil
-	case ModeStructured, ModePlain:
+	case ModeLive, ModeStructured, ModePlain:
 		return mode, nil
 	default:
-		return "", fmt.Errorf("unknown ui %q (want one of: auto, tui, plain)", raw)
+		return "", fmt.Errorf("unknown ui %q (want one of: auto, live, tui, plain)", raw)
 	}
 }
 
-// ResolveMode resolves auto mode using the caller's terminal detection.
+// ResolveMode resolves auto and non-terminal live mode using terminal detection.
 func ResolveMode(mode Mode, terminal bool) Mode {
+	if mode == ModeLive && !terminal {
+		return ModePlain
+	}
 	if mode != ModeAuto {
 		return mode
 	}
@@ -67,6 +73,8 @@ func SelectRenderer(mode Mode, renderers Renderers) (Renderer, error) {
 	switch mode {
 	case ModePlain:
 		selected = renderers.Plain
+	case ModeLive:
+		selected = renderers.Live
 	case ModeStructured:
 		selected = renderers.Structured
 	default:

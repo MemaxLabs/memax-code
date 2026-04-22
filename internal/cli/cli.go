@@ -70,7 +70,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	model := fs.String("model", "", "provider model name; defaults to OPENAI_MODEL or ANTHROPIC_MODEL")
 	profile := fs.String("profile", "", "coding model profile: fast, balanced, or deep")
 	preset := fs.String("preset", "interactive_dev", "coding preset: safe_local, ci_repair, or interactive_dev")
-	uiRaw := fs.String("ui", string(renderModeAuto), "event renderer: auto, tui, or plain")
+	uiRaw := fs.String("ui", string(renderModeAuto), "event renderer: auto, live, tui, or plain")
 	sessionDir := fs.String("session-dir", defaultSessionDir(), "directory for JSONL session transcripts")
 	resumeSessionID := fs.String("resume", "", "resume an existing session id, or latest")
 	listSessionsFlag := fs.Bool("list-sessions", false, "list saved sessions and exit")

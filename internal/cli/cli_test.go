@@ -654,7 +654,7 @@ func TestParseRejectsUnknownProfileWithCLIError(t *testing.T) {
 func TestParseRejectsUnknownUI(t *testing.T) {
 	var stderr bytes.Buffer
 	_, err := parseArgs([]string{"--dry-run", "--ui", "fancy"}, &stderr)
-	if err == nil || !strings.Contains(err.Error(), `unknown ui "fancy"`) {
+	if err == nil || !strings.Contains(err.Error(), `unknown ui "fancy"`) || !strings.Contains(err.Error(), "live") {
 		t.Fatalf("parseArgs() error = %v, want unknown ui", err)
 	}
 }

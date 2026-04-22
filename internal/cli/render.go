@@ -14,6 +14,7 @@ type renderMode = ui.Mode
 
 const (
 	renderModeAuto  = ui.ModeAuto
+	renderModeLive  = ui.ModeLive
 	renderModeTUI   = ui.ModeStructured
 	renderModePlain = ui.ModePlain
 )
@@ -26,6 +27,7 @@ func renderEventsWithMode(w io.Writer, events <-chan memaxagent.Event, mode rend
 	mode = ui.ResolveMode(mode, isTerminalWriter(w))
 	renderer, err := ui.SelectRenderer(mode, ui.Renderers{
 		Plain:      &renderState{},
+		Live:       &liveRenderState{},
 		Structured: &tuiRenderState{},
 	})
 	if err != nil {
@@ -61,6 +63,8 @@ func renderWith(w io.Writer, events <-chan memaxagent.Event, renderer ui.Rendere
 }
 
 type tuiRenderState struct {
+	// liveRenderState layers transient status on top of this structured
+	// transcript state, so these fields are part of that package-local contract.
 	headerWritten     bool
 	section           string
 	assistantLineOpen bool

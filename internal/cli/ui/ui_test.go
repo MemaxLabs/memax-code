@@ -15,6 +15,7 @@ func TestParseMode(t *testing.T) {
 	}{
 		{name: "empty", raw: "", want: ModeAuto},
 		{name: "auto", raw: "auto", want: ModeAuto},
+		{name: "live", raw: "live", want: ModeLive},
 		{name: "structured", raw: "tui", want: ModeStructured},
 		{name: "plain", raw: "plain", want: ModePlain},
 		{name: "case and spaces", raw: " TUI ", want: ModeStructured},
@@ -45,6 +46,12 @@ func TestResolveMode(t *testing.T) {
 	if got := ResolveMode(ModeAuto, false); got != ModePlain {
 		t.Fatalf("ResolveMode(auto, non-terminal) = %q, want %q", got, ModePlain)
 	}
+	if got := ResolveMode(ModeLive, false); got != ModePlain {
+		t.Fatalf("ResolveMode(live, non-terminal) = %q, want %q", got, ModePlain)
+	}
+	if got := ResolveMode(ModeLive, true); got != ModeLive {
+		t.Fatalf("ResolveMode(live, terminal) = %q, want %q", got, ModeLive)
+	}
 	if got := ResolveMode(ModePlain, true); got != ModePlain {
 		t.Fatalf("ResolveMode(plain, terminal) = %q, want %q", got, ModePlain)
 	}
@@ -52,8 +59,9 @@ func TestResolveMode(t *testing.T) {
 
 func TestSelectRenderer(t *testing.T) {
 	plain := stubRenderer{name: "plain"}
+	live := stubRenderer{name: "live"}
 	structured := stubRenderer{name: "structured"}
-	renderers := Renderers{Plain: plain, Structured: structured}
+	renderers := Renderers{Plain: plain, Live: live, Structured: structured}
 
 	got, err := SelectRenderer(ModePlain, renderers)
 	if err != nil {
@@ -61,6 +69,14 @@ func TestSelectRenderer(t *testing.T) {
 	}
 	if got != plain {
 		t.Fatalf("SelectRenderer(plain) = %v, want plain", got)
+	}
+
+	got, err = SelectRenderer(ModeLive, renderers)
+	if err != nil {
+		t.Fatalf("SelectRenderer(live) error = %v", err)
+	}
+	if got != live {
+		t.Fatalf("SelectRenderer(live) = %v, want live", got)
 	}
 
 	got, err = SelectRenderer(ModeStructured, renderers)
@@ -77,7 +93,7 @@ func TestSelectRenderer(t *testing.T) {
 }
 
 func TestSelectRendererRejectsMissingRenderer(t *testing.T) {
-	if _, err := SelectRenderer(ModeStructured, Renderers{Plain: stubRenderer{name: "plain"}}); err == nil {
+	if _, err := SelectRenderer(ModeStructured, Renderers{Plain: stubRenderer{name: "plain"}, Live: stubRenderer{name: "live"}}); err == nil {
 		t.Fatal("SelectRenderer() error = nil, want missing renderer error")
 	}
 }

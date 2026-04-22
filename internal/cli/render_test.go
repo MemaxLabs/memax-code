@@ -88,6 +88,23 @@ func TestRenderEventsWithModeAutoUsesPlainForNonTerminal(t *testing.T) {
 	}
 }
 
+func TestRenderEventsWithModeLiveFallsBackToPlainForNonTerminal(t *testing.T) {
+	events := make(chan memaxagent.Event, 2)
+	events <- memaxagent.Event{
+		Kind:    memaxagent.EventAssistant,
+		Message: &model.Message{Content: []model.ContentBlock{{Type: model.ContentText, Text: "hello"}}},
+	}
+	close(events)
+
+	var out bytes.Buffer
+	if err := renderEventsWithMode(&out, events, renderModeLive); err != nil {
+		t.Fatalf("renderEventsWithMode() error = %v", err)
+	}
+	if got := out.String(); got != "hello" {
+		t.Fatalf("render output = %q, want plain fallback", got)
+	}
+}
+
 func TestRenderTUIEventsPrintsStructuredSectionsAndStatus(t *testing.T) {
 	events := make(chan memaxagent.Event, 7)
 	events <- memaxagent.Event{Kind: memaxagent.EventSessionStarted, SessionID: "00000000-0000-7000-8000-000000000001"}
@@ -130,6 +147,95 @@ func TestRenderTUIEventsPrintsStructuredSectionsAndStatus(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("tui output missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestLiveRenderEventsPrintsTransientStatusAndFinalStatus(t *testing.T) {
+	events := make(chan memaxagent.Event, 6)
+	events <- memaxagent.Event{Kind: memaxagent.EventSessionStarted, SessionID: "00000000-0000-7000-8000-000000000001"}
+	events <- memaxagent.Event{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{Name: "run_command"}}
+	events <- memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Command:   "go test ./...",
+		PID:       123,
+	}}
+	events <- memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{Name: "run_command", Content: "ok"}}
+	events <- memaxagent.Event{Kind: memaxagent.EventResult, Result: "done"}
+	close(events)
+
+	var out bytes.Buffer
+	if err := renderWith(&out, events, &liveRenderState{}); err != nil {
+		t.Fatalf("renderWith() error = %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		clearLine + "Memax Code | running",
+		"active=run_command",
+		"cmd=go test ./...",
+		clearLine + "\n[status]",
+		"phase=done",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("live output missing %q:\n%q", want, got)
+		}
+	}
+}
+
+func TestLiveRenderTruncatesTransientStatusToTerminalWidth(t *testing.T) {
+	t.Setenv("COLUMNS", "40")
+
+	events := make(chan memaxagent.Event, 4)
+	events <- memaxagent.Event{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{Name: "very_long_tool_name_that_would_wrap"}}
+	events <- memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Command:   "go test ./... && go vet ./... && go test ./...",
+		PID:       123,
+	}}
+	close(events)
+
+	var out bytes.Buffer
+	if err := renderWith(&out, events, &liveRenderState{}); err != nil {
+		t.Fatalf("renderWith() error = %v", err)
+	}
+	for _, line := range strings.Split(out.String(), clearLine) {
+		if line == "" || strings.HasPrefix(line, "\n") {
+			continue
+		}
+		status, _, _ := strings.Cut(line, "\n")
+		if len(status) > 39 {
+			t.Fatalf("status line length = %d, want <= 39: %q", len(status), status)
+		}
+	}
+}
+
+func TestTruncateStatusLinePreservesUTF8(t *testing.T) {
+	got := truncateStatusLine("Memax Code | active=工具工具工具", 24)
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("truncateStatusLine() = %q, want ellipsis", got)
+	}
+	if strings.ContainsRune(got, '\uFFFD') {
+		t.Fatalf("truncateStatusLine() = %q, want valid UTF-8 without replacement runes", got)
+	}
+}
+
+func TestLiveRenderDoesNotDrawStatusInsideAssistantLine(t *testing.T) {
+	events := make(chan memaxagent.Event, 2)
+	events <- memaxagent.Event{
+		Kind:    memaxagent.EventAssistant,
+		Message: &model.Message{Content: []model.ContentBlock{{Type: model.ContentText, Text: "thinking"}}},
+	}
+	close(events)
+
+	var out bytes.Buffer
+	if err := renderWith(&out, events, &liveRenderState{}); err != nil {
+		t.Fatalf("renderWith() error = %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, clearLine+"Memax Code | running") {
+		t.Fatalf("live output = %q, want no transient status while assistant line is open", got)
+	}
+	if !strings.Contains(got, "thinking\n\n[status]") {
+		t.Fatalf("live output = %q, want final status after assistant line closes", got)
 	}
 }
 
