@@ -20,11 +20,14 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
   and transcript inspection
 - dry-run configuration inspection
 - event-stream rendering for assistant text, tool calls, command lifecycle,
-  workspace edits, verification, usage, and final results
+  workspace edits, verification, usage, and final results, with `auto`, `tui`,
+  and `plain` renderer modes
 
-The CLI does not yet ship the full-screen TUI, session picker, slash commands,
-or sandboxed OS execution expected from a mature coding-agent CLI. Those are
-product slices on top of this foundation.
+The CLI now has the first terminal UI foundation: `auto` chooses structured
+terminal rendering for interactive output and plain rendering for logs, tests,
+and pipes. It does not yet ship the full-screen app shell, session picker,
+slash commands, or sandboxed OS execution expected from a mature coding-agent
+CLI. Those are product slices on top of this foundation.
 
 ## Usage
 
@@ -67,6 +70,17 @@ different filesystem policy:
 ```sh
 memax-code --session-dir .memax-code/sessions --list-sessions
 ```
+
+Choose the event renderer explicitly when needed:
+
+```sh
+memax-code --ui tui "inspect the failing test"
+memax-code --ui plain "run the relevant checks" > run.log
+```
+
+`--ui auto` is the default. It uses the structured terminal renderer for
+interactive terminals and the plain event stream for non-terminal writers, so
+CI logs and redirected output remain stable.
 
 `--list-sessions` prints sessions newest activity first, including the updated
 time, created time, parent session, and the first user prompt as a short title.

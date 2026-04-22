@@ -43,6 +43,7 @@ type options struct {
 	Model             string
 	Profile           string
 	Preset            string
+	UI                renderMode
 	SessionDir        string
 	ResumeSessionID   string
 	ListSessions      bool
@@ -65,6 +66,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	model := fs.String("model", "", "provider model name; defaults to OPENAI_MODEL or ANTHROPIC_MODEL")
 	profile := fs.String("profile", "", "coding model profile: fast, balanced, or deep")
 	preset := fs.String("preset", "interactive_dev", "coding preset: safe_local, ci_repair, or interactive_dev")
+	uiRaw := fs.String("ui", string(renderModeAuto), "event renderer: auto, tui, or plain")
 	sessionDir := fs.String("session-dir", defaultSessionDir(), "directory for JSONL session transcripts")
 	resumeSessionID := fs.String("resume", "", "resume an existing session id, or latest")
 	listSessionsFlag := fs.Bool("list-sessions", false, "list saved sessions and exit")
@@ -164,6 +166,11 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	if _, err := parsePreset(opts.Preset); err != nil {
 		return options{}, err
 	}
+	ui, err := parseRenderMode(*uiRaw)
+	if err != nil {
+		return options{}, err
+	}
+	opts.UI = ui
 	return opts, nil
 }
 
@@ -252,6 +259,7 @@ func renderDryRun(w io.Writer, opts options) error {
 	fmt.Fprintf(w, "profile: %s\n", profile)
 	fmt.Fprintf(w, "profile_description: %s\n", profile.Description())
 	fmt.Fprintf(w, "preset: %s\n", opts.Preset)
+	fmt.Fprintf(w, "ui: %s\n", opts.UI)
 	fmt.Fprintf(w, "cwd: %s\n", opts.CWD)
 	fmt.Fprintf(w, "session_dir: %s\n", opts.SessionDir)
 	fmt.Fprintf(w, "resume_session: %s\n", valueOrUnset(opts.ResumeSessionID))

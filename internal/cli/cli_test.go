@@ -33,6 +33,7 @@ func TestDryRunPrintsResolvedConfig(t *testing.T) {
 		"model: example-model",
 		"profile: deep",
 		"preset: safe_local",
+		"ui: auto",
 		"session_dir: ",
 		"resume_session: <unset>",
 		"verification: go",
@@ -41,6 +42,22 @@ func TestDryRunPrintsResolvedConfig(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("dry-run output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestDryRunPrintsUI(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--dry-run",
+		"--provider", "openai",
+		"--model", "example-model",
+		"--ui", "plain",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "ui: plain") {
+		t.Fatalf("dry-run output missing ui:\n%s", out)
 	}
 }
 
@@ -587,6 +604,14 @@ func TestParseRejectsUnknownProfileWithCLIError(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(err.Error()), "coding"+" stack") {
 		t.Fatalf("parseArgs() leaked SDK wording: %v", err)
+	}
+}
+
+func TestParseRejectsUnknownUI(t *testing.T) {
+	var stderr bytes.Buffer
+	_, err := parseArgs([]string{"--dry-run", "--ui", "fancy"}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), `unknown ui "fancy"`) {
+		t.Fatalf("parseArgs() error = %v, want unknown ui", err)
 	}
 }
 

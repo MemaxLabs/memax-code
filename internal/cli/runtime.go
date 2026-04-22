@@ -44,7 +44,7 @@ func runPrompt(ctx context.Context, stdout io.Writer, opts options) error {
 	if err != nil {
 		return err
 	}
-	return renderEvents(stdout, events)
+	return renderEventsWithMode(stdout, events, opts.UI)
 }
 
 func resolveResumeSession(ctx context.Context, opts *options) error {
