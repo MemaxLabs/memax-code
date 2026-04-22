@@ -372,15 +372,46 @@ func (s *tuiRenderState) Finish(w io.Writer) error {
 		fmt.Fprintln(w)
 	}
 	activity := s.activity.snapshot()
+	renderActivityStatus(w, activity)
+	return nil
+}
+
+func renderActivityStatus(w io.Writer, activity activitySnapshot) {
 	fmt.Fprintln(w, "[status]")
+	fmt.Fprintf(w, "phase: %s\n", activity.Phase)
 	if activity.SessionID != "" {
 		fmt.Fprintf(w, "session: %s\n", activity.SessionID)
 	}
-	fmt.Fprintln(w, activity.countsLine())
+	// Keep the compact key=value summary for grep-friendly transcript scans.
+	fmt.Fprintln(w, "summary: "+activity.countsLine())
 	if details := activity.detailsLine(); details != "" {
+		// Keep the legacy detail line alongside the human-oriented panel rows.
 		fmt.Fprintln(w, details)
 	}
-	return nil
+	if len(activity.ActiveTools) > 0 {
+		fmt.Fprintln(w, "active_tools:")
+		for _, name := range activity.ActiveTools {
+			fmt.Fprintf(w, "  - %s\n", statusPanelValue(name))
+		}
+	}
+	if activity.LastCommand != "" || activity.LastPatch != "" || activity.LastVerification != "" || activity.LastApproval != "" {
+		fmt.Fprintln(w, "recent:")
+		renderRecentStatus(w, "command", activity.LastCommand)
+		renderRecentStatus(w, "patch", activity.LastPatch)
+		renderRecentStatus(w, "verification", activity.LastVerification)
+		renderRecentStatus(w, "approval", activity.LastApproval)
+	}
+}
+
+func renderRecentStatus(w io.Writer, label, value string) {
+	if value == "" {
+		return
+	}
+	fmt.Fprintf(w, "  %s: %s\n", label, statusPanelValue(value))
+}
+
+func statusPanelValue(value string) string {
+	return statusValue(strings.Join(strings.Fields(value), " "))
 }
 
 type renderState struct {

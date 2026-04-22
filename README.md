@@ -160,7 +160,9 @@ time, tool errors, active tool, command, approval, compact activity counts, and
 usage while preserving the sectioned transcript underneath.
 Operational events are rendered as a compact `[activity]` timeline so tool
 calls, command lifecycle, approvals, workspace edits, verification, and errors
-remain easy to scan without losing assistant text or final status.
+remain easy to scan without losing assistant text. The structured renderer ends
+with a status panel that summarizes phase, session, counts, active tools, recent
+command or patch context, approval state, usage, and errors.
 
 `--list-sessions` prints sessions newest activity first, including the updated
 time, created time, parent session, and the first user prompt as a short title.

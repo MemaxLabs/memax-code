@@ -161,11 +161,13 @@ func TestRenderTUIEventsPrintsStructuredSectionsAndStatus(t *testing.T) {
 		`+ command command="go test ./..." exit=0 timeout=false`,
 		"~ patch README.md changes=1",
 		"[result]\ndone",
-		"[status]\nsession: 00000000-0000-7000-8000-000000000001\ntools=1 commands=1 patches=1 verifications=0 done=true",
+		"[status]\nphase: done\nsession: 00000000-0000-7000-8000-000000000001\nsummary: tools=1 commands=1 patches=1 verifications=0 done=true",
 		`last_tool="run_command"`,
 		`last_command="go test ./..."`,
 		`last_patch="README.md changes=1"`,
 		"phase=done",
+		"active_tools:\n  - run_command\n",
+		"recent:\n  command: go test ./...\n  patch: README.md changes=1\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("tui output missing %q:\n%s", want, got)
@@ -495,6 +497,12 @@ func TestRenderTUIEventsTracksActivityStatus(t *testing.T) {
 		`last_verification="go test ./..."`,
 		`last_approval="granted:workspace_apply_patch"`,
 		`phase=running`,
+		`phase: running`,
+		`summary: tools=1 commands=1 patches=0 verifications=1`,
+		`recent:`,
+		`  command: npm test -- --watch`,
+		`  verification: go test ./...`,
+		`  approval: granted:workspace_apply_patch`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("tui output missing %q:\n%s", want, got)
@@ -563,6 +571,29 @@ func TestRenderTUIEventsKeepsOverlappingActiveTool(t *testing.T) {
 	}
 	if got := out.String(); !strings.Contains(got, `active_tool="second"`) {
 		t.Fatalf("tui output = %q, want second tool to remain active", got)
+	} else if !strings.Contains(got, "active_tools:\n  - second\n") {
+		t.Fatalf("tui output = %q, want active tools panel", got)
+	}
+}
+
+func TestRenderTUIStatusPanelCollapsesMultilineRecentValues(t *testing.T) {
+	events := make(chan memaxagent.Event, 2)
+	events <- memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Command:   "echo first\necho second",
+	}}
+	close(events)
+
+	var out bytes.Buffer
+	if err := renderEventsWithMode(&out, events, renderModeTUI); err != nil {
+		t.Fatalf("renderEventsWithMode() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "recent:\n  command: echo first echo second\n") {
+		t.Fatalf("tui output = %q, want single-line recent command", got)
+	}
+	if strings.Contains(got, "\necho second\n") {
+		t.Fatalf("tui output = %q, want no dangling multiline command", got)
 	}
 }
 
