@@ -19,6 +19,7 @@ coverage.html
 
 # Project-local Memax session/runtime state
 .memax-code/
+*.jsonl.lock
 
 # Environment files
 .env

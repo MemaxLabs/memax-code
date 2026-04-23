@@ -157,7 +157,12 @@ use `/history` and `/recall N` to restore one into the draft before editing
 and submitting again. Set `--history-file` when you want project-local,
 temporary, or custom prompt recall storage. Multiple interactive shells can
 append to the same JSONL file; each shell loads its recall view on startup and
-does not live-refresh entries written by other shells.
+does not live-refresh entries written by other shells. On Unix-like systems,
+writes and compaction use an adjacent lock file. When the history grows past
+625 parseable prompts, it is compacted to the most recent 500. Corrupt,
+oversized, and very large new prompts are skipped for recall. Custom history
+paths create a sibling `.lock` file; ignore both files when the path is inside
+a project checkout.
 When stdin and stderr are terminals, the prompt line also supports shell-style
 editing keys: Up/Down for prompt history, Left/Right for cursor movement,
 Home/End or Ctrl+A/Ctrl+E for line boundaries, Backspace/Delete for local
