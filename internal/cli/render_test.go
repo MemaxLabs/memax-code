@@ -229,6 +229,7 @@ func TestAppRenderEventsDrawsDashboardPanels(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		appClearScreen,
+		"\rMemax Code | phase=running | elapsed=3s | tools=1 commands=1 checks=1",
 		"Memax Code | phase=running | elapsed=3s | tools=1 commands=1 checks=1",
 		"[active]",
 		"tool: start_command",
@@ -243,6 +244,18 @@ func TestAppRenderEventsDrawsDashboardPanels(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("app output missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestAppRenderRedrawPrefixesLinesWithCarriageReturn(t *testing.T) {
+	var out bytes.Buffer
+	renderer := &appRenderState{width: 40, height: 10}
+
+	renderer.redraw(&out)
+
+	got := out.String()
+	if !strings.HasPrefix(got, appClearScreen+"\r") {
+		t.Fatalf("redraw output = %q, want appClearScreen followed by carriage return", got)
 	}
 }
 

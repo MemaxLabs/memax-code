@@ -128,7 +128,7 @@ func (s *appRenderState) redraw(w io.Writer) {
 	lines := s.frameLines(activity, width, height)
 	fmt.Fprint(w, appClearScreen)
 	for _, line := range lines {
-		fmt.Fprintln(w, fitPanelLine(line, width))
+		fmt.Fprintf(w, "\r%s\n", fitPanelLine(line, width))
 	}
 }
 
