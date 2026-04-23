@@ -63,6 +63,29 @@ func (s *appRenderState) TickInterval() time.Duration {
 	return appShellTickInterval
 }
 
+func (s *appRenderState) HandleKey(w io.Writer, key rawKey) error {
+	switch key.kind {
+	case rawKeyHistoryPrev:
+		s.scrollTranscript(1)
+	case rawKeyHistoryNext:
+		s.scrollTranscript(-1)
+	case rawKeyPageUp:
+		s.scrollTranscript(s.transcriptPageStep())
+	case rawKeyPageDown:
+		s.scrollTranscript(-s.transcriptPageStep())
+	case rawKeyHome:
+		s.scrollTranscript(maxAppTranscriptLines)
+	case rawKeyEnd:
+		s.transcriptOffset = 0
+	case rawKeyCtrlC:
+		return contextCanceled
+	default:
+		return nil
+	}
+	s.redraw(w)
+	return nil
+}
+
 func (s *appRenderState) appendTranscriptChunk(text string) {
 	if !s.transcriptHeaderStripped {
 		text = strings.TrimPrefix(text, "Memax Code\n----------\n")
@@ -115,6 +138,17 @@ func (s *appRenderState) clampTranscriptOffset() {
 	if s.transcriptOffset > maxOffset {
 		s.transcriptOffset = maxOffset
 	}
+}
+
+func (s *appRenderState) transcriptPageStep() int {
+	lines := s.transcriptTail.lines(maxAppTranscriptLines)
+	activity := s.transcriptRenderer.activity.snapshot()
+	frame := newAppShellFrame(activity, lines, s.panelWidth(), s.panelHeight(), s.elapsedStatus())
+	step := frame.transcriptBudget()
+	if step < 1 {
+		return 1
+	}
+	return step
 }
 
 func (s *appRenderState) markStarted() {

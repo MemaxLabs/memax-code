@@ -204,6 +204,8 @@ const (
 	rawKeyEnd
 	rawKeyHistoryPrev
 	rawKeyHistoryNext
+	rawKeyPageUp
+	rawKeyPageDown
 	rawKeyCtrlC
 	rawKeyCtrlD
 	rawKeyClear
@@ -328,6 +330,10 @@ func parseCSIKey(seq []byte, final byte) rawKey {
 			return rawKey{kind: rawKeyHome}
 		case "3":
 			return rawKey{kind: rawKeyDelete}
+		case "5":
+			return rawKey{kind: rawKeyPageUp}
+		case "6":
+			return rawKey{kind: rawKeyPageDown}
 		case "4", "8":
 			return rawKey{kind: rawKeyEnd}
 		}

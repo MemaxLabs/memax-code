@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,6 +36,9 @@ func runPrompt(ctx context.Context, stdout io.Writer, opts options) error {
 }
 
 func runPromptWithSession(ctx context.Context, stdout io.Writer, opts options) (string, error) {
+	queryCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	client, err := modelClient(opts)
 	if err != nil {
 		return "", err
@@ -46,7 +50,7 @@ func runPromptWithSession(ctx context.Context, stdout io.Writer, opts options) (
 	}
 	agentOpts := stack.WithModel(client)
 	agentOpts.SessionID = opts.ResumeSessionID
-	events, err := memaxagent.Query(ctx, opts.Prompt, agentOpts)
+	events, err := memaxagent.Query(queryCtx, opts.Prompt, agentOpts)
 	if err != nil {
 		return "", err
 	}
@@ -57,6 +61,10 @@ func runPromptWithSession(ctx context.Context, stdout io.Writer, opts options) (
 		}
 	}
 	if err := renderEventsWithModeObserved(stdout, events, opts.UI, observe); err != nil {
+		if errors.Is(err, contextCanceled) {
+			cancel()
+			return sessionID, nil
+		}
 		return sessionID, err
 	}
 	return sessionID, nil

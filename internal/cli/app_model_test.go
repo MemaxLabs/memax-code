@@ -27,7 +27,7 @@ func TestAppShellFrameRendersDeterministicPanels(t *testing.T) {
 		"[recent]\n  command_status: id=cmd-1 status=running pid=123 command=go test ./...",
 		"  verification: go test ./...",
 		"[transcript]\nassistant: checking tests",
-		"Ctrl+C cancel | /help commands | --ui tui for scrollback logs",
+		"↑/↓ scroll | PgUp/PgDn page | Home/End jump | Ctrl+C cancel",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("frame output missing %q:\n%s", want, got)

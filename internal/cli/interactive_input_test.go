@@ -115,6 +115,32 @@ func TestRawKeyLineReaderDeleteAcceptsCSIParams(t *testing.T) {
 	}
 }
 
+func TestRawKeyLineReaderParsesPageNavigation(t *testing.T) {
+	if got := parseCSIKey([]byte("5"), '~').kind; got != rawKeyPageUp {
+		t.Fatalf("PageUp kind = %v, want %v", got, rawKeyPageUp)
+	}
+	if got := parseCSIKey([]byte("6"), '~').kind; got != rawKeyPageDown {
+		t.Fatalf("PageDown kind = %v, want %v", got, rawKeyPageDown)
+	}
+}
+
+func TestRawKeyDecoderBuffersPartialEscapeSequences(t *testing.T) {
+	var decoder rawKeyDecoder
+	if keys := decoder.Append([]byte("\x1b[")); len(keys) != 0 {
+		t.Fatalf("partial keys = %#v, want none", keys)
+	}
+	keys := decoder.Append([]byte("5~x"))
+	if len(keys) != 2 {
+		t.Fatalf("decoded key count = %d, want 2", len(keys))
+	}
+	if keys[0].kind != rawKeyPageUp {
+		t.Fatalf("first key = %v, want PageUp", keys[0].kind)
+	}
+	if keys[1].kind != rawKeyRune || keys[1].char != 'x' {
+		t.Fatalf("second key = %#v, want rune x", keys[1])
+	}
+}
+
 func TestRawKeyLineReaderConsumesUnknownCSISequences(t *testing.T) {
 	var out bytes.Buffer
 	reader := newRawKeyLineReader(strings.NewReader("a\x1b[200~b\x1b[201~c\r"), &out)

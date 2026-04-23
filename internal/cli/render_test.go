@@ -238,7 +238,7 @@ func TestAppRenderEventsDrawsDashboardPanels(t *testing.T) {
 		"verification: npm test",
 		"[transcript]",
 		"I will inspect the failure.",
-		"Ctrl+C cancel | /help commands | --ui tui for scrollback logs",
+		"↑/↓ scroll | PgUp/PgDn page | Home/End jump | Ctrl+C cancel",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("app output missing %q:\n%s", want, got)
@@ -304,7 +304,7 @@ func TestAppRenderFrameHonorsConfiguredHeight(t *testing.T) {
 	if len(lines) > renderer.height {
 		t.Fatalf("frame height = %d, want <= %d:\n%s", len(lines), renderer.height, strings.Join(lines, "\n"))
 	}
-	if lines[len(lines)-1] != "Ctrl+C cancel | /help commands | --ui tui for scrollback logs" {
+	if lines[len(lines)-1] != "↑/↓ scroll | PgUp/PgDn page | Home/End jump | Ctrl+C cancel" {
 		t.Fatalf("last line = %q, want footer", lines[len(lines)-1])
 	}
 	if !strings.Contains(strings.Join(lines, "\n"), "... 1 more active commands") {
@@ -408,6 +408,47 @@ func TestAppRenderScrollTranscriptClampsAtOldestVisible(t *testing.T) {
 	}
 }
 
+func TestAppRenderHandleKeyScrollsTranscript(t *testing.T) {
+	var out bytes.Buffer
+	renderer := &appRenderState{width: 60, height: 14}
+	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\n")
+
+	if err := renderer.HandleKey(&out, rawKey{kind: rawKeyPageUp}); err != nil {
+		t.Fatalf("HandleKey(PageUp) error = %v", err)
+	}
+	if got, want := renderer.transcriptOffset, 3; got != want {
+		t.Fatalf("after PageUp transcriptOffset = %d, want %d", got, want)
+	}
+	if got := out.String(); !strings.Contains(got, "one") || !strings.Contains(got, "two") || !strings.Contains(got, "↓ 4 newer lines") {
+		t.Fatalf("PageUp output missing scroll markers:\n%s", got)
+	}
+
+	if err := renderer.HandleKey(&out, rawKey{kind: rawKeyHistoryNext}); err != nil {
+		t.Fatalf("HandleKey(Down) error = %v", err)
+	}
+	if got, want := renderer.transcriptOffset, 2; got != want {
+		t.Fatalf("after Down transcriptOffset = %d, want %d", got, want)
+	}
+	if got := out.String(); !strings.Contains(got, "↑ 2 earlier lines") || !strings.Contains(got, "↓ 3 newer lines") {
+		t.Fatalf("Down output missing scroll markers:\n%s", got)
+	}
+	if err := renderer.HandleKey(&out, rawKey{kind: rawKeyEnd}); err != nil {
+		t.Fatalf("HandleKey(End) error = %v", err)
+	}
+	if got := renderer.transcriptOffset; got != 0 {
+		t.Fatalf("after End transcriptOffset = %d, want 0", got)
+	}
+}
+
+func TestAppRenderHandleKeyCtrlCCancels(t *testing.T) {
+	var out bytes.Buffer
+	renderer := &appRenderState{width: 60, height: 14}
+	err := renderer.HandleKey(&out, rawKey{kind: rawKeyCtrlC})
+	if !errors.Is(err, contextCanceled) {
+		t.Fatalf("HandleKey(CtrlC) error = %v, want contextCanceled", err)
+	}
+}
+
 func TestAppTranscriptTailBoundsStoredLinesAndKeepsPartial(t *testing.T) {
 	var tail appTranscriptTail
 	tail.limit = 3
@@ -478,6 +519,27 @@ func TestRenderWithTicksRendererWhileEventStreamIsIdle(t *testing.T) {
 	}
 	if renderer.finished != 1 {
 		t.Fatalf("Finish calls = %d, want 1", renderer.finished)
+	}
+}
+
+func TestRenderWithTicksPollerObservedFinishesOnCancel(t *testing.T) {
+	events := make(chan memaxagent.Event)
+	ticks := make(chan time.Time, 1)
+	renderer := &cancelSpyRenderer{}
+	poller := &stubRawKeyPoller{keys: []rawKey{{kind: rawKeyCtrlC}}}
+	done := make(chan error, 1)
+
+	go func() {
+		done <- renderWithTicksPollerObserved(&bytes.Buffer{}, events, renderer, ticks, poller, nil)
+	}()
+
+	ticks <- time.Now()
+	err := <-done
+	if !errors.Is(err, contextCanceled) {
+		t.Fatalf("renderWithTicksPollerObserved() error = %v, want contextCanceled", err)
+	}
+	if renderer.finishCalls != 1 {
+		t.Fatalf("renderer.Finish() calls = %d, want 1", renderer.finishCalls)
 	}
 }
 
@@ -1063,4 +1125,43 @@ func (r *tickSpyRenderer) Tick(io.Writer) error {
 
 func (r *tickSpyRenderer) TickInterval() time.Duration {
 	return time.Hour
+}
+
+type cancelSpyRenderer struct {
+	finishCalls int
+}
+
+func (r *cancelSpyRenderer) Render(io.Writer, memaxagent.Event) error {
+	return nil
+}
+
+func (r *cancelSpyRenderer) Finish(io.Writer) error {
+	r.finishCalls++
+	return nil
+}
+
+func (r *cancelSpyRenderer) HandleKey(io.Writer, rawKey) error {
+	return contextCanceled
+}
+
+func (r *cancelSpyRenderer) Tick(io.Writer) error {
+	return nil
+}
+
+func (r *cancelSpyRenderer) TickInterval() time.Duration {
+	return time.Hour
+}
+
+type stubRawKeyPoller struct {
+	keys []rawKey
+}
+
+func (p *stubRawKeyPoller) Poll() ([]rawKey, error) {
+	keys := append([]rawKey(nil), p.keys...)
+	p.keys = nil
+	return keys, nil
+}
+
+func (p *stubRawKeyPoller) Close() error {
+	return nil
 }

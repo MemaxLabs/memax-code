@@ -29,7 +29,7 @@ func newAppShellFrame(activity activitySnapshot, transcript []string, width, hei
 	return appShellFrame{
 		Header:     appHeaderLine(activity, elapsed),
 		Panels:     appPanels(activity),
-		Footer:     "Ctrl+C cancel | /help commands | --ui tui for scrollback logs",
+		Footer:     "↑/↓ scroll | PgUp/PgDn page | Home/End jump | Ctrl+C cancel",
 		Width:      width,
 		Height:     height,
 		Transcript: transcript,

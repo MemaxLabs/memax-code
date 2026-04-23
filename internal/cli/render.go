@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,8 @@ import (
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"golang.org/x/term"
 )
+
+var contextCanceled = errors.New("render canceled")
 
 type renderMode = ui.Mode
 
@@ -42,7 +45,17 @@ func renderEventsWithModeObserved(w io.Writer, events <-chan memaxagent.Event, m
 	if err != nil {
 		return err
 	}
-	return renderWithObserved(w, events, renderer, observe)
+	var keyPoller rawKeyPoller
+	if mode == renderModeApp && terminal {
+		keyPoller, err = newTerminalRawKeyPoller(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("enable app keyboard input: %w", err)
+		}
+		if keyPoller != nil {
+			defer keyPoller.Close()
+		}
+	}
+	return renderWithPollerObserved(w, events, renderer, keyPoller, observe)
 }
 
 func terminalWriterInfo(w io.Writer) (bool, int, int) {
@@ -78,7 +91,7 @@ func renderWith(w io.Writer, events <-chan memaxagent.Event, renderer ui.Rendere
 }
 
 func renderWithObserved(w io.Writer, events <-chan memaxagent.Event, renderer ui.Renderer, observe func(memaxagent.Event)) error {
-	return renderWithTicksObserved(w, events, renderer, nil, observe)
+	return renderWithPollerObserved(w, events, renderer, nil, observe)
 }
 
 type tickRenderer interface {
@@ -92,6 +105,19 @@ func renderWithTicks(w io.Writer, events <-chan memaxagent.Event, renderer ui.Re
 }
 
 func renderWithTicksObserved(w io.Writer, events <-chan memaxagent.Event, renderer ui.Renderer, ticks <-chan time.Time, observe func(memaxagent.Event)) error {
+	return renderWithTicksPollerObserved(w, events, renderer, ticks, nil, observe)
+}
+
+func renderWithPollerObserved(w io.Writer, events <-chan memaxagent.Event, renderer ui.Renderer, keyPoller rawKeyPoller, observe func(memaxagent.Event)) error {
+	return renderWithTicksPollerObserved(w, events, renderer, nil, keyPoller, observe)
+}
+
+type keyRenderer interface {
+	ui.Renderer
+	HandleKey(io.Writer, rawKey) error
+}
+
+func renderWithTicksPollerObserved(w io.Writer, events <-chan memaxagent.Event, renderer ui.Renderer, ticks <-chan time.Time, keyPoller rawKeyPoller, observe func(memaxagent.Event)) error {
 	tickerRenderer, ticking := renderer.(tickRenderer)
 	if !ticking {
 		ticks = nil
@@ -120,10 +146,32 @@ func renderWithTicksObserved(w io.Writer, events <-chan memaxagent.Event, render
 			if err := renderer.Render(w, event); err != nil && firstErr == nil {
 				firstErr = err
 			}
+			if err := handleRendererKeys(w, renderer, keyPoller); err != nil {
+				if errors.Is(err, contextCanceled) {
+					if finishErr := renderer.Finish(w); finishErr != nil && firstErr == nil {
+						firstErr = finishErr
+					}
+					if firstErr != nil {
+						return firstErr
+					}
+				}
+				return err
+			}
 		case _, ok := <-ticks:
 			if !ok {
 				ticks = nil
 				continue
+			}
+			if err := handleRendererKeys(w, renderer, keyPoller); err != nil {
+				if errors.Is(err, contextCanceled) {
+					if finishErr := renderer.Finish(w); finishErr != nil && firstErr == nil {
+						firstErr = finishErr
+					}
+					if firstErr != nil {
+						return firstErr
+					}
+				}
+				return err
 			}
 			if ticking {
 				if err := tickerRenderer.Tick(w); err != nil && firstErr == nil {
@@ -132,6 +180,23 @@ func renderWithTicksObserved(w io.Writer, events <-chan memaxagent.Event, render
 			}
 		}
 	}
+}
+
+func handleRendererKeys(w io.Writer, renderer ui.Renderer, keyPoller rawKeyPoller) error {
+	keyed, ok := renderer.(keyRenderer)
+	if !ok || keyPoller == nil {
+		return nil
+	}
+	keys, err := keyPoller.Poll()
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if err := keyed.HandleKey(w, key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type tuiRenderState struct {
