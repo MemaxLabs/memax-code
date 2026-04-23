@@ -27,6 +27,7 @@ type appRenderState struct {
 	transcriptHeaderStripped bool
 	width                    int
 	height                   int
+	transcriptOffset         int
 	startedAt                time.Time
 	now                      func() time.Time
 }
@@ -67,7 +68,14 @@ func (s *appRenderState) appendTranscriptChunk(text string) {
 		text = strings.TrimPrefix(text, "Memax Code\n----------\n")
 		s.transcriptHeaderStripped = true
 	}
+	before := len(s.transcriptTail.lines(maxAppTranscriptLines))
 	s.transcriptTail.append(text)
+	if s.transcriptOffset > 0 {
+		if delta := len(s.transcriptTail.lines(maxAppTranscriptLines)) - before; delta > 0 {
+			s.transcriptOffset += delta
+		}
+	}
+	s.clampTranscriptOffset()
 }
 
 func (s *appRenderState) redraw(w io.Writer) {
@@ -82,7 +90,31 @@ func (s *appRenderState) redraw(w io.Writer) {
 }
 
 func (s *appRenderState) frameLines(activity activitySnapshot, width, height int) []string {
-	return newAppShellFrame(activity, s.transcriptTail.lines(maxAppTranscriptLines), width, height, s.elapsedStatus()).Lines()
+	frame := newAppShellFrame(activity, s.transcriptTail.lines(maxAppTranscriptLines), width, height, s.elapsedStatus())
+	frame.TranscriptOffset = s.transcriptOffset
+	return frame.Lines()
+}
+
+func (s *appRenderState) scrollTranscript(delta int) {
+	s.transcriptOffset += delta
+	s.clampTranscriptOffset()
+}
+
+func (s *appRenderState) clampTranscriptOffset() {
+	if s.transcriptOffset < 0 {
+		s.transcriptOffset = 0
+		return
+	}
+	lines := s.transcriptTail.lines(maxAppTranscriptLines)
+	activity := s.transcriptRenderer.activity.snapshot()
+	frame := newAppShellFrame(activity, lines, s.panelWidth(), s.panelHeight(), s.elapsedStatus())
+	maxOffset := len(lines) - frame.transcriptBudget()
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if s.transcriptOffset > maxOffset {
+		s.transcriptOffset = maxOffset
+	}
 }
 
 func (s *appRenderState) markStarted() {

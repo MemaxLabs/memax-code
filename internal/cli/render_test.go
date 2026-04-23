@@ -312,6 +312,102 @@ func TestAppRenderFrameHonorsConfiguredHeight(t *testing.T) {
 	}
 }
 
+func TestAppRenderFrameUsesTranscriptOffset(t *testing.T) {
+	renderer := &appRenderState{width: 60, height: 14}
+	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\n")
+	renderer.scrollTranscript(2)
+
+	got := strings.Join(renderer.frameLines(activitySnapshot{Phase: "running"}, renderer.panelWidth(), renderer.panelHeight()), "\n")
+	for _, want := range []string{
+		"↑ 2 earlier lines",
+		"three",
+		"↓ 3 newer lines",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("frame output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "\nfive\n") {
+		t.Fatalf("frame output ignored transcript offset:\n%s", got)
+	}
+}
+
+func TestAppRenderPreservesScrollAnchorWhenTranscriptAppends(t *testing.T) {
+	renderer := &appRenderState{width: 60, height: 14}
+	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\n")
+	renderer.scrollTranscript(2)
+	renderer.appendTranscriptChunk("seven\neight\n")
+
+	if got, want := renderer.transcriptOffset, 4; got != want {
+		t.Fatalf("transcriptOffset = %d, want %d", got, want)
+	}
+	got := strings.Join(renderer.frameLines(activitySnapshot{Phase: "running"}, renderer.panelWidth(), renderer.panelHeight()), "\n")
+	for _, want := range []string{
+		"↑ 2 earlier lines",
+		"three",
+		"↓ 5 newer lines",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("frame output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestAppRenderPreservesScrollAnchorAcrossPartialTranscriptAppend(t *testing.T) {
+	renderer := &appRenderState{width: 60, height: 14}
+	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\n")
+	renderer.scrollTranscript(2)
+	renderer.appendTranscriptChunk("seve")
+
+	if got, want := renderer.transcriptOffset, 3; got != want {
+		t.Fatalf("partial transcriptOffset = %d, want %d", got, want)
+	}
+	got := strings.Join(renderer.frameLines(activitySnapshot{Phase: "running"}, renderer.panelWidth(), renderer.panelHeight()), "\n")
+	for _, want := range []string{
+		"↑ 2 earlier lines",
+		"three",
+		"↓ 4 newer lines",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("partial frame output missing %q:\n%s", want, got)
+		}
+	}
+
+	renderer.appendTranscriptChunk("n\neight\n")
+	if got, want := renderer.transcriptOffset, 4; got != want {
+		t.Fatalf("completed transcriptOffset = %d, want %d", got, want)
+	}
+	got = strings.Join(renderer.frameLines(activitySnapshot{Phase: "running"}, renderer.panelWidth(), renderer.panelHeight()), "\n")
+	for _, want := range []string{
+		"↑ 2 earlier lines",
+		"three",
+		"↓ 5 newer lines",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("completed frame output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestAppRenderScrollTranscriptClampsAtBottom(t *testing.T) {
+	renderer := &appRenderState{transcriptOffset: 3}
+	renderer.scrollTranscript(-99)
+
+	if renderer.transcriptOffset != 0 {
+		t.Fatalf("transcriptOffset = %d, want 0", renderer.transcriptOffset)
+	}
+}
+
+func TestAppRenderScrollTranscriptClampsAtOldestVisible(t *testing.T) {
+	renderer := &appRenderState{width: 60, height: 14}
+	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\n")
+	renderer.scrollTranscript(999)
+
+	if got, want := renderer.transcriptOffset, 3; got != want {
+		t.Fatalf("transcriptOffset = %d, want %d", got, want)
+	}
+}
+
 func TestAppTranscriptTailBoundsStoredLinesAndKeepsPartial(t *testing.T) {
 	var tail appTranscriptTail
 	tail.limit = 3

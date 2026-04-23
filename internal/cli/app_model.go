@@ -48,6 +48,26 @@ func appPanels(activity activitySnapshot) []appShellPanel {
 }
 
 func (f appShellFrame) Lines() []string {
+	lines := f.transcriptPrefixLines()
+	transcriptBudget := appTranscriptBudget(f.Height, len(lines))
+	lines = append(lines, newAppTranscriptViewport(f.Transcript, transcriptBudget, f.TranscriptOffset).Lines()...)
+	lines = append(lines, appRule(f.Width), f.Footer)
+	return fitFrameHeight(lines, f.Height)
+}
+
+func (f appShellFrame) transcriptBudget() int {
+	return appTranscriptBudget(f.Height, len(f.transcriptPrefixLines()))
+}
+
+func appTranscriptBudget(height, prefixLines int) int {
+	budget := height - prefixLines - 2
+	if budget < 0 {
+		return 0
+	}
+	return budget
+}
+
+func (f appShellFrame) transcriptPrefixLines() []string {
 	capacity := len(f.Panels)*3 + maxAppActiveCommands + maxAppRecentLines + 8
 	if capacity < f.Height {
 		capacity = f.Height
@@ -70,15 +90,7 @@ func (f appShellFrame) Lines() []string {
 	}
 
 	lines = append(lines, "", "[transcript]")
-	// Tight terminals preserve status panels and footer first; transcript rows
-	// may temporarily collapse until the app shell gets interactive scrolling.
-	transcriptBudget := f.Height - len(lines) - 2
-	if transcriptBudget < 0 {
-		transcriptBudget = 0
-	}
-	lines = append(lines, newAppTranscriptViewport(f.Transcript, transcriptBudget, f.TranscriptOffset).Lines()...)
-	lines = append(lines, rule, f.Footer)
-	return fitFrameHeight(lines, f.Height)
+	return lines
 }
 
 func appRule(width int) string {
