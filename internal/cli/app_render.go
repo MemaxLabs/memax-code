@@ -104,6 +104,7 @@ func (s *appRenderState) appendTranscriptChunk(text string) {
 		text = strings.TrimPrefix(text, "Memax Code\n----------\n")
 		s.transcriptHeaderStripped = true
 	}
+	text = normalizeAppTranscriptText(text)
 	before := len(s.transcriptTail.lines(maxAppTranscriptLines))
 	s.transcriptTail.append(text)
 	if s.transcriptOffset > 0 {
@@ -112,6 +113,12 @@ func (s *appRenderState) appendTranscriptChunk(text string) {
 		}
 	}
 	s.clampTranscriptOffset()
+}
+
+func normalizeAppTranscriptText(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	return sanitizeTranscriptText(text)
 }
 
 func (s *appRenderState) redraw(w io.Writer) {

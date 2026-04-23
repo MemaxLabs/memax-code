@@ -514,6 +514,32 @@ func TestAppTranscriptTailBoundsStoredLinesAndKeepsPartial(t *testing.T) {
 	}
 }
 
+func TestAppRenderNormalizesCarriageReturnTranscriptChunks(t *testing.T) {
+	renderer := &appRenderState{}
+	renderer.transcriptHeaderStripped = true
+
+	renderer.appendTranscriptChunk("[assistant]\rhello\rworld\n")
+
+	got := renderer.transcriptTail.lines(10)
+	want := []string{"[assistant]", "hello", "world"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("transcript lines = %#v, want %#v", got, want)
+	}
+}
+
+func TestAppRenderNormalizesCRLFTranscriptChunks(t *testing.T) {
+	renderer := &appRenderState{}
+	renderer.transcriptHeaderStripped = true
+
+	renderer.appendTranscriptChunk("[assistant]\r\nhello\r\nworld\r\n")
+
+	got := renderer.transcriptTail.lines(10)
+	want := []string{"[assistant]", "hello", "world"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("transcript lines = %#v, want %#v", got, want)
+	}
+}
+
 func TestLiveRenderEventsPrintsTransientStatusAndFinalStatus(t *testing.T) {
 	events := make(chan memaxagent.Event, 6)
 	events <- memaxagent.Event{Kind: memaxagent.EventSessionStarted, SessionID: "00000000-0000-7000-8000-000000000001"}
