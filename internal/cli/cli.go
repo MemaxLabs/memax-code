@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 // Run parses CLI arguments and executes the requested command using empty stdin.
@@ -44,6 +46,10 @@ func RunWithIO(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 			return err
 		}
 	}
+	if opts.EventStream == eventStreamModeOff && !opts.Interactive && opts.Prompt == "" && !opts.DryRun &&
+		shouldImplicitlyStartInteractive(stdin, stdout, stderr, opts) {
+		opts.Interactive = true
+	}
 	if opts.Interactive {
 		return runInteractive(ctx, stdin, stdout, stderr, opts)
 	}
@@ -65,6 +71,7 @@ type options struct {
 	Effort            string
 	Preset            string
 	UI                renderMode
+	EventStream       eventStreamMode
 	ConfigPath        string
 	ConfigLoaded      bool
 	SessionDir        string
@@ -96,6 +103,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	effort := fs.String("effort", "", "override reasoning effort: auto, low, medium, high, or xhigh")
 	preset := fs.String("preset", "interactive_dev", "coding preset: safe_local, ci_repair, or interactive_dev")
 	uiRaw := fs.String("ui", string(renderModeAuto), "event renderer: auto, app, live, tui, or plain")
+	eventStreamRaw := fs.String("event-stream", "", "machine-readable event stream: json")
 	sessionDir := fs.String("session-dir", defaultSessionDir(), "directory for JSONL session transcripts")
 	historyFile := fs.String("history-file", defaultHistoryPath(), "path to interactive prompt history JSONL")
 	resumeSessionID := fs.String("resume", "", "resume an existing session id, or latest")
@@ -114,9 +122,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	inheritCommandEnv := fs.Bool("inherit-command-env", false, "let command tools inherit the host process environment")
 
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage: memax-code [flags] PROMPT\n")
+		fmt.Fprintf(fs.Output(), "Usage: memax-code [flags] [PROMPT]\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --interactive [flags]\n")
-		fmt.Fprintf(fs.Output(), "       memax-code --resume SESSION_ID|latest [flags] PROMPT\n")
+		fmt.Fprintf(fs.Output(), "       memax-code --resume SESSION_ID|latest [flags] [PROMPT]\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --list-sessions [flags]\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --show-session SESSION_ID|latest [flags]\n")
 		fmt.Fprintf(fs.Output(), "       memax-code --inspect-tools [flags]\n")
@@ -229,6 +237,10 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		}
 		return options{}, err
 	}
+	eventStreamMode, err := parseEventStreamMode(*eventStreamRaw)
+	if err != nil {
+		return options{}, err
+	}
 	inheritEnv, err := boolSetting(*inheritCommandEnv, flagWasSet(fs, "inherit-command-env"), "MEMAX_CODE_INHERIT_COMMAND_ENV", cfg.InheritCommandEnv, false)
 	if err != nil {
 		return options{}, err
@@ -249,6 +261,8 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		Profile:           strings.TrimSpace(profileSetting.Value),
 		Effort:            strings.TrimSpace(effortSetting.Value),
 		Preset:            strings.TrimSpace(presetSetting.Value),
+		UI:                ui,
+		EventStream:       eventStreamMode,
 		ConfigPath:        configPath,
 		ConfigLoaded:      configLoaded,
 		SessionDir:        resolvedSessionDir,
@@ -263,6 +277,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	if interactive {
 		if *dryRun {
 			return options{}, fmt.Errorf("--interactive cannot be combined with --dry-run")
+		}
+		if opts.EventStream != eventStreamModeOff {
+			return options{}, fmt.Errorf("--interactive cannot be combined with --event-stream")
 		}
 		if opts.Prompt != "" {
 			return options{}, fmt.Errorf("--interactive does not accept an initial prompt; type it after the shell starts")
@@ -304,7 +321,6 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 			return options{}, fmt.Errorf("--inspect-tools does not accept a prompt")
 		}
 	}
-	opts.UI = ui
 	return opts, nil
 }
 
@@ -330,6 +346,14 @@ func defaultHistoryPath() string {
 		return ".memax-code/history.jsonl"
 	}
 	return filepath.Join(home, ".memax-code", "history.jsonl")
+}
+
+func shouldImplicitlyStartInteractive(stdin io.Reader, stdout, stderr io.Writer, opts options) bool {
+	input, ok := stdin.(*os.File)
+	if !ok || !term.IsTerminal(int(input.Fd())) {
+		return false
+	}
+	return writerIsTerminal(interactiveShellWriter(opts.UI, stdout, stderr))
 }
 
 type fileConfig struct {

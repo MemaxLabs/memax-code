@@ -26,6 +26,8 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
 - event-stream rendering for assistant text, tool calls, command lifecycle,
   workspace edits, verification, usage, and final results, with `auto`, `live`,
   `app`, `tui`, and `plain` renderer modes
+- a machine-readable event stream with `--event-stream json` for wrappers,
+  editors, and future GUI clients
 
 The CLI now has the first terminal UI foundation: `auto` chooses structured
 terminal rendering for interactive output and plain rendering for logs, tests,
@@ -123,8 +125,13 @@ exits non-zero for usage errors, invalid config, or hard local setup failures.
 Start an interactive shell:
 
 ```sh
+memax-code
 memax-code --interactive --ui live
 ```
+
+On a real terminal, running `memax-code` with no prompt opens the interactive
+shell automatically. `--interactive` remains useful when you want that behavior
+to be explicit in scripts, wrappers, or docs.
 
 `--interactive --ui app` now uses a single terminal surface. Prompts, slash
 commands, and app-shell query rendering all go through the same output stream
@@ -181,9 +188,16 @@ Resume an earlier conversation:
 ```sh
 memax-code --list-sessions
 memax-code --show-session latest
+memax-code --resume 0194d9a4-7b8c-7d20-9a1b-4f6c6f4f7a01
 memax-code --resume 0194d9a4-7b8c-7d20-9a1b-4f6c6f4f7a01 "continue from the last plan"
+memax-code --resume latest
 memax-code --resume latest "continue the most recent active session"
 ```
+
+When `--resume` is provided without a prompt on a real terminal, Memax Code
+reopens that session in the interactive shell instead of requiring
+`--interactive`. Non-terminal invocations still keep the normal missing-prompt
+error path.
 
 Session transcripts are stored under `~/.memax-code/sessions` by default.
 Prompt recall history is stored separately under `~/.memax-code/history.jsonl`
@@ -204,6 +218,17 @@ memax-code --ui live "repair the failing test"
 memax-code --ui tui "inspect the failing test"
 memax-code --ui plain "run the relevant checks" > run.log
 ```
+
+For machine consumers, bypass the human renderer and stream structured events:
+
+```sh
+memax-code --event-stream json "repair the failing test"
+```
+
+`--event-stream json` writes one JSON object per line so wrappers can parse
+incrementally while the run is still in progress. The user-facing mode name is
+`json`; the transport stays line-delimited because a single JSON document is
+not stream-friendly for long-running agent sessions.
 
 `--ui auto` is the default. It uses the structured terminal renderer for
 interactive terminals and the plain event stream for non-terminal writers, so

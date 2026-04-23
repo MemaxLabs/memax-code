@@ -13,6 +13,7 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	"github.com/creack/pty"
 )
 
 func TestDryRunPrintsResolvedConfig(t *testing.T) {
@@ -1263,6 +1264,120 @@ func TestRunInteractiveStatus(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestRunResumeWithoutPromptStartsInteractiveShellOnTerminalIO(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, userMessage("resume me")); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Fatalf("pty.Open() error = %v", err)
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+
+	var output bytes.Buffer
+	copyDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(&output, ptmx)
+		copyDone <- err
+	}()
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- RunWithIO(ctx, []string{
+			"--resume", "latest",
+			"--session-dir", sessionDir,
+		}, tty, tty, tty)
+	}()
+
+	if _, err := io.WriteString(ptmx, "/session\n/quit\n"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("RunWithIO() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunWithIO() timed out")
+	}
+	if err := tty.Close(); err != nil {
+		t.Fatalf("tty.Close() error = %v", err)
+	}
+	select {
+	case err := <-copyDone:
+		if err != nil && !isClosedPTYRead(err) {
+			t.Fatalf("Copy() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Copy() timed out")
+	}
+	out := output.String()
+	for _, want := range []string{
+		"Memax Code interactive shell",
+		"session: " + sess.ID,
+		"bye",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func isClosedPTYRead(err error) bool {
+	return strings.Contains(err.Error(), "input/output error")
+}
+
+func TestRunResumeWithoutPromptRejectsNonTerminalIO(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, userMessage("resume me")); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = RunWithIO(ctx, []string{
+		"--resume", "latest",
+		"--session-dir", sessionDir,
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "prompt is required") {
+		t.Fatalf("RunWithIO() error = %v, want missing prompt error", err)
+	}
+}
+
+func TestShouldImplicitlyStartInteractiveWithTerminalIO(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Fatalf("pty.Open() error = %v", err)
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+
+	if !shouldImplicitlyStartInteractive(tty, tty, tty, options{UI: renderModePlain}) {
+		t.Fatal("shouldImplicitlyStartInteractive() = false, want true for terminal stdin and shell output")
+	}
+}
+
+func TestShouldImplicitlyStartInteractiveRejectsNonTerminalIO(t *testing.T) {
+	if shouldImplicitlyStartInteractive(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, options{UI: renderModePlain}) {
+		t.Fatal("shouldImplicitlyStartInteractive() = true, want false for non-terminal IO")
 	}
 }
 

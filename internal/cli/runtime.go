@@ -60,6 +60,12 @@ func runPromptWithSession(ctx context.Context, stdout io.Writer, opts options) (
 			sessionID = event.SessionID
 		}
 	}
+	if opts.EventStream != eventStreamModeOff {
+		if err := renderEventStreamObserved(stdout, events, opts.EventStream, observe); err != nil {
+			return sessionID, err
+		}
+		return sessionID, nil
+	}
 	if err := renderEventsWithModeObserved(stdout, events, opts.UI, observe); err != nil {
 		if errors.Is(err, contextCanceled) {
 			cancel()
