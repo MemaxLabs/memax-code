@@ -15,6 +15,7 @@ func TestParseMode(t *testing.T) {
 	}{
 		{name: "empty", raw: "", want: ModeAuto},
 		{name: "auto", raw: "auto", want: ModeAuto},
+		{name: "app", raw: "app", want: ModeApp},
 		{name: "live", raw: "live", want: ModeLive},
 		{name: "structured", raw: "tui", want: ModeStructured},
 		{name: "plain", raw: "plain", want: ModePlain},
@@ -49,8 +50,14 @@ func TestResolveMode(t *testing.T) {
 	if got := ResolveMode(ModeLive, false); got != ModePlain {
 		t.Fatalf("ResolveMode(live, non-terminal) = %q, want %q", got, ModePlain)
 	}
+	if got := ResolveMode(ModeApp, false); got != ModePlain {
+		t.Fatalf("ResolveMode(app, non-terminal) = %q, want %q", got, ModePlain)
+	}
 	if got := ResolveMode(ModeLive, true); got != ModeLive {
 		t.Fatalf("ResolveMode(live, terminal) = %q, want %q", got, ModeLive)
+	}
+	if got := ResolveMode(ModeApp, true); got != ModeApp {
+		t.Fatalf("ResolveMode(app, terminal) = %q, want %q", got, ModeApp)
 	}
 	if got := ResolveMode(ModePlain, true); got != ModePlain {
 		t.Fatalf("ResolveMode(plain, terminal) = %q, want %q", got, ModePlain)
@@ -59,9 +66,10 @@ func TestResolveMode(t *testing.T) {
 
 func TestSelectRenderer(t *testing.T) {
 	plain := stubRenderer{name: "plain"}
+	app := stubRenderer{name: "app"}
 	live := stubRenderer{name: "live"}
 	structured := stubRenderer{name: "structured"}
-	renderers := Renderers{Plain: plain, Live: live, Structured: structured}
+	renderers := Renderers{Plain: plain, App: app, Live: live, Structured: structured}
 
 	got, err := SelectRenderer(ModePlain, renderers)
 	if err != nil {
@@ -69,6 +77,14 @@ func TestSelectRenderer(t *testing.T) {
 	}
 	if got != plain {
 		t.Fatalf("SelectRenderer(plain) = %v, want plain", got)
+	}
+
+	got, err = SelectRenderer(ModeApp, renderers)
+	if err != nil {
+		t.Fatalf("SelectRenderer(app) error = %v", err)
+	}
+	if got != app {
+		t.Fatalf("SelectRenderer(app) = %v, want app", got)
 	}
 
 	got, err = SelectRenderer(ModeLive, renderers)

@@ -23,17 +23,19 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
 - a line-oriented interactive shell with slash commands for session control
 - event-stream rendering for assistant text, tool calls, command lifecycle,
   workspace edits, verification, usage, and final results, with `auto`, `live`,
-  `tui`, and `plain` renderer modes
+  `app`, `tui`, and `plain` renderer modes
 
 The CLI now has the first terminal UI foundation: `auto` chooses structured
 terminal rendering for interactive output and plain rendering for logs, tests,
-and pipes. `--ui live` opts into an early live status line while preserving the
-sectioned transcript underneath. The status panel tracks active tools, active
-command sessions, recent command outcomes, approvals, patches, and verification
-checks. `--interactive` starts a simple prompt loop with `/help`, `/session`,
-`/pick`, `/sessions`, `/resume`, `/new`, and `/quit`. It does not yet ship the
-full-screen app shell or sandboxed OS execution expected from a mature
-coding-agent CLI. Those are product slices on top of this foundation.
+and pipes. `--ui app` opts into an early app-shell dashboard with stable
+active-work, recent-activity, transcript, and footer panels. `--ui live` keeps a
+lighter live status line while preserving the sectioned transcript underneath.
+The status surfaces track active tools, active command sessions, recent command
+outcomes, approvals, patches, and verification checks. `--interactive` starts a
+simple prompt loop with `/help`, `/session`, `/pick`, `/sessions`, `/resume`,
+`/new`, and `/quit`. It does not yet ship sandboxed OS execution or the full
+keyboard-driven composer expected from a mature coding-agent CLI. Those are
+product slices on top of this foundation.
 
 ## Usage
 
@@ -149,6 +151,7 @@ memax-code --session-dir .memax-code/sessions --list-sessions
 Choose the event renderer explicitly when needed:
 
 ```sh
+memax-code --ui app "repair the failing test"
 memax-code --ui live "repair the failing test"
 memax-code --ui tui "inspect the failing test"
 memax-code --ui plain "run the relevant checks" > run.log
@@ -158,11 +161,16 @@ memax-code --ui plain "run the relevant checks" > run.log
 interactive terminals and the plain event stream for non-terminal writers, so
 CI logs and redirected output remain stable.
 
-`--ui live` is opt-in while the terminal UX is maturing. When output is
-redirected, it falls back to the plain renderer so scripts never receive live
-terminal control sequences. Its transient status line reports phase, elapsed
-time, tool errors, active tool, command, approval, compact activity counts, and
-usage while preserving the sectioned transcript underneath.
+`--ui app` is opt-in while the terminal UX is maturing. When output is
+redirected, it falls back to the plain renderer so scripts never receive
+terminal control sequences. The app shell redraws a stable dashboard with
+phase, elapsed time, active work, recent activity, transcript tail, and footer
+controls. It intentionally uses an inline screen for now: pre-existing
+scrollback remains available, while the dashboard keeps only a bounded
+transcript tail. Use `--ui tui` when full session scrollback matters. `--ui
+live` is the lighter-weight status line mode; it reports phase, elapsed time,
+tool errors, active tool, command, approval, compact activity counts, and usage
+while preserving the sectioned transcript underneath.
 Operational events are rendered as a compact `[activity]` timeline so tool
 calls, command lifecycle, approvals, workspace edits, verification, and errors
 remain easy to scan without losing assistant text. The structured renderer ends
@@ -229,7 +237,7 @@ Configuration environment variables:
 - `MEMAX_CODE_EFFORT`: default reasoning effort, `auto`, `low`, `medium`,
   `high`, or `xhigh`.
 - `MEMAX_CODE_PRESET`: default coding preset.
-- `MEMAX_CODE_UI`: default renderer, `auto`, `live`, `tui`, or `plain`.
+- `MEMAX_CODE_UI`: default renderer, `auto`, `app`, `live`, `tui`, or `plain`.
 - `MEMAX_CODE_SESSION_DIR`: default JSONL session transcript directory.
 - `MEMAX_CODE_INHERIT_COMMAND_ENV`: default command environment inheritance,
   accepting `1/0`, `t/f`, `true/false`, and case variants.

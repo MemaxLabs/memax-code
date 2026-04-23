@@ -47,7 +47,7 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 	profile := fs.String("profile", defaultConfigProfile, "coding model profile: fast, balanced, or deep")
 	effort := fs.String("effort", defaultConfigEffort, "reasoning effort: auto, low, medium, high, or xhigh")
 	preset := fs.String("preset", defaultConfigPreset, "coding preset: safe_local, ci_repair, or interactive_dev")
-	uiRaw := fs.String("ui", defaultConfigUI, "event renderer: auto, live, tui, or plain")
+	uiRaw := fs.String("ui", defaultConfigUI, "event renderer: auto, app, live, tui, or plain")
 	sessionDir := fs.String("session-dir", defaultConfigSessionDir, "directory for JSONL session transcripts")
 	inheritCommandEnv := fs.Bool("inherit-command-env", false, "let command tools inherit the host process environment")
 	verifyCommands := newVerifyCommandsFlag()

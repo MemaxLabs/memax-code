@@ -16,6 +16,7 @@ type renderMode = ui.Mode
 
 const (
 	renderModeAuto  = ui.ModeAuto
+	renderModeApp   = ui.ModeApp
 	renderModeLive  = ui.ModeLive
 	renderModeTUI   = ui.ModeStructured
 	renderModePlain = ui.ModePlain
@@ -30,10 +31,11 @@ func renderEventsWithMode(w io.Writer, events <-chan memaxagent.Event, mode rend
 }
 
 func renderEventsWithModeObserved(w io.Writer, events <-chan memaxagent.Event, mode renderMode, observe func(memaxagent.Event)) error {
-	terminal, width := terminalWriterInfo(w)
+	terminal, width, height := terminalWriterInfo(w)
 	mode = ui.ResolveMode(mode, terminal)
 	renderer, err := ui.SelectRenderer(mode, ui.Renderers{
 		Plain:      &renderState{},
+		App:        &appRenderState{width: width, height: height},
 		Live:       &liveRenderState{statusWidth: width},
 		Structured: &tuiRenderState{},
 	})
@@ -43,20 +45,28 @@ func renderEventsWithModeObserved(w io.Writer, events <-chan memaxagent.Event, m
 	return renderWithObserved(w, events, renderer, observe)
 }
 
-func terminalWriterInfo(w io.Writer) (bool, int) {
+func terminalWriterInfo(w io.Writer) (bool, int, int) {
 	file, ok := w.(*os.File)
 	if !ok {
-		return false, 0
+		return false, 0, 0
 	}
 	fd := int(file.Fd())
 	if !term.IsTerminal(fd) {
-		return false, 0
+		return false, 0, 0
 	}
-	width, _, err := term.GetSize(fd)
-	if err != nil || width <= 1 {
-		return true, 0
+	width, height, err := term.GetSize(fd)
+	if err != nil {
+		return true, 0, 0
 	}
-	return true, width - 1
+	if width <= 1 {
+		width = 0
+	} else {
+		width--
+	}
+	if height <= 0 {
+		height = 0
+	}
+	return true, width, height
 }
 
 func renderEvents(w io.Writer, events <-chan memaxagent.Event) error {

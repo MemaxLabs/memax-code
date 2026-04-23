@@ -108,6 +108,23 @@ func TestRenderEventsWithModeLiveFallsBackToPlainForNonTerminal(t *testing.T) {
 	}
 }
 
+func TestRenderEventsWithModeAppFallsBackToPlainForNonTerminal(t *testing.T) {
+	events := make(chan memaxagent.Event, 2)
+	events <- memaxagent.Event{
+		Kind:    memaxagent.EventAssistant,
+		Message: &model.Message{Content: []model.ContentBlock{{Type: model.ContentText, Text: "hello"}}},
+	}
+	close(events)
+
+	var out bytes.Buffer
+	if err := renderEventsWithMode(&out, events, renderModeApp); err != nil {
+		t.Fatalf("renderEventsWithMode() error = %v", err)
+	}
+	if got := out.String(); got != "hello" {
+		t.Fatalf("render output = %q, want plain fallback", got)
+	}
+}
+
 func TestTerminalWriterInfoUsesPTYWidth(t *testing.T) {
 	ptmx, tty, err := pty.Open()
 	if err != nil {
@@ -119,12 +136,15 @@ func TestTerminalWriterInfoUsesPTYWidth(t *testing.T) {
 	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 10, Cols: 37}); err != nil {
 		t.Skipf("set pty size: %v", err)
 	}
-	terminal, width := terminalWriterInfo(ptmx)
+	terminal, width, height := terminalWriterInfo(ptmx)
 	if !terminal {
 		t.Fatal("terminalWriterInfo() terminal = false, want true")
 	}
 	if width != 36 {
 		t.Fatalf("terminalWriterInfo() width = %d, want 36", width)
+	}
+	if height != 10 {
+		t.Fatalf("terminalWriterInfo() height = %d, want 10", height)
 	}
 }
 
@@ -174,6 +194,137 @@ func TestRenderTUIEventsPrintsStructuredSectionsAndStatus(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("tui output missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestAppRenderEventsDrawsDashboardPanels(t *testing.T) {
+	events := make(chan memaxagent.Event, 8)
+	events <- memaxagent.Event{Kind: memaxagent.EventSessionStarted, SessionID: "00000000-0000-7000-8000-000000000001"}
+	events <- memaxagent.Event{
+		Kind:    memaxagent.EventAssistant,
+		Message: &model.Message{Content: []model.ContentBlock{{Type: model.ContentText, Text: "I will inspect the failure."}}},
+	}
+	events <- memaxagent.Event{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{Name: "start_command"}}
+	events <- memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Command:   "npm test -- --watch",
+		PID:       123,
+	}}
+	events <- memaxagent.Event{Kind: memaxagent.EventVerification, Verification: &memaxagent.VerificationEvent{
+		Name:   "npm test",
+		Passed: true,
+	}}
+	close(events)
+
+	var out bytes.Buffer
+	renderer := &appRenderState{
+		width:     90,
+		height:    18,
+		startedAt: time.Date(2026, 4, 22, 19, 0, 0, 0, time.UTC),
+		now:       func() time.Time { return time.Date(2026, 4, 22, 19, 0, 3, 0, time.UTC) },
+	}
+	if err := renderWith(&out, events, renderer); err != nil {
+		t.Fatalf("renderWith(app) error = %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		appClearScreen,
+		"Memax Code | phase=running | elapsed=3s | tools=1 commands=1 checks=1",
+		"[active]",
+		"tool: start_command",
+		"command: id=cmd-1 status=running pid=123 command=npm test -- --watch",
+		"[recent]",
+		"command_status: id=cmd-1 status=running pid=123 command=npm test -- --watch",
+		"verification: npm test",
+		"[transcript]",
+		"I will inspect the failure.",
+		"Ctrl+C cancel | /help commands | --ui tui for scrollback logs",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("app output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestAppRenderRedrawsErrorBeforeReturning(t *testing.T) {
+	wantErr := errors.New("boom")
+	var out bytes.Buffer
+	renderer := &appRenderState{width: 80, height: 16}
+
+	err := renderer.Render(&out, memaxagent.Event{Kind: memaxagent.EventError, Err: wantErr})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Render() error = %v, want %v", err, wantErr)
+	}
+	got := out.String()
+	for _, want := range []string{
+		appClearScreen,
+		"Memax Code | phase=error",
+		"[error]",
+		"boom",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("app output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestAppRenderSuppressesStructuredTranscriptHeader(t *testing.T) {
+	var out bytes.Buffer
+	renderer := &appRenderState{width: 80, height: 14}
+
+	if err := renderer.Render(&out, memaxagent.Event{Kind: memaxagent.EventSessionStarted, SessionID: "00000000-0000-7000-8000-000000000001"}); err != nil {
+		t.Fatalf("Render(session) error = %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "[transcript]\nMemax Code") {
+		t.Fatalf("app output includes duplicate transcript header:\n%s", got)
+	}
+	if !strings.Contains(got, "id: 00000000-0000-7000-8000-000000000001") {
+		t.Fatalf("app output missing transcript body:\n%s", got)
+	}
+}
+
+func TestAppRenderFrameHonorsConfiguredHeight(t *testing.T) {
+	renderer := &appRenderState{width: 60, height: 10}
+	renderer.transcriptTail.append("line one\nline two\nline three\nline four\n")
+	activity := activitySnapshot{
+		Phase:      "running",
+		ActiveTool: "run_command",
+		ActiveCommands: []commandActivity{
+			{ID: "cmd-1", Command: "go test ./...", Status: "running", Seen: 1},
+			{ID: "cmd-2", Command: "go vet ./...", Status: "running", Seen: 2},
+			{ID: "cmd-3", Command: "go test ./internal/cli", Status: "running", Seen: 3},
+			{ID: "cmd-4", Command: "go test ./internal/cli/ui", Status: "running", Seen: 4},
+		},
+		LastCommandState: "id=cmd-4 status=running command=go test ./internal/cli/ui",
+		LastVerification: "go test ./...",
+	}
+
+	lines := renderer.frameLines(activity, renderer.panelWidth(), renderer.panelHeight())
+	if len(lines) > renderer.height {
+		t.Fatalf("frame height = %d, want <= %d:\n%s", len(lines), renderer.height, strings.Join(lines, "\n"))
+	}
+	if lines[len(lines)-1] != "Ctrl+C cancel | /help commands | --ui tui for scrollback logs" {
+		t.Fatalf("last line = %q, want footer", lines[len(lines)-1])
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "... 1 more active commands") {
+		t.Fatalf("frame missing active command overflow marker:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+func TestAppTranscriptTailBoundsStoredLinesAndKeepsPartial(t *testing.T) {
+	var tail appTranscriptTail
+	tail.limit = 3
+	tail.append("one\ntwo\n")
+	tail.append("three\nfour\npartial")
+
+	got := tail.lines(10)
+	want := []string{"two", "three", "four", "partial"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("tail lines = %#v, want %#v", got, want)
+	}
+	if len(tail.entries) != 3 {
+		t.Fatalf("stored line count = %d, want 3", len(tail.entries))
 	}
 }
 
