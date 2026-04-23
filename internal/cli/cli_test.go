@@ -1489,6 +1489,8 @@ func TestRunInteractiveRejectsPromptAndConflictingFlags(t *testing.T) {
 		{"--interactive", "--list-sessions"},
 		{"--interactive", "--show-session", "latest"},
 		{"--interactive", "--inspect-tools"},
+		{"--interactive", "--ui", "app"},
+		{"--interactive", "--ui", "APP"},
 	} {
 		var stdout, stderr bytes.Buffer
 		err := RunWithIO(context.Background(), append(args, "--session-dir", t.TempDir()), strings.NewReader("/quit\n"), &stdout, &stderr)

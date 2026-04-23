@@ -126,6 +126,11 @@ Start an interactive shell:
 memax-code --interactive --ui live
 ```
 
+`--interactive --ui app` is intentionally rejected for now. The app shell owns
+an inline dashboard surface, while the interactive shell still uses a separate
+line editor; mixing them on the same terminal produces broken redraws instead
+of one coherent interface.
+
 Inside the shell, type normal prompts to continue the current session. Slash
 commands control local session state without calling a model:
 
@@ -215,11 +220,12 @@ pre-existing scrollback remains available, while the dashboard keeps only a
 bounded transcript viewport and marks hidden earlier/newer lines. In real
 terminals, `--ui app` accepts Up/Down for line scrolling, PageUp/PageDown for
 page scrolling, Home/End to jump between the oldest visible page and the live
-tail, and `?` to toggle an in-app keybinding overlay. Use `--ui tui` when full
-session scrollback matters. `--ui live` is the lighter-weight status line mode;
-it reports phase, elapsed time, tool errors, active tool, command, approval,
-compact activity counts, and usage while preserving the sectioned transcript
-underneath.
+tail, and `?` to toggle an in-app keybinding overlay. It is currently a
+single-prompt renderer, not the interactive shell surface. Use `--ui tui` when
+full session scrollback matters. `--ui live` is the lighter-weight status line
+mode; it reports phase, elapsed time, tool errors, active tool, command,
+approval, compact activity counts, and usage while preserving the sectioned
+transcript underneath.
 Operational events are rendered as a compact `[activity]` timeline so tool
 calls, command lifecycle, approvals, workspace edits, verification, and errors
 remain easy to scan without losing assistant text. The structured renderer ends

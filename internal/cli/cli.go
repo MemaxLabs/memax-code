@@ -222,6 +222,13 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	effortSetting := stringSetting(*effort, flagWasSet(fs, "effort"), "MEMAX_CODE_EFFORT", cfg.Effort, "")
 	presetSetting := stringSetting(*preset, flagWasSet(fs, "preset"), "MEMAX_CODE_PRESET", cfg.Preset, "interactive_dev")
 	uiSetting := stringSetting(*uiRaw, flagWasSet(fs, "ui"), "MEMAX_CODE_UI", cfg.UI, string(renderModeAuto))
+	ui, err := parseRenderMode(uiSetting.Value)
+	if err != nil {
+		if uiSetting.Source == settingSourceConfig {
+			return options{}, fmt.Errorf("invalid config %s ui: %w", configPath, err)
+		}
+		return options{}, err
+	}
 	inheritEnv, err := boolSetting(*inheritCommandEnv, flagWasSet(fs, "inherit-command-env"), "MEMAX_CODE_INHERIT_COMMAND_ENV", cfg.InheritCommandEnv, false)
 	if err != nil {
 		return options{}, err
@@ -260,6 +267,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		if opts.Prompt != "" {
 			return options{}, fmt.Errorf("--interactive does not accept an initial prompt; type it after the shell starts")
 		}
+		if ui == renderModeApp {
+			return options{}, fmt.Errorf("--interactive cannot be combined with --ui app; use --ui live, --ui tui, or --ui plain until the app shell owns the interactive prompt surface")
+		}
 		opts.Interactive = true
 	}
 	if opts.Preset == "" {
@@ -296,13 +306,6 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		if opts.Prompt != "" {
 			return options{}, fmt.Errorf("--inspect-tools does not accept a prompt")
 		}
-	}
-	ui, err := parseRenderMode(uiSetting.Value)
-	if err != nil {
-		if uiSetting.Source == settingSourceConfig {
-			return options{}, fmt.Errorf("invalid config %s ui: %w", configPath, err)
-		}
-		return options{}, err
 	}
 	opts.UI = ui
 	return opts, nil
