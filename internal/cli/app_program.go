@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -15,18 +17,18 @@ import (
 )
 
 const (
-	appProgramSidebarWidth = 34
-	appProgramMinComposer  = 3
+	appProgramMinComposer = 3
 )
 
 var (
-	appProgramChromeStyle = lipgloss.NewStyle().Padding(0, 1)
-	appProgramPanelStyle  = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				Padding(0, 1)
-	appProgramTitleStyle = lipgloss.NewStyle().Bold(true)
-	appProgramMutedStyle = lipgloss.NewStyle().Faint(true)
-	appProgramErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	appProgramBrandStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
+	appProgramTitleStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	appProgramMutedStyle      = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("244"))
+	appProgramErrorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	appProgramAccentStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
+	appProgramSidebarKeyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("249")).Bold(true)
+	appProgramRuleStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	appProgramComposerStyle   = lipgloss.NewStyle().Padding(0, 1)
 )
 
 type appProgramKeyMap struct {
@@ -125,12 +127,20 @@ type appProgramModel struct {
 
 func newAppProgramModel(ctx context.Context, opts options, runPrompt interactivePromptRunner) *appProgramModel {
 	input := textarea.New()
-	input.Prompt = "memax> "
+	input.Prompt = "› "
 	input.Placeholder = "Ask Memax Code to inspect, change, or verify the repo"
 	input.ShowLineNumbers = false
 	input.SetHeight(appProgramMinComposer)
 	input.FocusedStyle.Base = lipgloss.NewStyle()
 	input.BlurredStyle.Base = lipgloss.NewStyle()
+	input.FocusedStyle.Placeholder = appProgramMutedStyle
+	input.FocusedStyle.Prompt = appProgramAccentStyle
+	input.SetPromptFunc(2, func(lineIdx int) string {
+		if lineIdx == 0 {
+			return "› "
+		}
+		return "· "
+	})
 	input.Focus()
 
 	vp := viewport.New(0, 0)
@@ -382,34 +392,20 @@ func (m *appProgramModel) resize() {
 	if height <= 0 {
 		height = defaultAppShellHeight
 	}
-	sidebarWidth := appProgramSidebarWidth
-	if width < 88 {
-		sidebarWidth = max(24, width/3)
-	}
-	mainWidth := max(24, width-sidebarWidth-1)
-	if width < 72 {
-		mainWidth = width
-		sidebarWidth = width
-	}
 	composerHeight := max(appProgramMinComposer, min(8, max(3, strings.Count(m.input.Value(), "\n")+2)))
 	if m.showHelp {
-		composerHeight = max(composerHeight, 4)
+		composerHeight = max(composerHeight, 5)
 	}
-	bodyHeight := max(8, height-composerHeight-4)
-	if width >= 72 {
-		m.viewport.Width = mainWidth - appProgramPanelStyle.GetHorizontalFrameSize()
-		m.viewport.Height = bodyHeight - appProgramPanelStyle.GetVerticalFrameSize()
-	} else {
-		m.viewport.Width = mainWidth - appProgramPanelStyle.GetHorizontalFrameSize()
-		m.viewport.Height = max(6, bodyHeight/2) - appProgramPanelStyle.GetVerticalFrameSize()
-	}
+	bodyHeight := max(8, height-composerHeight-7)
+	m.viewport.Width = width
+	m.viewport.Height = bodyHeight
 	if m.viewport.Width < 1 {
 		m.viewport.Width = 1
 	}
 	if m.viewport.Height < 1 {
 		m.viewport.Height = 1
 	}
-	m.input.SetWidth(max(12, width-appProgramPanelStyle.GetHorizontalFrameSize()-2))
+	m.input.SetWidth(max(12, width-2))
 	m.input.SetHeight(composerHeight)
 	m.refreshViewport(false)
 }
@@ -420,11 +416,12 @@ func (m *appProgramModel) View() string {
 		width = defaultAppShellWidth
 	}
 
-	header := appProgramTitleStyle.Render("Memax Code") + appProgramMutedStyle.Render(" | ") + m.headerStatus()
+	header := appProgramBrandStyle.Render("Memax Code") + appProgramMutedStyle.Render("  ") + m.headerStatus()
 	body := m.bodyView(width)
+	status := m.statusView()
 	composer := m.composerView(width)
-	footer := m.help.View(m.keys)
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, composer, footer)
+	footer := appProgramMutedStyle.Render(m.help.View(m.keys))
+	return lipgloss.JoinVertical(lipgloss.Left, header, appProgramRule(width), body, appProgramRule(width), status, composer, appProgramRule(width), footer)
 }
 
 func (m *appProgramModel) headerStatus() string {
@@ -435,42 +432,56 @@ func (m *appProgramModel) headerStatus() string {
 	if m.opts.Model != "" {
 		parts = append(parts, "model="+m.opts.Model)
 	}
+	if base := filepath.Base(m.opts.CWD); base != "" && base != "." && base != string(filepath.Separator) {
+		parts = append(parts, "dir="+base)
+	}
 	return strings.Join(parts, " | ")
 }
 
 func (m *appProgramModel) bodyView(width int) string {
-	main := appProgramPanelStyle.Width(max(24, m.viewport.Width+appProgramPanelStyle.GetHorizontalFrameSize())).Render(
-		appProgramTitleStyle.Render("[transcript]") + "\n" + m.viewport.View(),
-	)
-	sidebar := appProgramPanelStyle.Width(min(appProgramSidebarWidth, max(24, width/3))).Render(m.sidebarView())
-	if width < 72 {
-		return lipgloss.JoinVertical(lipgloss.Left, main, sidebar)
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, main, sidebar)
+	return lipgloss.NewStyle().Width(width).Render(
+		appProgramTitleStyle.Render("Conversation") + "\n" +
+			appProgramMutedStyle.Render(m.transcriptStatusLine()) + "\n" +
+			m.viewport.View())
 }
 
-func (m *appProgramModel) sidebarView() string {
-	sections := []string{
-		appProgramTitleStyle.Render("[session]") + "\n" + nonEmptyOr(m.sessionID, "none"),
-		appProgramTitleStyle.Render("[workspace]") + "\n" + m.opts.CWD,
-		appProgramTitleStyle.Render("[composer]") + "\n" + m.composer.statusLine(),
+func (m *appProgramModel) statusView() string {
+	parts := []string{
+		appProgramSidebarKeyStyle.Render("Session") + " " + nonEmptyOr(m.sessionID, "none"),
+		appProgramSidebarKeyStyle.Render("Workspace") + " " + filepath.Base(m.opts.CWD),
+		appProgramSidebarKeyStyle.Render("Composer") + " " + m.composer.statusLine(),
 	}
 	if m.lastError != "" {
-		sections = append(sections, appProgramErrorStyle.Render(appProgramTitleStyle.Render("[error]")+"\n"+m.lastError))
+		parts = append(parts, appProgramErrorStyle.Render("Error "+m.lastError))
 	}
+	lines := []string{strings.Join(parts, appProgramMutedStyle.Render("  •  "))}
 	if m.showHelp {
-		sections = append(sections, appProgramTitleStyle.Render("[help]")+"\n"+
-			"/help /status /session /pick /show /sessions /resume /new /draft /submit /cancel /quit")
+		lines = append(lines, appProgramMutedStyle.Render("/help /status /session /pick /show /sessions /resume /new /draft /submit /cancel /quit"))
 	}
-	return strings.Join(sections, "\n\n")
+	return strings.Join(lines, "\n")
 }
 
 func (m *appProgramModel) composerView(width int) string {
-	title := "[composer]"
+	title := "Ready"
 	if m.running {
-		title = "[composer] waiting for current run"
+		title = "Running"
 	}
-	return appProgramPanelStyle.Width(width).Render(appProgramTitleStyle.Render(title) + "\n" + m.input.View())
+	head := appProgramTitleStyle.Render(title)
+	if m.composer.draftActive {
+		head += appProgramMutedStyle.Render("  draft mode")
+	}
+	return appProgramComposerStyle.Width(width).Render(head + "\n" + m.input.View())
+}
+
+func (m *appProgramModel) transcriptStatusLine() string {
+	lines := m.transcript.lines(maxAppTranscriptLines)
+	if len(lines) == 0 {
+		return "idle"
+	}
+	if m.viewport.AtBottom() {
+		return "live tail · " + strconv.Itoa(len(lines)) + " lines"
+	}
+	return "scrollback · " + strconv.Itoa(len(lines)) + " lines"
 }
 
 func nonEmptyOr(value, fallback string) string {
@@ -496,14 +507,10 @@ func (w *appProgramTranscriptWriter) Write(p []byte) (int, error) {
 
 func runInteractiveApp(ctx context.Context, stdin io.Reader, stdout io.Writer, opts options, runPrompt interactivePromptRunner) error {
 	model := newAppProgramModel(ctx, opts, runPrompt)
-	terminal, _, _ := terminalWriterInfo(stdout)
 	programOpts := []tea.ProgramOption{
 		tea.WithInput(stdin),
 		tea.WithOutput(stdout),
 		tea.WithContext(ctx),
-	}
-	if terminal {
-		programOpts = append(programOpts, tea.WithAltScreen())
 	}
 	program := tea.NewProgram(model, programOpts...)
 	model.program = program
@@ -515,4 +522,11 @@ func runInteractiveApp(ctx context.Context, stdin io.Reader, stdout io.Writer, o
 		return result.firstErr
 	}
 	return nil
+}
+
+func appProgramRule(width int) string {
+	if width <= 0 {
+		width = defaultAppShellWidth
+	}
+	return appProgramRuleStyle.Render(strings.Repeat("─", max(8, width)))
 }

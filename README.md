@@ -33,7 +33,9 @@ for interactive terminals and plain rendering for logs, tests, and pipes.
 `--ui app` is still available when you want to be explicit, but it is now the
 default human-facing terminal surface. The interactive app shell is a dedicated
 terminal program with a transcript viewport, sidebar status, and a persistent
-bottom composer instead of a prompt loop painted over ad hoc redraws.
+bottom composer instead of a prompt loop painted over ad hoc redraws. It runs
+inline instead of taking over the alternate screen, so terminal scrollback
+remains available while the shell is active.
 `--ui live` keeps a lighter live status line while preserving the sectioned
 transcript underneath.
 The interactive shell keeps `/help`, `/session`, `/pick`, `/sessions`,
@@ -129,6 +131,7 @@ to be explicit in scripts, wrappers, or docs.
 
 `--interactive --ui app` now runs as a dedicated terminal program. Transcript,
 session state, slash-command output, and composer state all live on one surface.
+The shell redraws inline rather than switching to an alternate screen buffer.
 
 Inside the shell, type normal prompts to continue the current session. Slash
 commands control local session state without calling a model:
@@ -230,9 +233,9 @@ scripts never receive terminal control sequences. The non-interactive app
 renderer keeps the bounded transcript viewport and dashboard-style status for
 single prompts. The interactive app shell now runs as a full Bubble Tea
 program with a transcript viewport, sidebar, and persistent composer on one
-surface. This is still Foundation terminal UX, not yet the full coding-agent
-timeline/composer product surface. Use `--ui tui` when full session scrollback
-matters.
+surface while preserving terminal scrollback. This is still Foundation terminal
+UX, not yet the full coding-agent timeline/composer product surface. Use
+`--ui tui` when full session scrollback matters.
 `--ui live` is the lighter-weight status line mode; it reports phase, elapsed
 time, tool errors, active tool, command, approval, compact activity counts, and
 usage while preserving the sectioned transcript underneath.

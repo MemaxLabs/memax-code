@@ -1326,16 +1326,17 @@ func TestRunResumeWithoutPromptStartsInteractiveShellOnTerminalIO(t *testing.T) 
 	}
 	out := output.String()
 	for _, want := range []string{
-		"[transcript]",
-		"[session]",
+		"Conversation",
 		sess.ID,
 		"session: " + sess.ID,
-		"[composer]",
 		"bye",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("interactive output missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "\x1b[?1049h") {
+		t.Fatalf("interactive output entered alt screen:\n%s", out)
 	}
 }
 
@@ -1387,14 +1388,17 @@ func TestRunWithoutPromptStartsAppShellOnTerminalIO(t *testing.T) {
 	}
 	out := output.String()
 	for _, want := range []string{
-		"[transcript]",
+		"Conversation",
 		"Memax Code interactive shell",
-		"[composer]",
+		"Session none",
 		"bye",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("interactive output missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "\x1b[?1049h") {
+		t.Fatalf("interactive output entered alt screen:\n%s", out)
 	}
 }
 
@@ -1730,17 +1734,19 @@ func TestRunInteractiveAppUsesSingleOutputSurface(t *testing.T) {
 
 	out := output.String()
 	for _, want := range []string{
-		"[transcript]",
-		"[session]",
+		"Conversation",
 		"none",
-		"[composer]",
-		"draft: inactive",
+		"Session none",
+		"Composer draft: inactive",
 		"/quit              exit",
 		"bye",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("interactive app stdout missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "\x1b[?1049h") {
+		t.Fatalf("interactive app stdout entered alt screen:\n%s", out)
 	}
 }
 
@@ -1806,7 +1812,7 @@ func TestRunInteractiveAppCapturesPromptRunTranscript(t *testing.T) {
 
 	out := output.String()
 	for _, want := range []string{
-		"[session]",
+		"Conversation",
 		"00000000-0000-7000-8000-000000000123",
 		"[assistant]",
 		"working on it",
@@ -1817,6 +1823,9 @@ func TestRunInteractiveAppCapturesPromptRunTranscript(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("interactive app stdout missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "\x1b[?1049h") {
+		t.Fatalf("interactive app stdout entered alt screen:\n%s", out)
 	}
 }
 
