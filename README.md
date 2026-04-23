@@ -20,8 +20,8 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
   and transcript inspection
 - dry-run configuration inspection
 - local setup diagnostics with `memax-code doctor`
-- a line-oriented interactive shell with slash commands and multi-line draft
-  submission for session control
+- a line-oriented interactive shell with slash commands, multi-line draft
+  submission, and in-shell prompt history recall
 - event-stream rendering for assistant text, tool calls, command lifecycle,
   workspace edits, verification, usage, and final results, with `auto`, `live`,
   `app`, `tui`, and `plain` renderer modes
@@ -34,9 +34,10 @@ lighter live status line while preserving the sectioned transcript underneath.
 The status surfaces track active tools, active command sessions, recent command
 outcomes, approvals, patches, and verification checks. `--interactive` starts a
 prompt loop with `/help`, `/session`, `/pick`, `/sessions`, `/resume`, `/draft`,
-`/append`, `/show-draft`, `/submit`, `/cancel`, `/new`, and `/quit`. It does
-not yet ship sandboxed OS execution or the full raw-key composer expected from a
-mature coding-agent CLI. Those are product slices on top of this foundation.
+`/append`, `/show-draft`, `/submit`, `/cancel`, `/history`, `/recall`, `/new`,
+and `/quit`. It does not yet ship sandboxed OS execution or the full raw-key
+composer expected from a mature coding-agent CLI. Those are product slices on
+top of this foundation.
 
 ## Usage
 
@@ -128,6 +129,8 @@ commands control local session state without calling a model:
 /append Preserve public API behavior
 /show-draft
 /submit
+/history
+/recall latest
 /session
 /new
 /quit
@@ -138,6 +141,8 @@ Use `//` when a normal prompt needs to start with `/`, for example
 are accumulated until `/submit`; use `/cancel` to discard the draft. Slash
 commands inside a draft must start at the beginning of the line, so indented
 paths and code snippets such as `  /etc/hosts` stay in the draft.
+Submitted prompts are remembered for the current shell; use `/history` and
+`/recall N` to restore one into the draft before editing and submitting again.
 
 Resume an earlier conversation:
 

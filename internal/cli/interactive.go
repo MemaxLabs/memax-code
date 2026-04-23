@@ -73,8 +73,9 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 			rawLine = strings.TrimSpace(unescapeInteractivePrompt(rawLine))
 		}
 
+		promptText := rawLine
 		turnOpts := opts
-		turnOpts.Prompt = rawLine
+		turnOpts.Prompt = promptText
 		turnOpts.ResumeSessionID = currentSession
 		sessionID, err := runPrompt(ctx, stdout, turnOpts)
 		if err != nil {
@@ -90,6 +91,7 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 		if sessionID != "" {
 			currentSession = sessionID
 		}
+		composer.history.Record(promptText)
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read interactive input: %w", err)
@@ -148,6 +150,22 @@ func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, cu
 		fmt.Fprintf(w, "draft appended: lines=%d\n", composer.lineCount())
 	case "/draft-show", "/show-draft":
 		printInteractiveDraft(w, composer)
+	case "/history":
+		printInteractivePromptHistory(w, composer)
+	case "/recall":
+		if composer == nil {
+			fmt.Fprintln(w, "drafts are unavailable")
+			return interactiveCommandResult{}
+		}
+		text, discardedLines, ok := composer.recall(arg)
+		if !ok {
+			fmt.Fprintln(w, "no matching prompt history")
+			return interactiveCommandResult{}
+		}
+		if discardedLines > 0 {
+			fmt.Fprintf(w, "discarded draft: lines=%d\n", discardedLines)
+		}
+		fmt.Fprintf(w, "recalled prompt: lines=%d chars=%d\n", strings.Count(text, "\n")+1, len([]rune(text)))
 	case "/cancel":
 		if composer == nil || !composer.draftActive {
 			fmt.Fprintln(w, "no active draft")
@@ -361,6 +379,8 @@ func printInteractiveHelp(w io.Writer) {
 	fmt.Fprintln(w, "  /show-draft        show the active draft")
 	fmt.Fprintln(w, "  /submit            send the active draft")
 	fmt.Fprintln(w, "  /cancel            discard the active draft")
+	fmt.Fprintln(w, "  /history           list prompts submitted in this shell")
+	fmt.Fprintln(w, "  /recall [N|latest] recall a prompt into the draft")
 	fmt.Fprintln(w, "  /quit              exit")
 	fmt.Fprintln(w, "  //PROMPT           send a prompt that starts with /")
 }

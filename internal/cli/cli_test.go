@@ -1044,6 +1044,95 @@ func TestRunInteractiveSubmitsDraftAsOnePrompt(t *testing.T) {
 	}
 }
 
+func TestRunInteractivePromptHistoryRecall(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	var prompts []string
+	err := runInteractiveWithRunner(
+		context.Background(),
+		strings.NewReader("first prompt\n/draft second\nline\n/submit\n/history\n/recall 2\n/show-draft\n/quit\n"),
+		&stdout,
+		&stderr,
+		options{SessionDir: t.TempDir(), UI: renderModePlain},
+		func(_ context.Context, w io.Writer, opts options) (string, error) {
+			prompts = append(prompts, opts.Prompt)
+			fmt.Fprintf(w, "ran %d\n", len(prompts))
+			return fmt.Sprintf("00000000-0000-7000-8000-%012d", len(prompts)), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("runInteractiveWithRunner() error = %v", err)
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("submitted prompts = %#v, want two prompts", prompts)
+	}
+	if prompts[0] != "first prompt" || prompts[1] != "second\nline" {
+		t.Fatalf("submitted prompts = %#v", prompts)
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"prompt history:",
+		"1) second line",
+		"2) first prompt",
+		"recalled prompt: lines=1 chars=12",
+		"draft:",
+		"  first prompt",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunInteractivePromptHistorySkipsFailedDraftSubmit(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := runInteractiveWithRunner(
+		context.Background(),
+		strings.NewReader("/draft failing\n/submit\n/history\n/quit\n"),
+		&stdout,
+		&stderr,
+		options{SessionDir: t.TempDir(), UI: renderModePlain},
+		func(_ context.Context, w io.Writer, opts options) (string, error) {
+			return "", fmt.Errorf("boom")
+		},
+	)
+	if err == nil {
+		t.Fatal("runInteractiveWithRunner() error = nil, want prompt failure")
+	}
+	out := stderr.String()
+	if strings.Contains(out, "1) failing") {
+		t.Fatalf("failed draft submit was recorded in history:\n%s", out)
+	}
+	if !strings.Contains(out, "no prompt history") {
+		t.Fatalf("interactive stderr missing empty history message:\n%s", out)
+	}
+}
+
+func TestRunInteractiveRecallWarnsBeforeReplacingDraft(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := runInteractiveWithRunner(
+		context.Background(),
+		strings.NewReader("old prompt\n/draft new work\n/recall latest\n/quit\n"),
+		&stdout,
+		&stderr,
+		options{SessionDir: t.TempDir(), UI: renderModePlain},
+		func(_ context.Context, w io.Writer, opts options) (string, error) {
+			return "00000000-0000-7000-8000-000000000123", nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("runInteractiveWithRunner() error = %v", err)
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"discarded draft: lines=1",
+		"recalled prompt: lines=1 chars=10",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestRunInteractiveStatus(t *testing.T) {
 	ctx := context.Background()
 	sessionDir := t.TempDir()
