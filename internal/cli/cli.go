@@ -112,7 +112,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	inspectTools := fs.Bool("inspect-tools", false, "print the model-facing tool contract and exit")
 	interactive := false
 	verifyCommandsFlag := newVerifyCommandsFlag()
-	fs.BoolVar(&interactive, "interactive", false, "start a line-oriented interactive shell")
+	fs.BoolVar(&interactive, "interactive", false, "start the interactive terminal shell")
 	fs.BoolVar(&interactive, "i", false, "alias for --interactive")
 	fs.Var(verifyCommandsFlag, "verify-command", "add a verification command as name=command; repeat for test, lint, typecheck, or default (default wins over test for empty/default requests)")
 	fs.Var(cwd, "C", "alias for --cwd")

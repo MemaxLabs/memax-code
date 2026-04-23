@@ -19,12 +19,10 @@ const (
 )
 
 type appRenderState struct {
-	// The first app shell reuses the structured transcript renderer as its
-	// transcript model. Keep the buffered tail bounded here so a richer
-	// event-native transcript model can replace it without changing UI modes.
-	// When the app shell graduates to a full Bubble Tea program, consolidate the
-	// current hand-rolled transcript viewport with the framework viewport model
-	// instead of maintaining both scroll systems in parallel.
+	// The non-interactive app renderer still reuses the structured transcript
+	// renderer as its transcript model. Keep the buffered tail bounded here so
+	// an event-native transcript model can replace it without changing CLI
+	// contracts.
 	transcriptRenderer       tuiRenderState
 	transcriptTail           appTranscriptTail
 	transcriptHeaderStripped bool

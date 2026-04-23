@@ -20,39 +20,30 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
   and transcript inspection
 - dry-run configuration inspection
 - local setup diagnostics with `memax-code doctor`
-- an interactive shell with slash commands, multi-line draft submission,
-  persistent prompt history recall, and terminal raw-key line editing when
-  stdin and stderr are TTYs
+- an interactive shell with slash commands, prompt history recall, and a
+  dedicated terminal app surface for transcript, status, and composer state
 - event-stream rendering for assistant text, tool calls, command lifecycle,
   workspace edits, verification, usage, and final results, with `auto`, `live`,
   `app`, `tui`, and `plain` renderer modes
 - a machine-readable event stream with `--event-stream json` for wrappers,
   editors, and future GUI clients
 
-The CLI now has the first terminal UI foundation: `auto` chooses app mode for
-interactive terminals and plain rendering for logs, tests, and pipes.
+The CLI now has the first real terminal UI foundation: `auto` chooses app mode
+for interactive terminals and plain rendering for logs, tests, and pipes.
 `--ui app` is still available when you want to be explicit, but it is now the
-default human-facing terminal surface. The app shell provides stable
-active-work, attention, recent-activity, a bounded transcript viewport, and
-footer controls in a persistent sidebar-plus-transcript shell.
+default human-facing terminal surface. The interactive app shell is a dedicated
+terminal program with a transcript viewport, sidebar status, and a persistent
+bottom composer instead of a prompt loop painted over ad hoc redraws.
 `--ui live` keeps a lighter live status line while preserving the sectioned
 transcript underneath.
-The status surfaces track active tools, active command sessions, recent command
-outcomes, approvals, patches, and verification checks. `--interactive` starts a
-prompt loop with `/help`, `/session`, `/pick`, `/sessions`, `/resume`, `/draft`,
-`/append`, `/show-draft`, `/submit`, `/cancel`, `/history`, `/recall`, `/new`,
-and `/quit`. In real terminals it enables raw-key editing for the current input
-line: Left/Right move the cursor, Home/End or Ctrl+A/Ctrl+E jump to line
-boundaries, Backspace/Delete edit in place, Up/Down traverse in-shell prompt
-history, Ctrl+C clears the current input, and Ctrl+D exits from an empty line.
-Submitted prompts are stored as text-only JSONL history, separate from session
-transcripts, so recall works across interactive shell restarts. The raw-key
-reader is intentionally still a single-line Foundation editor:
-multi-line submissions use `/draft` and `/append`, pasted newlines submit the
-current line, standalone ESC waits for a following key, and very long wrapped
-lines can redraw imperfectly. It does not yet ship sandboxed OS execution or
-the full-screen composer expected from a mature coding-agent CLI. Those are
-product slices on top of this foundation.
+The interactive shell keeps `/help`, `/session`, `/pick`, `/sessions`,
+`/resume`, `/draft`, `/append`, `/show-draft`, `/submit`, `/cancel`,
+`/history`, `/recall`, `/new`, and `/quit`. Submitted prompts are stored as
+text-only JSONL history, separate from session transcripts, so recall works
+across interactive shell restarts. The app shell is still Foundation quality:
+it now has the right single-surface program structure, but the richer coding
+agent timeline, approvals queue, and deeper composer behavior are still follow-on
+product slices.
 
 ## Usage
 
@@ -136,10 +127,8 @@ On a real terminal, running `memax-code` with no prompt opens the interactive
 shell automatically. `--interactive` remains useful when you want that behavior
 to be explicit in scripts, wrappers, or docs.
 
-`--interactive --ui app` now uses a single terminal surface. Prompts, slash
-commands, session state, composer state, and query transcript all go through
-the same app shell surface so the dashboard and the shell stop fighting over
-the terminal.
+`--interactive --ui app` now runs as a dedicated terminal program. Transcript,
+session state, slash-command output, and composer state all live on one surface.
 
 Inside the shell, type normal prompts to continue the current session. Slash
 commands control local session state without calling a model:
@@ -179,13 +168,10 @@ writes and compaction use an adjacent lock file. When the history grows past
 oversized, and very large new prompts are skipped for recall. Custom history
 paths create a sibling `.lock` file; ignore both files when the path is inside
 a project checkout.
-When stdin and stderr are terminals, the prompt line also supports shell-style
-editing keys: Up/Down for prompt history, Left/Right for cursor movement,
-Home/End or Ctrl+A/Ctrl+E for line boundaries, Backspace/Delete for local
-editing, Ctrl+C to clear the current input, and Ctrl+D to exit from an empty
-line. Multi-line prompts still use `/draft` and `/append`; pasted newlines
-submit the current prompt line. Piped input keeps the stable line-oriented
-behavior used by tests and scripts.
+In the terminal app shell, `Enter` sends the current prompt, `Ctrl+S` also
+sends, `Ctrl+J` inserts a newline inside `/draft` mode, `PgUp/PgDn` and
+`Home/End` scroll the transcript viewport, `F1` toggles help, and `Ctrl+C`
+quits. The older line-oriented shell behavior remains on the non-app renderers.
 
 Resume an earlier conversation:
 
@@ -240,19 +226,13 @@ remain stable.
 
 `--ui app` is the default terminal mode while the terminal UX continues to
 mature. When output is redirected, it falls back to the plain renderer so
-scripts never receive terminal control sequences. The app shell redraws a stable dashboard with
-phase, elapsed time, active work, attention items, recent activity, transcript
-tail, visible transcript view state, and footer controls. The current shell is
-now laid out as a dedicated sidebar plus transcript pane instead of a single
-linear dashboard dump. It intentionally uses an inline screen for now:
-pre-existing scrollback remains available, while the dashboard keeps only a
-bounded transcript viewport and marks hidden earlier/newer lines. In real
-terminals, `--ui app` accepts Up/Down for line scrolling, PageUp/PageDown for
-page scrolling, Home/End to jump between the oldest visible page and the live
-tail, and `?` to toggle an in-app keybinding overlay. In interactive mode the
-shell now shares that same surface instead of writing prompts to a second
-stream. This is still a Foundation terminal shell, not yet a full-screen
-composer/timeline app. Use `--ui tui` when full session scrollback matters.
+scripts never receive terminal control sequences. The non-interactive app
+renderer keeps the bounded transcript viewport and dashboard-style status for
+single prompts. The interactive app shell now runs as a full Bubble Tea
+program with a transcript viewport, sidebar, and persistent composer on one
+surface. This is still Foundation terminal UX, not yet the full coding-agent
+timeline/composer product surface. Use `--ui tui` when full session scrollback
+matters.
 `--ui live` is the lighter-weight status line mode; it reports phase, elapsed
 time, tool errors, active tool, command, approval, compact activity counts, and
 usage while preserving the sectioned transcript underneath.

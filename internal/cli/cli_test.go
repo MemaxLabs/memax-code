@@ -1326,9 +1326,10 @@ func TestRunResumeWithoutPromptStartsInteractiveShellOnTerminalIO(t *testing.T) 
 	}
 	out := output.String()
 	for _, want := range []string{
-		"[transcript] interactive shell",
+		"[transcript]",
 		"[session]",
-		"id: " + sess.ID,
+		sess.ID,
+		"session: " + sess.ID,
 		"[composer]",
 		"bye",
 	} {
@@ -1386,9 +1387,9 @@ func TestRunWithoutPromptStartsAppShellOnTerminalIO(t *testing.T) {
 	}
 	out := output.String()
 	for _, want := range []string{
-		"[transcript] interactive shell",
+		"[transcript]",
+		"Memax Code interactive shell",
 		"[composer]",
-		"prompt: memax>",
 		"bye",
 	} {
 		if !strings.Contains(out, want) {
@@ -1675,36 +1676,66 @@ func TestRunInteractiveRejectsPromptAndConflictingFlags(t *testing.T) {
 }
 
 func TestRunInteractiveAppUsesSingleOutputSurface(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	err := runInteractiveWithRunner(
-		context.Background(),
-		strings.NewReader("/help\n/quit\n"),
-		&stdout,
-		&stderr,
-		options{SessionDir: t.TempDir(), UI: renderModeApp},
-		func(_ context.Context, w io.Writer, opts options) (string, error) {
-			fmt.Fprintf(w, "ran prompt %q\n", opts.Prompt)
-			return "", nil
-		},
-	)
+	ptmx, tty, err := pty.Open()
 	if err != nil {
-		t.Fatalf("runInteractiveWithRunner() error = %v", err)
+		t.Fatalf("pty.Open() error = %v", err)
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty when app shell owns the surface", stderr.String())
+	defer ptmx.Close()
+	defer tty.Close()
+
+	var output bytes.Buffer
+	copyDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(&output, ptmx)
+		copyDone <- err
+	}()
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- runInteractiveWithRunner(
+			context.Background(),
+			tty,
+			tty,
+			tty,
+			options{SessionDir: t.TempDir(), UI: renderModeApp},
+			func(_ context.Context, w io.Writer, opts options) (string, error) {
+				fmt.Fprintf(w, "ran prompt %q\n", opts.Prompt)
+				return "", nil
+			},
+		)
+	}()
+
+	if _, err := io.WriteString(ptmx, "/help\n/quit\n"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
 	}
-	out := stdout.String()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("runInteractiveWithRunner() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runInteractiveWithRunner() timed out")
+	}
+	if err := tty.Close(); err != nil {
+		t.Fatalf("tty.Close() error = %v", err)
+	}
+	select {
+	case err := <-copyDone:
+		if err != nil && !isClosedPTYRead(err) {
+			t.Fatalf("Copy() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Copy() timed out")
+	}
+
+	out := output.String()
 	for _, want := range []string{
-		appClearScreen,
-		"[transcript] interactive shell",
-		"Memax Code interactive shell",
-		"Type /help for commands, /quit to exit.",
+		"[transcript]",
 		"[session]",
-		"id: none",
+		"none",
 		"[composer]",
-		"prompt: memax>",
 		"draft: inactive",
-		"slash commands:",
+		"/quit              exit",
 		"bye",
 	} {
 		if !strings.Contains(out, want) {
@@ -1714,35 +1745,74 @@ func TestRunInteractiveAppUsesSingleOutputSurface(t *testing.T) {
 }
 
 func TestRunInteractiveAppCapturesPromptRunTranscript(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	err := runInteractiveWithRunner(
-		context.Background(),
-		strings.NewReader("first prompt\n/quit\n"),
-		&stdout,
-		&stderr,
-		options{SessionDir: t.TempDir(), UI: renderModeApp},
-		func(_ context.Context, w io.Writer, opts options) (string, error) {
-			fmt.Fprintln(w, "[assistant]")
-			fmt.Fprintln(w, "working on it")
-			fmt.Fprintln(w, "[result]")
-			fmt.Fprintln(w, "done")
-			return "00000000-0000-7000-8000-000000000123", nil
-		},
-	)
+	ptmx, tty, err := pty.Open()
 	if err != nil {
-		t.Fatalf("runInteractiveWithRunner() error = %v", err)
+		t.Fatalf("pty.Open() error = %v", err)
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty when app shell owns the surface", stderr.String())
+	defer ptmx.Close()
+	defer tty.Close()
+
+	var output bytes.Buffer
+	copyDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(&output, ptmx)
+		copyDone <- err
+	}()
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- runInteractiveWithRunner(
+			context.Background(),
+			tty,
+			tty,
+			tty,
+			options{SessionDir: t.TempDir(), UI: renderModeApp},
+			func(_ context.Context, w io.Writer, opts options) (string, error) {
+				fmt.Fprintln(w, "[assistant]")
+				fmt.Fprintln(w, "working on it")
+				fmt.Fprintln(w, "[result]")
+				fmt.Fprintln(w, "done")
+				return "00000000-0000-7000-8000-000000000123", nil
+			},
+		)
+	}()
+
+	if _, err := io.WriteString(ptmx, "first prompt\n"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
 	}
-	out := stdout.String()
+	time.Sleep(100 * time.Millisecond)
+	if _, err := io.WriteString(ptmx, "/quit\n"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("runInteractiveWithRunner() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runInteractiveWithRunner() timed out")
+	}
+	if err := tty.Close(); err != nil {
+		t.Fatalf("tty.Close() error = %v", err)
+	}
+	select {
+	case err := <-copyDone:
+		if err != nil && !isClosedPTYRead(err) {
+			t.Fatalf("Copy() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Copy() timed out")
+	}
+
+	out := output.String()
 	for _, want := range []string{
 		"[session]",
-		"id: 00000000-0000-7000-8000-000000000123",
+		"00000000-0000-7000-8000-000000000123",
 		"[assistant]",
 		"working on it",
 		"[result]",
 		"done",
+		"bye",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("interactive app stdout missing %q:\n%s", want, out)
