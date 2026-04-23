@@ -1326,8 +1326,69 @@ func TestRunResumeWithoutPromptStartsInteractiveShellOnTerminalIO(t *testing.T) 
 	}
 	out := output.String()
 	for _, want := range []string{
-		"Memax Code interactive shell",
-		"session: " + sess.ID,
+		"[transcript] interactive shell",
+		"[session]",
+		"id: " + sess.ID,
+		"[composer]",
+		"bye",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunWithoutPromptStartsAppShellOnTerminalIO(t *testing.T) {
+	ctx := context.Background()
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Fatalf("pty.Open() error = %v", err)
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+
+	var output bytes.Buffer
+	copyDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(&output, ptmx)
+		copyDone <- err
+	}()
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- RunWithIO(ctx, []string{
+			"--session-dir", t.TempDir(),
+		}, tty, tty, tty)
+	}()
+
+	if _, err := io.WriteString(ptmx, "/quit\n"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("RunWithIO() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunWithIO() timed out")
+	}
+	if err := tty.Close(); err != nil {
+		t.Fatalf("tty.Close() error = %v", err)
+	}
+	select {
+	case err := <-copyDone:
+		if err != nil && !isClosedPTYRead(err) {
+			t.Fatalf("Copy() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Copy() timed out")
+	}
+	out := output.String()
+	for _, want := range []string{
+		"[transcript] interactive shell",
+		"[composer]",
+		"prompt: memax>",
 		"bye",
 	} {
 		if !strings.Contains(out, want) {

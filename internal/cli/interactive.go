@@ -26,10 +26,11 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 	if runPrompt == nil {
 		runPrompt = runPromptWithSession
 	}
-	shellOut := interactiveShellWriter(opts.UI, stdout, stderr)
+	resolvedUI := resolveInteractiveMode(opts.UI, stdout)
+	shellOut := interactiveShellWriter(resolvedUI, stdout, stderr)
 	var inputObserver interactiveInputObserver
 	var appShell *appInteractiveShell
-	if opts.UI == renderModeApp {
+	if resolvedUI == renderModeApp {
 		appShell = newAppInteractiveShell(stdout)
 		shellOut = appShell
 		inputObserver = appShell
@@ -149,6 +150,16 @@ func interactiveShellWriter(mode renderMode, stdout, stderr io.Writer) io.Writer
 		return stdout
 	}
 	return stderr
+}
+
+func resolveInteractiveMode(mode renderMode, stdout io.Writer) renderMode {
+	if mode != renderModeAuto {
+		return mode
+	}
+	if writerIsTerminal(stdout) {
+		return renderModeApp
+	}
+	return renderModePlain
 }
 
 type interactiveCommandResult struct {

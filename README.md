@@ -29,9 +29,10 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
 - a machine-readable event stream with `--event-stream json` for wrappers,
   editors, and future GUI clients
 
-The CLI now has the first terminal UI foundation: `auto` chooses structured
-terminal rendering for interactive output and plain rendering for logs, tests,
-and pipes. `--ui app` opts into an early app-shell dashboard with stable
+The CLI now has the first terminal UI foundation: `auto` chooses app mode for
+interactive terminals and plain rendering for logs, tests, and pipes.
+`--ui app` is still available when you want to be explicit, but it is now the
+default human-facing terminal surface. The app shell provides stable
 active-work, attention, recent-activity, a bounded transcript viewport, and
 footer controls in a persistent sidebar-plus-transcript shell.
 `--ui live` keeps a lighter live status line while preserving the sectioned
@@ -81,7 +82,7 @@ memax-code --provider anthropic --model claude-sonnet-4-5 "repair the test failu
 Persist local defaults in `~/.memax-code/config.json`:
 
 ```sh
-memax-code config init --provider openai --model gpt-5.4 --ui live
+memax-code config init --provider openai --model gpt-5.4 --ui app
 memax-code config show
 ```
 
@@ -91,7 +92,7 @@ memax-code config show
   "model": "gpt-5.4",
   "profile": "balanced",
   "effort": "auto",
-  "ui": "live",
+  "ui": "app",
   "session_dir": "~/.memax-code/sessions",
   "history_file": "~/.memax-code/history.jsonl",
   "inherit_command_env": false,
@@ -127,6 +128,7 @@ Start an interactive shell:
 
 ```sh
 memax-code
+memax-code --interactive
 memax-code --interactive --ui live
 ```
 
@@ -232,13 +234,13 @@ incrementally while the run is still in progress. The user-facing mode name is
 `json`; the transport stays line-delimited because a single JSON document is
 not stream-friendly for long-running agent sessions.
 
-`--ui auto` is the default. It uses the structured terminal renderer for
-interactive terminals and the plain event stream for non-terminal writers, so
-CI logs and redirected output remain stable.
+`--ui auto` is the default. It uses app mode for interactive terminals and the
+plain event stream for non-terminal writers, so CI logs and redirected output
+remain stable.
 
-`--ui app` is opt-in while the terminal UX is maturing. When output is
-redirected, it falls back to the plain renderer so scripts never receive
-terminal control sequences. The app shell redraws a stable dashboard with
+`--ui app` is the default terminal mode while the terminal UX continues to
+mature. When output is redirected, it falls back to the plain renderer so
+scripts never receive terminal control sequences. The app shell redraws a stable dashboard with
 phase, elapsed time, active work, attention items, recent activity, transcript
 tail, visible transcript view state, and footer controls. The current shell is
 now laid out as a dedicated sidebar plus transcript pane instead of a single

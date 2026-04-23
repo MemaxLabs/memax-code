@@ -41,8 +41,8 @@ func TestParseModeRejectsUnknown(t *testing.T) {
 }
 
 func TestResolveMode(t *testing.T) {
-	if got := ResolveMode(ModeAuto, true); got != ModeStructured {
-		t.Fatalf("ResolveMode(auto, terminal) = %q, want %q", got, ModeStructured)
+	if got := ResolveMode(ModeAuto, true); got != ModeApp {
+		t.Fatalf("ResolveMode(auto, terminal) = %q, want %q", got, ModeApp)
 	}
 	if got := ResolveMode(ModeAuto, false); got != ModePlain {
 		t.Fatalf("ResolveMode(auto, non-terminal) = %q, want %q", got, ModePlain)

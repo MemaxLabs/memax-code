@@ -17,8 +17,8 @@ import (
 type Mode string
 
 const (
-	// ModeAuto selects the structured renderer for terminals and the plain
-	// transcript renderer for non-terminal writers.
+	// ModeAuto selects the app renderer for terminals and the plain transcript
+	// renderer for non-terminal writers.
 	ModeAuto Mode = "auto"
 	// ModeApp renders an app-shell terminal dashboard with transcript, active
 	// work, recent activity, and footer panels.
@@ -68,7 +68,7 @@ func ResolveMode(mode Mode, terminal bool) Mode {
 		return mode
 	}
 	if terminal {
-		return ModeStructured
+		return ModeApp
 	}
 	return ModePlain
 }
