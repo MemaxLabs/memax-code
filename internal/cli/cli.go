@@ -267,9 +267,6 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		if opts.Prompt != "" {
 			return options{}, fmt.Errorf("--interactive does not accept an initial prompt; type it after the shell starts")
 		}
-		if ui == renderModeApp {
-			return options{}, fmt.Errorf("--interactive cannot be combined with --ui app; use --ui live, --ui tui, or --ui plain until the app shell owns the interactive prompt surface")
-		}
 		opts.Interactive = true
 	}
 	if opts.Preset == "" {

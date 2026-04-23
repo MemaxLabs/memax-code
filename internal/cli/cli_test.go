@@ -1489,13 +1489,43 @@ func TestRunInteractiveRejectsPromptAndConflictingFlags(t *testing.T) {
 		{"--interactive", "--list-sessions"},
 		{"--interactive", "--show-session", "latest"},
 		{"--interactive", "--inspect-tools"},
-		{"--interactive", "--ui", "app"},
-		{"--interactive", "--ui", "APP"},
 	} {
 		var stdout, stderr bytes.Buffer
 		err := RunWithIO(context.Background(), append(args, "--session-dir", t.TempDir()), strings.NewReader("/quit\n"), &stdout, &stderr)
 		if err == nil || !strings.Contains(err.Error(), "--interactive") {
 			t.Fatalf("RunWithIO(%v) error = %v, want interactive conflict", args, err)
+		}
+	}
+}
+
+func TestRunInteractiveAppUsesSingleOutputSurface(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := runInteractiveWithRunner(
+		context.Background(),
+		strings.NewReader("/help\n/quit\n"),
+		&stdout,
+		&stderr,
+		options{SessionDir: t.TempDir(), UI: renderModeApp},
+		func(_ context.Context, w io.Writer, opts options) (string, error) {
+			fmt.Fprintf(w, "ran prompt %q\n", opts.Prompt)
+			return "", nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("runInteractiveWithRunner() error = %v", err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty when app shell owns the surface", stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"Memax Code interactive shell",
+		"Type /help for commands, /quit to exit.",
+		"slash commands:",
+		"bye",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive app stdout missing %q:\n%s", want, out)
 		}
 	}
 }

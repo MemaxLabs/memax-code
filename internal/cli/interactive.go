@@ -25,18 +25,19 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 	if runPrompt == nil {
 		runPrompt = runPromptWithSession
 	}
+	shellOut := interactiveShellWriter(opts.UI, stdout, stderr)
 	currentSession := opts.ResumeSessionID
 	composer := &interactiveComposer{}
 	historyStore := newPersistentPromptHistory(opts.HistoryFile)
 	if entries, err := historyStore.Load(); err != nil {
-		fmt.Fprintf(stderr, "warning: %v\n", err)
+		fmt.Fprintf(shellOut, "warning: %v\n", err)
 	} else {
 		composer.loadHistory(entries)
 	}
-	fmt.Fprintln(stderr, "Memax Code interactive shell")
-	fmt.Fprintln(stderr, "Type /help for commands, /quit to exit.")
+	fmt.Fprintln(shellOut, "Memax Code interactive shell")
+	fmt.Fprintln(shellOut, "Type /help for commands, /quit to exit.")
 
-	lineReader, err := newInteractiveLineReader(stdin, stderr)
+	lineReader, err := newInteractiveLineReader(stdin, shellOut)
 	if err != nil {
 		return err
 	}
@@ -64,7 +65,7 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 			commandCandidate = rawLine
 		}
 		if isInteractiveCommandLine(commandCandidate) {
-			result := handleInteractiveCommand(ctx, stderr, opts, &currentSession, composer, commandCandidate)
+			result := handleInteractiveCommand(ctx, shellOut, opts, &currentSession, composer, commandCandidate)
 			if result.Done {
 				return firstErr
 			}
@@ -88,7 +89,7 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 			if sessionID != "" {
 				currentSession = sessionID
 			}
-			fmt.Fprintf(stderr, "error: %v\n", err)
+			fmt.Fprintf(shellOut, "error: %v\n", err)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -99,11 +100,18 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 		}
 		if composer.history.Record(promptText) {
 			if err := historyStore.Append(promptText); err != nil {
-				fmt.Fprintf(stderr, "warning: %v\n", err)
+				fmt.Fprintf(shellOut, "warning: %v\n", err)
 			}
 		}
 	}
 	return firstErr
+}
+
+func interactiveShellWriter(mode renderMode, stdout, stderr io.Writer) io.Writer {
+	if mode == renderModeApp {
+		return stdout
+	}
+	return stderr
 }
 
 type interactiveCommandResult struct {
@@ -281,9 +289,10 @@ func showInteractiveSession(ctx context.Context, w io.Writer, opts options, curr
 	if err != nil {
 		return err
 	}
-	// Interactive shell commands write to stderr so stdout remains the agent
-	// transcript stream. The standalone --show-session command still writes to
-	// stdout for scriptability.
+	// Interactive shell commands follow the active shell surface: app mode uses
+	// stdout so the prompt loop and dashboard share one terminal stream, while
+	// the other interactive UIs keep shell commands on stderr. The standalone
+	// --show-session command still writes to stdout for scriptability.
 	showOpts := opts
 	showOpts.ShowSessionID = id
 	return showSession(ctx, w, showOpts)
