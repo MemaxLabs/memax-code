@@ -105,7 +105,7 @@ func unsupportedDoctorFlag(args []string) string {
 
 func doctorFlagTakesValue(name string) bool {
 	switch name {
-	case "--config", "--cwd", "--provider", "--model", "--profile", "--effort", "--preset", "--ui", "--session-dir", "--verify-command", "-C", "-cd", "--C", "--cd":
+	case "--config", "--cwd", "--provider", "--model", "--profile", "--effort", "--preset", "--ui", "--session-dir", "--history-file", "--verify-command", "-C", "-cd", "--C", "--cd":
 		return true
 	default:
 		return false
@@ -123,7 +123,7 @@ func printDoctorUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: memax-code doctor [flags]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Runs local setup diagnostics without calling a model.")
-	fmt.Fprintln(w, "Common flags: --config, --cwd, --provider, --model, --profile, --effort, --preset, --ui, --session-dir, --verify-command")
+	fmt.Fprintln(w, "Common flags: --config, --cwd, --provider, --model, --profile, --effort, --preset, --ui, --session-dir, --history-file, --verify-command")
 }
 
 func doctorChecks(opts options) []doctorCheck {
@@ -135,6 +135,7 @@ func doctorChecks(opts options) []doctorCheck {
 		modelDoctorCheck(opts),
 		apiKeyDoctorCheck(opts),
 		sessionDirDoctorCheck(opts.SessionDir),
+		historyFileDoctorCheck(opts.HistoryFile),
 		verificationDoctorCheck(mode, opts.VerifyCommands),
 		commandDoctorCheck("git", false),
 		commandDoctorCheck("go", mode == "go"),
@@ -184,6 +185,24 @@ func sessionDirDoctorCheck(path string) doctorCheck {
 		return doctorCheck{Level: doctorWarn, Name: "session_dir", Message: path + " (missing; will be created on first write)"}
 	}
 	return doctorCheck{Level: doctorWarn, Name: "session_dir", Message: path + " (missing; parent directory is not present)"}
+}
+
+func historyFileDoctorCheck(path string) doctorCheck {
+	info, err := os.Stat(path)
+	if err == nil {
+		if info.IsDir() {
+			return doctorCheck{Level: doctorFail, Name: "history_file", Message: path + " is a directory"}
+		}
+		return doctorCheck{Level: doctorOK, Name: "history_file", Message: path}
+	}
+	if !os.IsNotExist(err) {
+		return doctorCheck{Level: doctorFail, Name: "history_file", Message: fmt.Sprintf("stat %s: %v", path, err)}
+	}
+	parent := filepath.Dir(path)
+	if info, err := os.Stat(parent); err == nil && info.IsDir() {
+		return doctorCheck{Level: doctorWarn, Name: "history_file", Message: path + " (missing; will be created on first successful interactive prompt)"}
+	}
+	return doctorCheck{Level: doctorWarn, Name: "history_file", Message: path + " (missing; parent directory is not present)"}
 }
 
 func verificationDoctorCheck(mode string, commands map[string]string) doctorCheck {

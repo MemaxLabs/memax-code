@@ -23,6 +23,7 @@ func TestConfigInitCreatesStrictConfig(t *testing.T) {
 		"--preset", "safe_local",
 		"--ui", "plain",
 		"--session-dir", ".memax-code/sessions",
+		"--history-file", ".memax-code/history.jsonl",
 		"--inherit-command-env",
 		"--verify-command", "test=npm test",
 		"--verify-command", "lint=npm run lint",
@@ -45,6 +46,7 @@ func TestConfigInitCreatesStrictConfig(t *testing.T) {
 		`"preset": "safe_local"`,
 		`"ui": "plain"`,
 		`"session_dir": ".memax-code/sessions"`,
+		`"history_file": ".memax-code/history.jsonl"`,
 		`"inherit_command_env": true`,
 		`"verify_commands": {`,
 		`"lint": "npm run lint"`,
@@ -63,6 +65,7 @@ func TestConfigInitCreatesStrictConfig(t *testing.T) {
 		"MEMAX_CODE_PRESET",
 		"MEMAX_CODE_UI",
 		"MEMAX_CODE_SESSION_DIR",
+		"MEMAX_CODE_HISTORY_FILE",
 		"MEMAX_CODE_INHERIT_COMMAND_ENV",
 		"OPENAI_MODEL",
 		"ANTHROPIC_MODEL",
@@ -73,7 +76,11 @@ func TestConfigInitCreatesStrictConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse generated config: %v", err)
 	}
-	if opts.Provider != providerAnthropic || opts.Profile != "deep" || opts.Effort != "high" || opts.UI != renderModePlain {
+	wantHistoryFile, err := filepath.Abs(filepath.Join(".memax-code", "history.jsonl"))
+	if err != nil {
+		t.Fatalf("resolve expected history file: %v", err)
+	}
+	if opts.Provider != providerAnthropic || opts.Profile != "deep" || opts.Effort != "high" || opts.UI != renderModePlain || opts.HistoryFile != wantHistoryFile {
 		t.Fatalf("parsed opts = %+v, want generated config values", opts)
 	}
 }

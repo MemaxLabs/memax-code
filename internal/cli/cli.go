@@ -68,6 +68,7 @@ type options struct {
 	ConfigPath        string
 	ConfigLoaded      bool
 	SessionDir        string
+	HistoryFile       string
 	ResumeSessionID   string
 	ListSessions      bool
 	ShowSessionID     string
@@ -96,6 +97,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	preset := fs.String("preset", "interactive_dev", "coding preset: safe_local, ci_repair, or interactive_dev")
 	uiRaw := fs.String("ui", string(renderModeAuto), "event renderer: auto, app, live, tui, or plain")
 	sessionDir := fs.String("session-dir", defaultSessionDir(), "directory for JSONL session transcripts")
+	historyFile := fs.String("history-file", defaultHistoryPath(), "path to interactive prompt history JSONL")
 	resumeSessionID := fs.String("resume", "", "resume an existing session id, or latest")
 	listSessionsFlag := fs.Bool("list-sessions", false, "list saved sessions and exit")
 	showSessionID := fs.String("show-session", "", "print a saved session transcript and exit")
@@ -146,6 +148,11 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	if err != nil {
 		return options{}, fmt.Errorf("resolve session dir: %w", err)
 	}
+	historyFileSetting := stringSetting(*historyFile, flagWasSet(fs, "history-file"), "MEMAX_CODE_HISTORY_FILE", cfg.HistoryFile, defaultHistoryPath())
+	resolvedHistoryFile, err := resolvePath(historyFileSetting.Value)
+	if err != nil {
+		return options{}, fmt.Errorf("resolve history file: %w", err)
+	}
 	showSession := strings.TrimSpace(*showSessionID)
 	if showSession != "" {
 		if *listSessionsFlag {
@@ -168,6 +175,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		}
 		return options{
 			SessionDir:    resolvedSessionDir,
+			HistoryFile:   resolvedHistoryFile,
 			ShowSessionID: showSession,
 		}, nil
 	}
@@ -186,6 +194,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		}
 		return options{
 			SessionDir:   resolvedSessionDir,
+			HistoryFile:  resolvedHistoryFile,
 			ListSessions: true,
 		}, nil
 	}
@@ -236,6 +245,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		ConfigPath:        configPath,
 		ConfigLoaded:      configLoaded,
 		SessionDir:        resolvedSessionDir,
+		HistoryFile:       resolvedHistoryFile,
 		ResumeSessionID:   strings.TrimSpace(*resumeSessionID),
 		ListSessions:      *listSessionsFlag,
 		InspectTools:      *inspectTools,
@@ -314,6 +324,14 @@ func defaultConfigPath() string {
 	return filepath.Join(home, ".memax-code", "config.json")
 }
 
+func defaultHistoryPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ".memax-code/history.jsonl"
+	}
+	return filepath.Join(home, ".memax-code", "history.jsonl")
+}
+
 type fileConfig struct {
 	Provider          string            `json:"provider,omitempty"`
 	Model             string            `json:"model,omitempty"`
@@ -322,6 +340,7 @@ type fileConfig struct {
 	Preset            string            `json:"preset,omitempty"`
 	UI                string            `json:"ui,omitempty"`
 	SessionDir        string            `json:"session_dir,omitempty"`
+	HistoryFile       string            `json:"history_file,omitempty"`
 	InheritCommandEnv *bool             `json:"inherit_command_env,omitempty"`
 	VerifyCommands    map[string]string `json:"verify_commands,omitempty"`
 }
@@ -602,6 +621,7 @@ func renderDryRun(w io.Writer, opts options) error {
 	fmt.Fprintf(w, "config_loaded: %t\n", opts.ConfigLoaded)
 	fmt.Fprintf(w, "cwd: %s\n", opts.CWD)
 	fmt.Fprintf(w, "session_dir: %s\n", opts.SessionDir)
+	fmt.Fprintf(w, "history_file: %s\n", opts.HistoryFile)
 	fmt.Fprintf(w, "resume_session: %s\n", valueOrUnset(opts.ResumeSessionID))
 	fmt.Fprintf(w, "verification: %s\n", verificationMode(opts.CWD, opts.VerifyCommands))
 	if len(opts.VerifyCommands) > 0 {

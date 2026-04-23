@@ -81,6 +81,10 @@ func (c *interactiveComposer) statusLine() string {
 	return fmt.Sprintf("draft: active lines=%d chars=%d cursor=%d history=%d", c.lineCount(), len([]rune(c.text())), c.buffer.Cursor(), c.history.Len())
 }
 
+func (c *interactiveComposer) loadHistory(entries []string) {
+	c.history.Load(entries)
+}
+
 func (c *interactiveComposer) recall(ref string) (string, int, bool) {
 	text, ok := c.history.Resolve(ref)
 	if !ok {
@@ -230,16 +234,29 @@ type composerHistory struct {
 	savedDraft string
 }
 
-func (h *composerHistory) Record(text string) {
+func (h *composerHistory) Load(entries []string) {
+	h.entries = h.entries[:0]
+	for _, entry := range entries {
+		h.Record(entry)
+	}
+	h.ResetTraversal()
+}
+
+func (h *composerHistory) Record(text string) bool {
 	stored := strings.TrimRight(text, "\r\n")
 	if strings.TrimSpace(stored) == "" {
-		return
+		return false
 	}
 	if len(h.entries) > 0 && h.entries[len(h.entries)-1] == stored {
-		return
+		return false
 	}
 	h.entries = append(h.entries, stored)
+	if len(h.entries) > interactiveHistoryMaxEntries {
+		copy(h.entries, h.entries[len(h.entries)-interactiveHistoryMaxEntries:])
+		h.entries = h.entries[:interactiveHistoryMaxEntries]
+	}
 	h.ResetTraversal()
+	return true
 }
 
 func (h *composerHistory) Len() int {

@@ -1083,6 +1083,88 @@ func TestRunInteractivePromptHistoryRecall(t *testing.T) {
 	}
 }
 
+func TestRunInteractiveLoadsAndPersistsPromptHistory(t *testing.T) {
+	tempDir := t.TempDir()
+	historyFile := filepath.Join(tempDir, "history.jsonl")
+	if err := newPersistentPromptHistory(historyFile).Append("persisted prompt"); err != nil {
+		t.Fatalf("append seed history: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	var prompts []string
+	err := runInteractiveWithRunner(
+		context.Background(),
+		strings.NewReader("/history\n/recall latest\n/submit\n/quit\n"),
+		&stdout,
+		&stderr,
+		options{SessionDir: tempDir, HistoryFile: historyFile, UI: renderModePlain},
+		func(_ context.Context, w io.Writer, opts options) (string, error) {
+			prompts = append(prompts, opts.Prompt)
+			fmt.Fprintln(w, "ran prompt")
+			return "00000000-0000-7000-8000-000000000123", nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("runInteractiveWithRunner() error = %v", err)
+	}
+	if len(prompts) != 1 || prompts[0] != "persisted prompt" {
+		t.Fatalf("submitted prompts = %#v, want persisted prompt", prompts)
+	}
+	body, err := os.ReadFile(historyFile)
+	if err != nil {
+		t.Fatalf("read history: %v", err)
+	}
+	if got := strings.Count(string(body), `"text":"persisted prompt"`); got != 1 {
+		t.Fatalf("history text count = %d, want one deduped persisted prompt:\n%s", got, body)
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"prompt history:",
+		"1) persisted prompt",
+		"recalled prompt: lines=1 chars=16",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunInteractiveWarnsButContinuesWhenPromptHistoryUnavailable(t *testing.T) {
+	tempDir := t.TempDir()
+	historyFile := filepath.Join(tempDir, "history-dir")
+	if err := os.Mkdir(historyFile, 0o700); err != nil {
+		t.Fatalf("mkdir history dir: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	var prompts []string
+	err := runInteractiveWithRunner(
+		context.Background(),
+		strings.NewReader("fresh prompt\n/quit\n"),
+		&stdout,
+		&stderr,
+		options{SessionDir: tempDir, HistoryFile: historyFile, UI: renderModePlain},
+		func(_ context.Context, w io.Writer, opts options) (string, error) {
+			prompts = append(prompts, opts.Prompt)
+			return "00000000-0000-7000-8000-000000000123", nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("runInteractiveWithRunner() error = %v", err)
+	}
+	if len(prompts) != 1 || prompts[0] != "fresh prompt" {
+		t.Fatalf("submitted prompts = %#v, want fresh prompt", prompts)
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"warning: prompt history",
+		"is a directory",
+		"warning: open prompt history",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestRunInteractivePromptHistorySkipsFailedDraftSubmit(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := runInteractiveWithRunner(

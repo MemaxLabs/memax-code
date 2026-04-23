@@ -49,6 +49,7 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 	preset := fs.String("preset", defaultConfigPreset, "coding preset: safe_local, ci_repair, or interactive_dev")
 	uiRaw := fs.String("ui", defaultConfigUI, "event renderer: auto, app, live, tui, or plain")
 	sessionDir := fs.String("session-dir", defaultConfigSessionDir, "directory for JSONL session transcripts")
+	historyFile := fs.String("history-file", defaultConfigHistoryFile, "path to interactive prompt history JSONL")
 	inheritCommandEnv := fs.Bool("inherit-command-env", false, "let command tools inherit the host process environment")
 	verifyCommands := newVerifyCommandsFlag()
 	fs.Var(verifyCommands, "verify-command", "add a verification command as name=command; repeat for test, lint, typecheck, or default (default wins over test for empty/default requests)")
@@ -89,14 +90,18 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 	if strings.TrimSpace(*sessionDir) == "" {
 		return fmt.Errorf("session-dir is required")
 	}
+	if strings.TrimSpace(*historyFile) == "" {
+		return fmt.Errorf("history-file is required")
+	}
 	cfg := fileConfig{
-		Provider:   string(providerName),
-		Model:      strings.TrimSpace(*model),
-		Profile:    profileValue.String(),
-		Effort:     effortValue.String(),
-		Preset:     string(presetValue),
-		UI:         string(uiValue),
-		SessionDir: strings.TrimSpace(*sessionDir),
+		Provider:    string(providerName),
+		Model:       strings.TrimSpace(*model),
+		Profile:     profileValue.String(),
+		Effort:      effortValue.String(),
+		Preset:      string(presetValue),
+		UI:          string(uiValue),
+		SessionDir:  strings.TrimSpace(*sessionDir),
+		HistoryFile: strings.TrimSpace(*historyFile),
 	}
 	if flagWasSet(fs, "inherit-command-env") {
 		cfg.InheritCommandEnv = boolPtr(*inheritCommandEnv)
@@ -188,10 +193,11 @@ func boolPtr(value bool) *bool {
 }
 
 const (
-	defaultConfigProvider   = "openai"
-	defaultConfigProfile    = "balanced"
-	defaultConfigEffort     = "auto"
-	defaultConfigPreset     = "interactive_dev"
-	defaultConfigUI         = "auto"
-	defaultConfigSessionDir = "~/.memax-code/sessions"
+	defaultConfigProvider    = "openai"
+	defaultConfigProfile     = "balanced"
+	defaultConfigEffort      = "auto"
+	defaultConfigPreset      = "interactive_dev"
+	defaultConfigUI          = "auto"
+	defaultConfigSessionDir  = "~/.memax-code/sessions"
+	defaultConfigHistoryFile = "~/.memax-code/history.jsonl"
 )

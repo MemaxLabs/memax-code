@@ -27,6 +27,12 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 	}
 	currentSession := opts.ResumeSessionID
 	composer := &interactiveComposer{}
+	historyStore := newPersistentPromptHistory(opts.HistoryFile)
+	if entries, err := historyStore.Load(); err != nil {
+		fmt.Fprintf(stderr, "warning: %v\n", err)
+	} else {
+		composer.loadHistory(entries)
+	}
 	fmt.Fprintln(stderr, "Memax Code interactive shell")
 	fmt.Fprintln(stderr, "Type /help for commands, /quit to exit.")
 
@@ -91,7 +97,11 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 		if sessionID != "" {
 			currentSession = sessionID
 		}
-		composer.history.Record(promptText)
+		if composer.history.Record(promptText) {
+			if err := historyStore.Append(promptText); err != nil {
+				fmt.Fprintf(stderr, "warning: %v\n", err)
+			}
+		}
 	}
 	return firstErr
 }
@@ -240,6 +250,7 @@ func printInteractiveStatus(ctx context.Context, w io.Writer, opts options, curr
 	fmt.Fprintf(w, "  ui: %s\n", opts.UI)
 	fmt.Fprintf(w, "  cwd: %s\n", opts.CWD)
 	fmt.Fprintf(w, "  session_dir: %s\n", opts.SessionDir)
+	fmt.Fprintf(w, "  history_file: %s\n", opts.HistoryFile)
 	fmt.Fprintf(w, "  active_session: %s\n", valueOrUnset(currentSession))
 	fmt.Fprintf(w, "  saved_sessions: %d\n", len(candidates))
 	fmt.Fprintf(w, "  verification: %s\n", verificationMode(opts.CWD, opts.VerifyCommands))
@@ -376,7 +387,7 @@ func printInteractiveHelp(w io.Writer) {
 	fmt.Fprintln(w, "  /show-draft        show the active draft")
 	fmt.Fprintln(w, "  /submit            send the active draft")
 	fmt.Fprintln(w, "  /cancel            discard the active draft")
-	fmt.Fprintln(w, "  /history           list prompts submitted in this shell")
+	fmt.Fprintln(w, "  /history           list remembered prompts")
 	fmt.Fprintln(w, "  /recall [N|latest] recall a prompt into the draft")
 	fmt.Fprintln(w, "  /quit              exit")
 	fmt.Fprintln(w, "  //PROMPT           send a prompt that starts with /")

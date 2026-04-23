@@ -21,8 +21,8 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
 - dry-run configuration inspection
 - local setup diagnostics with `memax-code doctor`
 - an interactive shell with slash commands, multi-line draft submission,
-  in-shell prompt history recall, and terminal raw-key line editing when stdin
-  and stderr are TTYs
+  persistent prompt history recall, and terminal raw-key line editing when
+  stdin and stderr are TTYs
 - event-stream rendering for assistant text, tool calls, command lifecycle,
   workspace edits, verification, usage, and final results, with `auto`, `live`,
   `app`, `tui`, and `plain` renderer modes
@@ -40,7 +40,9 @@ and `/quit`. In real terminals it enables raw-key editing for the current input
 line: Left/Right move the cursor, Home/End or Ctrl+A/Ctrl+E jump to line
 boundaries, Backspace/Delete edit in place, Up/Down traverse in-shell prompt
 history, Ctrl+C clears the current input, and Ctrl+D exits from an empty line.
-The raw-key reader is intentionally still a single-line Foundation editor:
+Submitted prompts are stored as text-only JSONL history, separate from session
+transcripts, so recall works across interactive shell restarts. The raw-key
+reader is intentionally still a single-line Foundation editor:
 multi-line submissions use `/draft` and `/append`, pasted newlines submit the
 current line, standalone ESC waits for a following key, and very long wrapped
 lines can redraw imperfectly. It does not yet ship sandboxed OS execution or
@@ -87,6 +89,7 @@ memax-code config show
   "effort": "auto",
   "ui": "live",
   "session_dir": "~/.memax-code/sessions",
+  "history_file": "~/.memax-code/history.jsonl",
   "inherit_command_env": false,
   "verify_commands": {
     "test": "npm test",
@@ -149,8 +152,12 @@ Use `//` when a normal prompt needs to start with `/`, for example
 are accumulated until `/submit`; use `/cancel` to discard the draft. Slash
 commands inside a draft must start at the beginning of the line, so indented
 paths and code snippets such as `  /etc/hosts` stay in the draft.
-Submitted prompts are remembered for the current shell; use `/history` and
-`/recall N` to restore one into the draft before editing and submitting again.
+Submitted prompts are remembered in `~/.memax-code/history.jsonl` by default;
+use `/history` and `/recall N` to restore one into the draft before editing
+and submitting again. Set `--history-file` when you want project-local,
+temporary, or custom prompt recall storage. Multiple interactive shells can
+append to the same JSONL file; each shell loads its recall view on startup and
+does not live-refresh entries written by other shells.
 When stdin and stderr are terminals, the prompt line also supports shell-style
 editing keys: Up/Down for prompt history, Left/Right for cursor movement,
 Home/End or Ctrl+A/Ctrl+E for line boundaries, Backspace/Delete for local
@@ -168,12 +175,15 @@ memax-code --resume 0194d9a4-7b8c-7d20-9a1b-4f6c6f4f7a01 "continue from the last
 memax-code --resume latest "continue the most recent active session"
 ```
 
-Session transcripts are stored under `~/.memax-code/sessions` by default. Use
-`--session-dir` when you want project-local state, temporary test state, or a
-different filesystem policy:
+Session transcripts are stored under `~/.memax-code/sessions` by default.
+Prompt recall history is stored separately under `~/.memax-code/history.jsonl`
+so transcript retention and composer recall can be governed independently. Use
+`--session-dir` and `--history-file` when you want project-local state,
+temporary test state, or a different filesystem policy:
 
 ```sh
 memax-code --session-dir .memax-code/sessions --list-sessions
+memax-code --history-file .memax-code/history.jsonl --interactive
 ```
 
 Choose the event renderer explicitly when needed:
@@ -267,6 +277,7 @@ Configuration environment variables:
 - `MEMAX_CODE_PRESET`: default coding preset.
 - `MEMAX_CODE_UI`: default renderer, `auto`, `app`, `live`, `tui`, or `plain`.
 - `MEMAX_CODE_SESSION_DIR`: default JSONL session transcript directory.
+- `MEMAX_CODE_HISTORY_FILE`: default JSONL interactive prompt history file.
 - `MEMAX_CODE_INHERIT_COMMAND_ENV`: default command environment inheritance,
   accepting `1/0`, `t/f`, `true/false`, and case variants.
 - `MEMAX_CODE_VERIFY_COMMANDS`: JSON object mapping verification names to shell
