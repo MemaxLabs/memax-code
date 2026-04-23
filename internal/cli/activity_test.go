@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -107,21 +108,120 @@ func TestActivityStateCountsCommandLifecycleOnce(t *testing.T) {
 	start := memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
 		CommandID: "cmd-1",
 		Command:   "go test ./...",
+		PID:       123,
 	}}
 	finish := memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
-		CommandID: "cmd-1",
-		Command:   "go test ./...",
-		ExitCode:  0,
+		CommandID:  "cmd-1",
+		Command:    "go test ./...",
+		ExitCode:   0,
+		DurationMS: 240,
 	}}
 
 	state.apply(start)
+	startSnapshot := state.snapshot()
+	if len(startSnapshot.ActiveCommands) != 1 {
+		t.Fatalf("active commands after start = %#v, want one running command", startSnapshot.ActiveCommands)
+	}
+	if got := startSnapshot.ActiveCommands[0].summary(); !strings.Contains(got, "id=cmd-1") || !strings.Contains(got, "status=running") || !strings.Contains(got, "pid=123") {
+		t.Fatalf("active command summary = %q, want id/status/pid", got)
+	}
+
 	state.apply(finish)
 
 	if state.commands != 1 {
 		t.Fatalf("commands = %d, want 1", state.commands)
 	}
-	if got := state.snapshot().detailsLine(); !strings.Contains(got, `last_command="go test ./..."`) {
+	snapshot := state.snapshot()
+	if len(snapshot.ActiveCommands) != 0 {
+		t.Fatalf("active commands after finish = %#v, want none", snapshot.ActiveCommands)
+	}
+	if len(state.commandStates) != 0 {
+		t.Fatalf("commandStates after finish = %#v, want pruned terminal command", state.commandStates)
+	}
+	if got := snapshot.detailsLine(); !strings.Contains(got, `last_command="go test ./..."`) || !strings.Contains(got, `last_command_status="id=cmd-1 status=exited pid=123 exit=0 duration=240ms command=go test ./..."`) {
 		t.Fatalf("detailsLine() = %q, want last command", got)
+	}
+}
+
+func TestActivityStateTracksTimedOutCommandAsTerminal(t *testing.T) {
+	var state activityState
+	state.apply(memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Command:   "go test ./...",
+		PID:       123,
+	}})
+	state.apply(memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
+		CommandID:  "cmd-1",
+		Command:    "go test ./...",
+		TimedOut:   true,
+		DurationMS: 5000,
+	}})
+
+	snapshot := state.snapshot()
+	if len(snapshot.ActiveCommands) != 0 {
+		t.Fatalf("active commands after timeout = %#v, want none", snapshot.ActiveCommands)
+	}
+	if len(state.commandStates) != 0 {
+		t.Fatalf("commandStates after timeout = %#v, want pruned terminal command", state.commandStates)
+	}
+	if got := snapshot.LastCommandState; !strings.Contains(got, "status=timed_out") || !strings.Contains(got, "timeout=true") || !strings.Contains(got, "duration=5000ms") {
+		t.Fatalf("LastCommandState = %q, want timeout terminal summary", got)
+	}
+}
+
+func TestActivityStateTracksCommandOutputAndStops(t *testing.T) {
+	var state activityState
+	state.apply(memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Command:   "npm test -- --watch",
+		PID:       123,
+	}})
+	state.apply(memaxagent.Event{Kind: memaxagent.EventCommandOutput, Command: &memaxagent.CommandEvent{
+		CommandID:      "cmd-1",
+		OutputChunks:   2,
+		DroppedChunks:  1,
+		DroppedBytes:   512,
+		ResumeAfterSeq: 4,
+	}})
+	state.apply(memaxagent.Event{Kind: memaxagent.EventCommandStopped, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Status:    "stopped",
+	}})
+
+	if state.commands != 1 {
+		t.Fatalf("commands = %d, want 1", state.commands)
+	}
+	snapshot := state.snapshot()
+	if len(snapshot.ActiveCommands) != 0 {
+		t.Fatalf("active commands = %#v, want stopped command removed", snapshot.ActiveCommands)
+	}
+	if got := snapshot.LastCommandState; !strings.Contains(got, "status=stopped") || !strings.Contains(got, "chunks=2") || !strings.Contains(got, "dropped=1/512B") {
+		t.Fatalf("LastCommandState = %q, want stopped output summary", got)
+	}
+}
+
+func TestActivityStatePrunesCommandIDsWithoutDroppingActiveCommands(t *testing.T) {
+	var state activityState
+	state.apply(memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "active",
+		Command:   "npm test -- --watch",
+	}})
+	for i := 0; i < maxTrackedCommandIDs+1; i++ {
+		state.apply(memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
+			CommandID: fmt.Sprintf("done-%d", i),
+			Command:   "true",
+		}})
+	}
+
+	if _, ok := state.commandIDs["active"]; !ok {
+		t.Fatalf("active command ID was pruned from commandIDs")
+	}
+	snapshot := state.snapshot()
+	if len(snapshot.ActiveCommands) != 1 || snapshot.ActiveCommands[0].ID != "active" {
+		t.Fatalf("active commands = %#v, want active command retained", snapshot.ActiveCommands)
+	}
+	if len(state.commandIDOrder) > maxTrackedCommandIDs {
+		t.Fatalf("commandIDOrder length = %d, want <= %d", len(state.commandIDOrder), maxTrackedCommandIDs)
 	}
 }
 

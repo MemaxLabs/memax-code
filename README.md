@@ -28,11 +28,12 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
 The CLI now has the first terminal UI foundation: `auto` chooses structured
 terminal rendering for interactive output and plain rendering for logs, tests,
 and pipes. `--ui live` opts into an early live status line while preserving the
-sectioned transcript underneath. `--interactive` starts a simple prompt loop
-with `/help`, `/session`, `/pick`, `/sessions`, `/resume`, `/new`, and `/quit`.
-It does not yet ship the full-screen app shell or sandboxed OS execution
-expected from a mature coding-agent CLI. Those are product slices on top of
-this foundation.
+sectioned transcript underneath. The status panel tracks active tools, active
+command sessions, recent command outcomes, approvals, patches, and verification
+checks. `--interactive` starts a simple prompt loop with `/help`, `/session`,
+`/pick`, `/sessions`, `/resume`, `/new`, and `/quit`. It does not yet ship the
+full-screen app shell or sandboxed OS execution expected from a mature
+coding-agent CLI. Those are product slices on top of this foundation.
 
 ## Usage
 

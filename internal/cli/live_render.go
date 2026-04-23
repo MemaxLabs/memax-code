@@ -117,7 +117,18 @@ func (s *liveRenderState) statusLine(frame string, activity activitySnapshot) st
 	} else if activity.LastTool != "" {
 		parts = append(parts, "last_tool="+statusValue(activity.LastTool))
 	}
-	if activity.LastCommand != "" {
+	if len(activity.ActiveCommands) > 0 {
+		command := activity.ActiveCommands[0]
+		label := command.ID
+		if label == "" {
+			label = command.Command
+		}
+		if label != "" {
+			parts = append(parts, "active_cmd="+statusValue(label))
+		}
+	}
+	duplicateActiveCommand := len(activity.ActiveCommands) > 0 && activity.ActiveCommands[0].Command == activity.LastCommand
+	if activity.LastCommand != "" && !duplicateActiveCommand {
 		parts = append(parts, "cmd="+statusValue(activity.LastCommand))
 	}
 	if activity.Approvals > 0 && activity.LastApproval != "" {

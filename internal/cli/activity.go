@@ -2,10 +2,13 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 )
+
+const maxTrackedCommandIDs = 4096
 
 type activityState struct {
 	tools         int
@@ -23,11 +26,29 @@ type activityState struct {
 	activeTool       string
 	activeTools      []string
 	commandIDs       map[string]struct{}
+	commandIDOrder   []string
+	commandStates    map[string]commandActivity
+	commandSequence  int64
 	lastTool         string
 	lastCommand      string
+	lastCommandState string
 	lastPatch        string
 	lastVerification string
 	lastApproval     string
+}
+
+type commandActivity struct {
+	ID            string
+	Command       string
+	Status        string
+	PID           int
+	ExitCode      int
+	TimedOut      bool
+	DurationMS    int
+	OutputChunks  int
+	DroppedChunks int
+	DroppedBytes  int
+	Seen          int64
 }
 
 type activitySnapshot struct {
@@ -47,10 +68,12 @@ type activitySnapshot struct {
 	ActiveTool       string
 	LastTool         string
 	LastCommand      string
+	LastCommandState string
 	LastPatch        string
 	LastVerification string
 	LastApproval     string
 	ActiveTools      []string
+	ActiveCommands   []commandActivity
 }
 
 func (s *activityState) apply(event memaxagent.Event) {
@@ -80,11 +103,7 @@ func (s *activityState) apply(event memaxagent.Event) {
 			s.patches++
 			s.lastPatch = workspaceSummary(event.Workspace)
 		}
-	case memaxagent.EventCommandFinished:
-		if event.Command != nil {
-			s.observeCommand(event)
-		}
-	case memaxagent.EventCommandStarted:
+	case memaxagent.EventCommandFinished, memaxagent.EventCommandStarted, memaxagent.EventCommandOutput, memaxagent.EventCommandInput, memaxagent.EventCommandResized, memaxagent.EventCommandStopped:
 		if event.Command != nil {
 			s.observeCommand(event)
 		}
@@ -131,12 +150,14 @@ func (s *activityState) snapshot() activitySnapshot {
 		ActiveTool:       s.activeTool,
 		LastTool:         s.lastTool,
 		LastCommand:      s.lastCommand,
+		LastCommandState: s.lastCommandState,
 		LastPatch:        s.lastPatch,
 		LastVerification: s.lastVerification,
 		LastApproval:     s.lastApproval,
 	}
 	snapshot.ActiveTools = make([]string, len(s.activeTools))
 	copy(snapshot.ActiveTools, s.activeTools)
+	snapshot.ActiveCommands = s.activeCommandSnapshot()
 	snapshot.Phase = snapshot.phase()
 	return snapshot
 }
@@ -192,19 +213,63 @@ func (s *activityState) observeCommand(event memaxagent.Event) {
 	if event.Command == nil {
 		return
 	}
-	s.lastCommand = commandDisplay(event)
+	display := commandDisplay(event)
+	if display == "" && event.Command.CommandID != "" {
+		if command, ok := s.commandStates[event.Command.CommandID]; ok {
+			display = command.Command
+		}
+	}
+	if display != "" {
+		s.lastCommand = display
+	}
 	if event.Command.CommandID == "" {
 		s.commands++
+		s.lastCommandState = commandActivityFromEvent(event, display).summary()
 		return
 	}
 	if s.commandIDs == nil {
 		s.commandIDs = make(map[string]struct{})
 	}
-	if _, ok := s.commandIDs[event.Command.CommandID]; ok {
+	if _, ok := s.commandIDs[event.Command.CommandID]; !ok {
+		s.commandIDs[event.Command.CommandID] = struct{}{}
+		s.commandIDOrder = append(s.commandIDOrder, event.Command.CommandID)
+		s.pruneCommandIDs()
+		s.commands++
+	}
+	command := s.commandStates[event.Command.CommandID]
+	next := commandActivityFromEvent(event, display)
+	if command.Seen == 0 {
+		s.commandSequence++
+		next.Seen = s.commandSequence
+	}
+	command = command.merge(next)
+	if s.commandStates == nil {
+		s.commandStates = make(map[string]commandActivity)
+	}
+	s.lastCommandState = command.summary()
+	if command.active() {
+		s.commandStates[event.Command.CommandID] = command
 		return
 	}
-	s.commandIDs[event.Command.CommandID] = struct{}{}
-	s.commands++
+	delete(s.commandStates, event.Command.CommandID)
+}
+
+func (s *activityState) pruneCommandIDs() {
+	for len(s.commandIDOrder) > maxTrackedCommandIDs {
+		removeAt := -1
+		for i, id := range s.commandIDOrder {
+			if _, active := s.commandStates[id]; !active {
+				removeAt = i
+				break
+			}
+		}
+		if removeAt == -1 {
+			return
+		}
+		id := s.commandIDOrder[removeAt]
+		s.commandIDOrder = append(s.commandIDOrder[:removeAt], s.commandIDOrder[removeAt+1:]...)
+		delete(s.commandIDs, id)
+	}
 }
 
 func (s activitySnapshot) phase() string {
@@ -270,6 +335,9 @@ func (s activitySnapshot) detailsLine() string {
 	if s.LastCommand != "" {
 		details = append(details, fmt.Sprintf("last_command=%q", statusValue(s.LastCommand)))
 	}
+	if s.LastCommandState != "" {
+		details = append(details, fmt.Sprintf("last_command_status=%q", statusValue(s.LastCommandState)))
+	}
 	if s.LastPatch != "" {
 		details = append(details, fmt.Sprintf("last_patch=%q", statusValue(s.LastPatch)))
 	}
@@ -283,6 +351,154 @@ func (s activitySnapshot) detailsLine() string {
 		return ""
 	}
 	return "activity: " + strings.Join(details, " ")
+}
+
+func (s *activityState) activeCommandSnapshot() []commandActivity {
+	if len(s.commandStates) == 0 {
+		return []commandActivity{}
+	}
+	commands := make([]commandActivity, 0, len(s.commandStates))
+	for _, command := range s.commandStates {
+		// commandStates should already contain only active entries; keep this
+		// guard so stale state cannot leak into the rendered panel.
+		if command.active() {
+			commands = append(commands, command)
+		}
+	}
+	sort.Slice(commands, func(i, j int) bool {
+		if commands[i].Seen != commands[j].Seen {
+			return commands[i].Seen < commands[j].Seen
+		}
+		return commands[i].ID < commands[j].ID
+	})
+	return commands
+}
+
+func commandActivityFromEvent(event memaxagent.Event, display string) commandActivity {
+	command := commandActivity{
+		ID:            event.Command.CommandID,
+		Command:       display,
+		Status:        commandEventStatus(event),
+		PID:           event.Command.PID,
+		ExitCode:      event.Command.ExitCode,
+		TimedOut:      event.Command.TimedOut,
+		DurationMS:    event.Command.DurationMS,
+		OutputChunks:  event.Command.OutputChunks,
+		DroppedChunks: event.Command.DroppedChunks,
+		DroppedBytes:  event.Command.DroppedBytes,
+	}
+	if command.Status == "" {
+		command.Status = event.Command.Status
+	}
+	return command
+}
+
+func commandEventStatus(event memaxagent.Event) string {
+	if event.Command == nil {
+		return ""
+	}
+	switch event.Kind {
+	case memaxagent.EventCommandStarted, memaxagent.EventCommandOutput, memaxagent.EventCommandInput, memaxagent.EventCommandResized:
+		if event.Command.Status != "" {
+			return event.Command.Status
+		}
+		return "running"
+	case memaxagent.EventCommandStopped:
+		if event.Command.Status != "" {
+			return event.Command.Status
+		}
+		return "stopped"
+	case memaxagent.EventCommandFinished:
+		// A finished synchronous command only reports process metadata; the CLI
+		// derives richer terminal states for status rendering.
+		if event.Command.TimedOut {
+			return "timed_out"
+		}
+		if event.Command.ExitCode != 0 {
+			return "failed"
+		}
+		return "exited"
+	default:
+		return event.Command.Status
+	}
+}
+
+func (c commandActivity) merge(next commandActivity) commandActivity {
+	if next.ID != "" {
+		c.ID = next.ID
+	}
+	if next.Command != "" {
+		c.Command = next.Command
+	}
+	if next.Status != "" {
+		c.Status = next.Status
+	}
+	if next.PID != 0 {
+		c.PID = next.PID
+	}
+	if next.ExitCode != 0 || next.Status == "exited" || next.Status == "failed" || next.Status == "timed_out" {
+		c.ExitCode = next.ExitCode
+	}
+	if next.TimedOut {
+		c.TimedOut = true
+	}
+	if next.DurationMS != 0 {
+		c.DurationMS = next.DurationMS
+	}
+	if next.OutputChunks != 0 {
+		c.OutputChunks = next.OutputChunks
+	}
+	if next.DroppedChunks != 0 {
+		c.DroppedChunks = next.DroppedChunks
+	}
+	if next.DroppedBytes != 0 {
+		c.DroppedBytes = next.DroppedBytes
+	}
+	if c.Seen == 0 {
+		c.Seen = next.Seen
+	}
+	return c
+}
+
+func (c commandActivity) active() bool {
+	switch c.Status {
+	case "running":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c commandActivity) summary() string {
+	parts := make([]string, 0, 8)
+	if c.ID != "" {
+		parts = append(parts, "id="+c.ID)
+	}
+	if c.Status != "" {
+		parts = append(parts, "status="+c.Status)
+	}
+	if c.PID != 0 {
+		parts = append(parts, fmt.Sprintf("pid=%d", c.PID))
+	}
+	if c.ExitCode != 0 || c.Status == "exited" || c.Status == "failed" || c.Status == "timed_out" {
+		parts = append(parts, fmt.Sprintf("exit=%d", c.ExitCode))
+	}
+	if c.TimedOut {
+		parts = append(parts, "timeout=true")
+	}
+	if c.DurationMS != 0 {
+		parts = append(parts, fmt.Sprintf("duration=%dms", c.DurationMS))
+	}
+	if c.OutputChunks != 0 {
+		parts = append(parts, fmt.Sprintf("chunks=%d", c.OutputChunks))
+	}
+	if c.DroppedChunks != 0 || c.DroppedBytes != 0 {
+		parts = append(parts, fmt.Sprintf("dropped=%d/%dB", c.DroppedChunks, c.DroppedBytes))
+	}
+	if c.Command != "" {
+		parts = append(parts, "command="+statusPanelValue(c.Command))
+	}
+	return strings.Join(parts, " ")
 }
 
 func approvalActivity(action string, approval *memaxagent.ApprovalEvent) string {

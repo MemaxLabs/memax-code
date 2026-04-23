@@ -137,9 +137,10 @@ func TestRenderTUIEventsPrintsStructuredSectionsAndStatus(t *testing.T) {
 	}
 	events <- memaxagent.Event{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{Name: "run_command"}}
 	events <- memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
-		Command:  "go test ./...",
-		Argv:     []string{"sh", "-c", "go test ./..."},
-		ExitCode: 0,
+		Command:    "go test ./...",
+		Argv:       []string{"sh", "-c", "go test ./..."},
+		ExitCode:   0,
+		DurationMS: 120,
 	}}
 	events <- memaxagent.Event{Kind: memaxagent.EventWorkspacePatch, Workspace: &memaxagent.WorkspaceEvent{
 		Paths:   []string{"README.md"},
@@ -164,10 +165,11 @@ func TestRenderTUIEventsPrintsStructuredSectionsAndStatus(t *testing.T) {
 		"[status]\nphase: done\nsession: 00000000-0000-7000-8000-000000000001\nsummary: tools=1 commands=1 patches=1 verifications=0 done=true",
 		`last_tool="run_command"`,
 		`last_command="go test ./..."`,
+		`last_command_status="status=exited exit=0 duration=120ms command=go test ./..."`,
 		`last_patch="README.md changes=1"`,
 		"phase=done",
 		"active_tools:\n  - run_command\n",
-		"recent:\n  command: go test ./...\n  patch: README.md changes=1\n",
+		"recent:\n  command: go test ./...\n  command_status: status=exited exit=0 duration=120ms command=go test ./...\n  patch: README.md changes=1\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("tui output missing %q:\n%s", want, got)
@@ -189,14 +191,14 @@ func TestLiveRenderEventsPrintsTransientStatusAndFinalStatus(t *testing.T) {
 	close(events)
 
 	var out bytes.Buffer
-	if err := renderWith(&out, events, &liveRenderState{}); err != nil {
+	if err := renderWith(&out, events, &liveRenderState{statusWidth: 160}); err != nil {
 		t.Fatalf("renderWith() error = %v", err)
 	}
 	got := out.String()
 	for _, want := range []string{
 		clearLine + "Memax Code | running",
 		"active=run_command",
-		"cmd=go test ./...",
+		"active_cmd=cmd-1",
 		clearLine + "\n[status]",
 		"phase=done",
 	} {
@@ -362,7 +364,7 @@ func TestLiveRenderStatusIncludesCompactCounts(t *testing.T) {
 		"tool_errors=1",
 		"elapsed=3s",
 		"last_tool=run_command",
-		"cmd=go test ./...",
+		"active_cmd=cmd-1",
 		"tools=1 commands=1 patches=1 checks=1",
 	} {
 		if !strings.Contains(got, want) {
@@ -494,13 +496,17 @@ func TestRenderTUIEventsTracksActivityStatus(t *testing.T) {
 		`approval_events=2`,
 		`last_tool="start_command"`,
 		`last_command="npm test -- --watch"`,
+		`last_command_status="id=cmd-1 status=running pid=123 command=npm test -- --watch"`,
 		`last_verification="go test ./..."`,
 		`last_approval="granted:workspace_apply_patch"`,
 		`phase=running`,
 		`phase: running`,
 		`summary: tools=1 commands=1 patches=0 verifications=1`,
+		`active_commands:`,
+		`  - id=cmd-1 status=running pid=123 command=npm test -- --watch`,
 		`recent:`,
 		`  command: npm test -- --watch`,
+		`  command_status: id=cmd-1 status=running pid=123 command=npm test -- --watch`,
 		`  verification: go test ./...`,
 		`  approval: granted:workspace_apply_patch`,
 	} {

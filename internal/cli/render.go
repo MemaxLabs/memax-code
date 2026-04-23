@@ -394,9 +394,16 @@ func renderActivityStatus(w io.Writer, activity activitySnapshot) {
 			fmt.Fprintf(w, "  - %s\n", statusPanelValue(name))
 		}
 	}
-	if activity.LastCommand != "" || activity.LastPatch != "" || activity.LastVerification != "" || activity.LastApproval != "" {
+	if len(activity.ActiveCommands) > 0 {
+		fmt.Fprintln(w, "active_commands:")
+		for _, command := range activity.ActiveCommands {
+			fmt.Fprintf(w, "  - %s\n", statusPanelValue(command.summary()))
+		}
+	}
+	if activity.LastCommand != "" || activity.LastCommandState != "" || activity.LastPatch != "" || activity.LastVerification != "" || activity.LastApproval != "" {
 		fmt.Fprintln(w, "recent:")
 		renderRecentStatus(w, "command", activity.LastCommand)
+		renderRecentStatus(w, "command_status", activity.LastCommandState)
 		renderRecentStatus(w, "patch", activity.LastPatch)
 		renderRecentStatus(w, "verification", activity.LastVerification)
 		renderRecentStatus(w, "approval", activity.LastApproval)
