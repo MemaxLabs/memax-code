@@ -20,8 +20,9 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
   and transcript inspection
 - dry-run configuration inspection
 - local setup diagnostics with `memax-code doctor`
-- a line-oriented interactive shell with slash commands, multi-line draft
-  submission, and in-shell prompt history recall
+- an interactive shell with slash commands, multi-line draft submission,
+  in-shell prompt history recall, and terminal raw-key line editing when stdin
+  and stderr are TTYs
 - event-stream rendering for assistant text, tool calls, command lifecycle,
   workspace edits, verification, usage, and final results, with `auto`, `live`,
   `app`, `tui`, and `plain` renderer modes
@@ -35,9 +36,16 @@ The status surfaces track active tools, active command sessions, recent command
 outcomes, approvals, patches, and verification checks. `--interactive` starts a
 prompt loop with `/help`, `/session`, `/pick`, `/sessions`, `/resume`, `/draft`,
 `/append`, `/show-draft`, `/submit`, `/cancel`, `/history`, `/recall`, `/new`,
-and `/quit`. It does not yet ship sandboxed OS execution or the full raw-key
-composer expected from a mature coding-agent CLI. Those are product slices on
-top of this foundation.
+and `/quit`. In real terminals it enables raw-key editing for the current input
+line: Left/Right move the cursor, Home/End or Ctrl+A/Ctrl+E jump to line
+boundaries, Backspace/Delete edit in place, Up/Down traverse in-shell prompt
+history, Ctrl+C clears the current input, and Ctrl+D exits from an empty line.
+The raw-key reader is intentionally still a single-line Foundation editor:
+multi-line submissions use `/draft` and `/append`, pasted newlines submit the
+current line, standalone ESC waits for a following key, and very long wrapped
+lines can redraw imperfectly. It does not yet ship sandboxed OS execution or
+the full-screen composer expected from a mature coding-agent CLI. Those are
+product slices on top of this foundation.
 
 ## Usage
 
@@ -143,6 +151,13 @@ commands inside a draft must start at the beginning of the line, so indented
 paths and code snippets such as `  /etc/hosts` stay in the draft.
 Submitted prompts are remembered for the current shell; use `/history` and
 `/recall N` to restore one into the draft before editing and submitting again.
+When stdin and stderr are terminals, the prompt line also supports shell-style
+editing keys: Up/Down for prompt history, Left/Right for cursor movement,
+Home/End or Ctrl+A/Ctrl+E for line boundaries, Backspace/Delete for local
+editing, Ctrl+C to clear the current input, and Ctrl+D to exit from an empty
+line. Multi-line prompts still use `/draft` and `/append`; pasted newlines
+submit the current prompt line. Piped input keeps the stable line-oriented
+behavior used by tests and scripts.
 
 Resume an earlier conversation:
 

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -31,21 +30,22 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 	fmt.Fprintln(stderr, "Memax Code interactive shell")
 	fmt.Fprintln(stderr, "Type /help for commands, /quit to exit.")
 
-	scanner := bufio.NewScanner(stdin)
-	scanner.Buffer(make([]byte, 0, 64*1024), interactiveScannerMaxBytes)
+	lineReader, err := newInteractiveLineReader(stdin, stderr)
+	if err != nil {
+		return err
+	}
 	var firstErr error
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		fmt.Fprint(stderr, composer.promptLabel())
-		// Scanner reads are intentionally line-oriented in this Foundation shell.
-		// Context cancellation is checked between prompts; a future full-screen
-		// shell can use async input to interrupt a blocked read immediately.
-		if !scanner.Scan() {
+		rawLine, ok, err := lineReader.ReadLine(ctx, composer.promptLabel(), composer)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			break
 		}
-		rawLine := scanner.Text()
 		commandLine := strings.TrimSpace(rawLine)
 		if commandLine == "" {
 			if composer.draftActive {
@@ -92,9 +92,6 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 			currentSession = sessionID
 		}
 		composer.history.Record(promptText)
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read interactive input: %w", err)
 	}
 	return firstErr
 }
