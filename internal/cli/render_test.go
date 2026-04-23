@@ -236,9 +236,9 @@ func TestAppRenderEventsDrawsDashboardPanels(t *testing.T) {
 		"[recent]",
 		"command_status: id=cmd-1 status=running pid=123 command=npm test -- --watch",
 		"verification: npm test",
-		"[transcript]",
+		"[transcript] live tail",
 		"I will inspect the failure.",
-		"↑/↓ scroll | PgUp/PgDn page | Home/End jump | Ctrl+C cancel",
+		"↑/↓ scroll | PgUp/PgDn page | Home/End jump | ? help | Ctrl+C cancel",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("app output missing %q:\n%s", want, got)
@@ -304,7 +304,7 @@ func TestAppRenderFrameHonorsConfiguredHeight(t *testing.T) {
 	if len(lines) > renderer.height {
 		t.Fatalf("frame height = %d, want <= %d:\n%s", len(lines), renderer.height, strings.Join(lines, "\n"))
 	}
-	if lines[len(lines)-1] != "↑/↓ scroll | PgUp/PgDn page | Home/End jump | Ctrl+C cancel" {
+	if lines[len(lines)-1] != "↑/↓ scroll | PgUp/PgDn page | Home/End jump | ? help | Ctrl+C cancel" {
 		t.Fatalf("last line = %q, want footer", lines[len(lines)-1])
 	}
 	if !strings.Contains(strings.Join(lines, "\n"), "... 1 more active commands") {
@@ -437,6 +437,55 @@ func TestAppRenderHandleKeyScrollsTranscript(t *testing.T) {
 	}
 	if got := renderer.transcriptOffset; got != 0 {
 		t.Fatalf("after End transcriptOffset = %d, want 0", got)
+	}
+}
+
+func TestAppRenderHandleKeyTogglesHelpAndHidesOnScroll(t *testing.T) {
+	rendererWithHelp := func() *appRenderState {
+		renderer := &appRenderState{width: 60, height: 14}
+		renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\n")
+		renderer.helpVisible = true
+		return renderer
+	}
+
+	var out bytes.Buffer
+	renderer := rendererWithHelp()
+	if err := renderer.HandleKey(&out, rawKey{kind: rawKeyRune, char: '?'}); err != nil {
+		t.Fatalf("HandleKey(?) error = %v", err)
+	}
+	if renderer.helpVisible {
+		t.Fatal("helpVisible = true after toggle, want false")
+	}
+	if got := out.String(); !strings.Contains(got, "[transcript] live tail") {
+		t.Fatalf("toggle output missing transcript view status:\n%s", got)
+	}
+
+	tests := []struct {
+		name string
+		key  rawKey
+		want string
+	}{
+		{name: "Up", key: rawKey{kind: rawKeyHistoryPrev}, want: "[transcript] manual scroll"},
+		{name: "Down", key: rawKey{kind: rawKeyHistoryNext}, want: "[transcript] live tail"},
+		{name: "PageUp", key: rawKey{kind: rawKeyPageUp}, want: "[transcript] manual scroll"},
+		{name: "PageDown", key: rawKey{kind: rawKeyPageDown}, want: "[transcript] live tail"},
+		{name: "Home", key: rawKey{kind: rawKeyHome}, want: "[transcript] manual scroll"},
+		{name: "End", key: rawKey{kind: rawKeyEnd}, want: "[transcript] live tail"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			renderer := rendererWithHelp()
+			if err := renderer.HandleKey(&out, tt.key); err != nil {
+				t.Fatalf("HandleKey(%s) with help error = %v", tt.name, err)
+			}
+			if renderer.helpVisible {
+				t.Fatalf("helpVisible = true after %s, want false", tt.name)
+			}
+			if got := out.String(); !strings.Contains(got, tt.want) {
+				t.Fatalf("%s output missing %q:\n%s", tt.name, tt.want, got)
+			}
+		})
 	}
 }
 

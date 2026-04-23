@@ -28,6 +28,7 @@ type appRenderState struct {
 	width                    int
 	height                   int
 	transcriptOffset         int
+	helpVisible              bool
 	startedAt                time.Time
 	now                      func() time.Time
 }
@@ -65,17 +66,29 @@ func (s *appRenderState) TickInterval() time.Duration {
 
 func (s *appRenderState) HandleKey(w io.Writer, key rawKey) error {
 	switch key.kind {
+	case rawKeyRune:
+		if key.char == '?' {
+			s.helpVisible = !s.helpVisible
+			s.redraw(w)
+		}
+		return nil
 	case rawKeyHistoryPrev:
+		s.helpVisible = false
 		s.scrollTranscript(1)
 	case rawKeyHistoryNext:
+		s.helpVisible = false
 		s.scrollTranscript(-1)
 	case rawKeyPageUp:
+		s.helpVisible = false
 		s.scrollTranscript(s.transcriptPageStep())
 	case rawKeyPageDown:
+		s.helpVisible = false
 		s.scrollTranscript(-s.transcriptPageStep())
 	case rawKeyHome:
+		s.helpVisible = false
 		s.scrollTranscript(maxAppTranscriptLines)
 	case rawKeyEnd:
+		s.helpVisible = false
 		s.transcriptOffset = 0
 	case rawKeyCtrlC:
 		return contextCanceled
@@ -115,7 +128,16 @@ func (s *appRenderState) redraw(w io.Writer) {
 func (s *appRenderState) frameLines(activity activitySnapshot, width, height int) []string {
 	frame := newAppShellFrame(activity, s.transcriptTail.lines(maxAppTranscriptLines), width, height, s.elapsedStatus())
 	frame.TranscriptOffset = s.transcriptOffset
+	frame.TranscriptStatus = s.transcriptStatus()
+	frame.HelpVisible = s.helpVisible
 	return frame.Lines()
+}
+
+func (s *appRenderState) transcriptStatus() string {
+	if s.transcriptOffset == 0 {
+		return "live tail"
+	}
+	return "manual scroll (" + appHiddenLine("↓", s.transcriptOffset, "newer") + " below)"
 }
 
 func (s *appRenderState) scrollTranscript(delta int) {

@@ -18,6 +18,8 @@ type appShellFrame struct {
 	Height           int
 	Transcript       []string
 	TranscriptOffset int
+	TranscriptStatus string
+	HelpVisible      bool
 }
 
 type appShellPanel struct {
@@ -27,12 +29,13 @@ type appShellPanel struct {
 
 func newAppShellFrame(activity activitySnapshot, transcript []string, width, height int, elapsed string) appShellFrame {
 	return appShellFrame{
-		Header:     appHeaderLine(activity, elapsed),
-		Panels:     appPanels(activity),
-		Footer:     "↑/↓ scroll | PgUp/PgDn page | Home/End jump | Ctrl+C cancel",
-		Width:      width,
-		Height:     height,
-		Transcript: transcript,
+		Header:           appHeaderLine(activity, elapsed),
+		Panels:           appPanels(activity),
+		Footer:           "↑/↓ scroll | PgUp/PgDn page | Home/End jump | ? help | Ctrl+C cancel",
+		Width:            width,
+		Height:           height,
+		Transcript:       transcript,
+		TranscriptStatus: "live tail",
 	}
 }
 
@@ -50,7 +53,11 @@ func appPanels(activity activitySnapshot) []appShellPanel {
 func (f appShellFrame) Lines() []string {
 	lines := f.transcriptPrefixLines()
 	transcriptBudget := appTranscriptBudget(f.Height, len(lines))
-	lines = append(lines, newAppTranscriptViewport(f.Transcript, transcriptBudget, f.TranscriptOffset).Lines()...)
+	if f.HelpVisible {
+		lines = append(lines, appHelpLines(transcriptBudget)...)
+	} else {
+		lines = append(lines, newAppTranscriptViewport(f.Transcript, transcriptBudget, f.TranscriptOffset).Lines()...)
+	}
 	lines = append(lines, appRule(f.Width), f.Footer)
 	return fitFrameHeight(lines, f.Height)
 }
@@ -89,8 +96,18 @@ func (f appShellFrame) transcriptPrefixLines() []string {
 		}
 	}
 
-	lines = append(lines, "", "[transcript]")
+	lines = append(lines, "", f.transcriptHeading())
 	return lines
+}
+
+func (f appShellFrame) transcriptHeading() string {
+	if f.HelpVisible {
+		return "[help] press ? to return"
+	}
+	if f.TranscriptStatus == "" {
+		return "[transcript]"
+	}
+	return "[transcript] " + f.TranscriptStatus
 }
 
 func appRule(width int) string {
@@ -254,4 +271,26 @@ func appHiddenLine(prefix string, count int, label string) string {
 		return fmt.Sprintf("%s 1 %s line", prefix, label)
 	}
 	return fmt.Sprintf("%s %d %s lines", prefix, count, label)
+}
+
+func appHelpLines(height int) []string {
+	lines := []string{
+		"? toggle help",
+		"↑/↓ move one line through transcript history",
+		"PgUp/PgDn move one page through transcript history",
+		"Home jump to the oldest visible page",
+		"End return to the live tail",
+		"Ctrl+C cancel the active run",
+	}
+	if height <= 0 {
+		return nil
+	}
+	if len(lines) <= height {
+		return lines
+	}
+	if height == 1 {
+		return []string{lines[0]}
+	}
+	visible := append([]string(nil), lines[:height-1]...)
+	return append(visible, "…")
 }

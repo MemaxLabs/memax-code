@@ -209,15 +209,17 @@ CI logs and redirected output remain stable.
 redirected, it falls back to the plain renderer so scripts never receive
 terminal control sequences. The app shell redraws a stable dashboard with
 phase, elapsed time, active work, attention items, recent activity, transcript
-tail, and footer controls. It intentionally uses an inline screen for now:
+tail, visible transcript view state, and footer controls. It intentionally uses
+an inline screen for now:
 pre-existing scrollback remains available, while the dashboard keeps only a
 bounded transcript viewport and marks hidden earlier/newer lines. In real
 terminals, `--ui app` accepts Up/Down for line scrolling, PageUp/PageDown for
-page scrolling, and Home/End to jump between the oldest visible page and the
-live tail. Use `--ui tui` when full session scrollback matters. `--ui live` is
-the lighter-weight status line mode; it reports phase, elapsed time, tool
-errors, active tool, command, approval, compact activity counts, and usage
-while preserving the sectioned transcript underneath.
+page scrolling, Home/End to jump between the oldest visible page and the live
+tail, and `?` to toggle an in-app keybinding overlay. Use `--ui tui` when full
+session scrollback matters. `--ui live` is the lighter-weight status line mode;
+it reports phase, elapsed time, tool errors, active tool, command, approval,
+compact activity counts, and usage while preserving the sectioned transcript
+underneath.
 Operational events are rendered as a compact `[activity]` timeline so tool
 calls, command lifecycle, approvals, workspace edits, verification, and errors
 remain easy to scan without losing assistant text. The structured renderer ends

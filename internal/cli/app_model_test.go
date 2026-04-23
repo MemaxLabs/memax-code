@@ -26,8 +26,8 @@ func TestAppShellFrameRendersDeterministicPanels(t *testing.T) {
 		"  command: id=cmd-1 status=running pid=123 command=go test ./...",
 		"[recent]\n  command_status: id=cmd-1 status=running pid=123 command=go test ./...",
 		"  verification: go test ./...",
-		"[transcript]\nassistant: checking tests",
-		"↑/↓ scroll | PgUp/PgDn page | Home/End jump | Ctrl+C cancel",
+		"[transcript] live tail\nassistant: checking tests",
+		"↑/↓ scroll | PgUp/PgDn page | Home/End jump | ? help | Ctrl+C cancel",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("frame output missing %q:\n%s", want, got)
@@ -84,11 +84,40 @@ func TestAppShellFrameTranscriptViewportKeepsRecentLines(t *testing.T) {
 	if strings.Contains(got, "old") {
 		t.Fatalf("frame output included old transcript line:\n%s", got)
 	}
-	if !strings.Contains(got, "[transcript]\nmiddle\nnew") {
+	if !strings.Contains(got, "[transcript] live tail\nmiddle\nnew") {
 		t.Fatalf("frame output missing recent transcript tail:\n%s", got)
 	}
 	if lines := frame.Lines(); len(lines) > 13 {
 		t.Fatalf("frame height = %d, want <= 13:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+}
+
+func TestAppShellFrameTranscriptHeadingReflectsManualScroll(t *testing.T) {
+	frame := newAppShellFrame(activitySnapshot{Phase: "running"}, []string{"one", "two", "three"}, 60, 12, "")
+	frame.TranscriptStatus = "manual scroll (↓ 2 newer lines below)"
+
+	got := strings.Join(frame.Lines(), "\n")
+	if !strings.Contains(got, "[transcript] manual scroll (↓ 2 newer lines below)") {
+		t.Fatalf("frame output missing manual scroll heading:\n%s", got)
+	}
+}
+
+func TestAppShellFrameHelpOverlayReplacesTranscriptViewport(t *testing.T) {
+	frame := newAppShellFrame(activitySnapshot{Phase: "running"}, []string{"one", "two", "three"}, 60, 18, "")
+	frame.HelpVisible = true
+
+	got := strings.Join(frame.Lines(), "\n")
+	for _, want := range []string{
+		"[help] press ? to return",
+		"? toggle help",
+		"Ctrl+C cancel the active run",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("frame output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "\none\n") {
+		t.Fatalf("help overlay leaked transcript content:\n%s", got)
 	}
 }
 
