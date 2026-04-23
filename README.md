@@ -20,7 +20,8 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
   and transcript inspection
 - dry-run configuration inspection
 - local setup diagnostics with `memax-code doctor`
-- a line-oriented interactive shell with slash commands for session control
+- a line-oriented interactive shell with slash commands and multi-line draft
+  submission for session control
 - event-stream rendering for assistant text, tool calls, command lifecycle,
   workspace edits, verification, usage, and final results, with `auto`, `live`,
   `app`, `tui`, and `plain` renderer modes
@@ -32,10 +33,10 @@ active-work, recent-activity, transcript, and footer panels. `--ui live` keeps a
 lighter live status line while preserving the sectioned transcript underneath.
 The status surfaces track active tools, active command sessions, recent command
 outcomes, approvals, patches, and verification checks. `--interactive` starts a
-simple prompt loop with `/help`, `/session`, `/pick`, `/sessions`, `/resume`,
-`/new`, and `/quit`. It does not yet ship sandboxed OS execution or the full
-keyboard-driven composer expected from a mature coding-agent CLI. Those are
-product slices on top of this foundation.
+prompt loop with `/help`, `/session`, `/pick`, `/sessions`, `/resume`, `/draft`,
+`/append`, `/show-draft`, `/submit`, `/cancel`, `/new`, and `/quit`. It does
+not yet ship sandboxed OS execution or the full raw-key composer expected from a
+mature coding-agent CLI. Those are product slices on top of this foundation.
 
 ## Usage
 
@@ -123,13 +124,20 @@ commands control local session state without calling a model:
 /sessions
 /resume latest
 /resume 1
+/draft Refactor this package
+/append Preserve public API behavior
+/show-draft
+/submit
 /session
 /new
 /quit
 ```
 
 Use `//` when a normal prompt needs to start with `/`, for example
-`//etc/hosts is broken; investigate`.
+`//etc/hosts is broken; investigate`. Inside an active draft, non-command lines
+are accumulated until `/submit`; use `/cancel` to discard the draft. Slash
+commands inside a draft must start at the beginning of the line, so indented
+paths and code snippets such as `  /etc/hosts` stay in the draft.
 
 Resume an earlier conversation:
 

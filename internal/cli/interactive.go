@@ -13,11 +13,21 @@ import (
 
 const interactiveScannerMaxBytes = 1024 * 1024
 
+type interactivePromptRunner func(context.Context, io.Writer, options) (string, error)
+
 func runInteractive(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, opts options) error {
+	return runInteractiveWithRunner(ctx, stdin, stdout, stderr, opts, runPromptWithSession)
+}
+
+func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, opts options, runPrompt interactivePromptRunner) error {
 	if stdin == nil {
 		stdin = strings.NewReader("")
 	}
+	if runPrompt == nil {
+		runPrompt = runPromptWithSession
+	}
 	currentSession := opts.ResumeSessionID
+	composer := &interactiveComposer{}
 	fmt.Fprintln(stderr, "Memax Code interactive shell")
 	fmt.Fprintln(stderr, "Type /help for commands, /quit to exit.")
 
@@ -28,29 +38,45 @@ func runInteractive(ctx context.Context, stdin io.Reader, stdout, stderr io.Writ
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		fmt.Fprint(stderr, "memax> ")
+		fmt.Fprint(stderr, composer.promptLabel())
 		// Scanner reads are intentionally line-oriented in this Foundation shell.
 		// Context cancellation is checked between prompts; a future full-screen
 		// shell can use async input to interrupt a blocked read immediately.
 		if !scanner.Scan() {
 			break
 		}
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		if isInteractiveCommandLine(line) {
-			if done := handleInteractiveCommand(ctx, stderr, opts, &currentSession, line); done {
-				return firstErr
+		rawLine := scanner.Text()
+		commandLine := strings.TrimSpace(rawLine)
+		if commandLine == "" {
+			if composer.draftActive {
+				composer.appendLine(rawLine)
 			}
 			continue
 		}
-		line = unescapeInteractivePrompt(line)
+		commandCandidate := commandLine
+		if composer.draftActive {
+			commandCandidate = rawLine
+		}
+		if isInteractiveCommandLine(commandCandidate) {
+			result := handleInteractiveCommand(ctx, stderr, opts, &currentSession, composer, commandCandidate)
+			if result.Done {
+				return firstErr
+			}
+			if result.SubmitPrompt == "" {
+				continue
+			}
+			rawLine = result.SubmitPrompt
+		} else if composer.draftActive {
+			composer.appendLine(unescapeInteractivePrompt(rawLine))
+			continue
+		} else {
+			rawLine = strings.TrimSpace(unescapeInteractivePrompt(rawLine))
+		}
 
 		turnOpts := opts
-		turnOpts.Prompt = line
+		turnOpts.Prompt = rawLine
 		turnOpts.ResumeSessionID = currentSession
-		sessionID, err := runPromptWithSession(ctx, stdout, turnOpts)
+		sessionID, err := runPrompt(ctx, stdout, turnOpts)
 		if err != nil {
 			if sessionID != "" {
 				currentSession = sessionID
@@ -71,12 +97,17 @@ func runInteractive(ctx context.Context, stdin io.Reader, stdout, stderr io.Writ
 	return firstErr
 }
 
-func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, currentSession *string, line string) bool {
+type interactiveCommandResult struct {
+	Done         bool
+	SubmitPrompt string
+}
+
+func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, currentSession *string, composer *interactiveComposer, line string) interactiveCommandResult {
 	name, arg := splitInteractiveCommand(line)
 	switch name {
 	case "/quit", "/exit":
 		fmt.Fprintln(w, "bye")
-		return true
+		return interactiveCommandResult{Done: true}
 	case "/help":
 		printInteractiveHelp(w)
 	case "/new":
@@ -92,6 +123,53 @@ func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, cu
 		if err := printInteractiveStatus(ctx, w, opts, *currentSession); err != nil {
 			fmt.Fprintf(w, "error: %v\n", err)
 		}
+		if composer != nil {
+			fmt.Fprintf(w, "  %s\n", composer.statusLine())
+		}
+	case "/draft":
+		if composer == nil {
+			fmt.Fprintln(w, "drafts are unavailable")
+			return interactiveCommandResult{}
+		}
+		if composer.draftActive && composer.lineCount() > 0 {
+			fmt.Fprintf(w, "discarded draft: lines=%d\n", composer.lineCount())
+		}
+		composer.start(unescapeInteractivePrompt(arg))
+		fmt.Fprintln(w, "draft started; type lines, /submit to send, /cancel to discard")
+	case "/append":
+		if composer == nil {
+			fmt.Fprintln(w, "drafts are unavailable")
+			return interactiveCommandResult{}
+		}
+		if !composer.draftActive {
+			fmt.Fprintln(w, "draft started; type lines, /submit to send, /cancel to discard")
+		}
+		composer.appendLine(unescapeInteractivePrompt(arg))
+		fmt.Fprintf(w, "draft appended: lines=%d\n", composer.lineCount())
+	case "/draft-show", "/show-draft":
+		printInteractiveDraft(w, composer)
+	case "/cancel":
+		if composer == nil || !composer.draftActive {
+			fmt.Fprintln(w, "no active draft")
+		} else {
+			composer.cancel()
+			fmt.Fprintln(w, "draft canceled")
+		}
+	case "/submit":
+		if composer == nil {
+			fmt.Fprintln(w, "drafts are unavailable")
+			return interactiveCommandResult{}
+		}
+		if !composer.draftActive {
+			fmt.Fprintln(w, "no active draft")
+			return interactiveCommandResult{}
+		}
+		prompt, ok := composer.submit()
+		if !ok {
+			fmt.Fprintln(w, "draft is empty")
+			return interactiveCommandResult{}
+		}
+		return interactiveCommandResult{SubmitPrompt: prompt}
 	case "/show":
 		if err := showInteractiveSession(ctx, w, opts, *currentSession, arg); err != nil {
 			fmt.Fprintf(w, "error: %v\n", err)
@@ -99,12 +177,12 @@ func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, cu
 	case "/resume":
 		if arg == "" {
 			fmt.Fprintln(w, "usage: /resume SESSION_ID|latest|N")
-			return false
+			return interactiveCommandResult{}
 		}
 		id, err := resolveInteractiveSessionID(ctx, opts, arg, "resume")
 		if err != nil {
 			fmt.Fprintf(w, "error: %v\n", err)
-			return false
+			return interactiveCommandResult{}
 		}
 		*currentSession = id
 		fmt.Fprintf(w, "resumed session: %s\n", id)
@@ -119,7 +197,7 @@ func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, cu
 	default:
 		fmt.Fprintf(w, "unknown command %q; type /help\n", name)
 	}
-	return false
+	return interactiveCommandResult{}
 }
 
 func printInteractiveStatus(ctx context.Context, w io.Writer, opts options, currentSession string) error {
@@ -278,6 +356,11 @@ func printInteractiveHelp(w io.Writer) {
 	fmt.Fprintln(w, "  /sessions          list saved sessions")
 	fmt.Fprintln(w, "  /resume TARGET     resume by ID, latest, or number")
 	fmt.Fprintln(w, "  /new               start the next prompt in a new session")
+	fmt.Fprintln(w, "  /draft [TEXT]      start a multi-line draft")
+	fmt.Fprintln(w, "  /append TEXT       append one line to the draft")
+	fmt.Fprintln(w, "  /show-draft        show the active draft")
+	fmt.Fprintln(w, "  /submit            send the active draft")
+	fmt.Fprintln(w, "  /cancel            discard the active draft")
 	fmt.Fprintln(w, "  /quit              exit")
 	fmt.Fprintln(w, "  //PROMPT           send a prompt that starts with /")
 }

@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -950,6 +952,95 @@ func TestRunInteractiveHandlesSlashCommandsWithoutProvider(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestRunInteractiveDraftCommandsWithoutProvider(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := RunWithIO(context.Background(), []string{
+		"--interactive",
+		"--session-dir", t.TempDir(),
+	}, strings.NewReader("/draft\nfirst line\n  indented line\n  /etc/hosts\n\n//literal slash\n/show-draft\n/cancel\n/status\n/quit\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("RunWithIO() error = %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no transcript for slash-only draft session", stdout.String())
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"draft started; type lines, /submit to send, /cancel to discard",
+		"draft> ",
+		"draft:",
+		"  first line",
+		"    indented line",
+		"    /etc/hosts",
+		"  /literal slash",
+		"draft canceled",
+		"draft: inactive",
+		"bye",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunInteractiveDraftPolishCommands(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := RunWithIO(context.Background(), []string{
+		"--interactive",
+		"--session-dir", t.TempDir(),
+	}, strings.NewReader("/append first\n/draft replacement\n/submit\n/quit\n"), &stdout, &stderr)
+	if err == nil {
+		t.Fatalf("RunWithIO() error = nil, want provider setup error after draft submit")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no transcript without provider", stdout.String())
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"draft started; type lines, /submit to send, /cancel to discard",
+		"draft appended: lines=1",
+		"discarded draft: lines=1",
+		"error:",
+		"bye",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunInteractiveSubmitsDraftAsOnePrompt(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	var prompts []string
+	err := runInteractiveWithRunner(
+		context.Background(),
+		strings.NewReader("/draft Refactor this\nwith detail\n/submit\n/session\n/quit\n"),
+		&stdout,
+		&stderr,
+		options{SessionDir: t.TempDir(), UI: renderModePlain},
+		func(_ context.Context, w io.Writer, opts options) (string, error) {
+			prompts = append(prompts, opts.Prompt)
+			fmt.Fprintln(w, "ran prompt")
+			return "00000000-0000-7000-8000-000000000123", nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("runInteractiveWithRunner() error = %v", err)
+	}
+	if len(prompts) != 1 {
+		t.Fatalf("submitted prompts = %#v, want one prompt", prompts)
+	}
+	if want := "Refactor this\nwith detail"; prompts[0] != want {
+		t.Fatalf("submitted prompt = %q, want %q", prompts[0], want)
+	}
+	if got := stdout.String(); !strings.Contains(got, "ran prompt") {
+		t.Fatalf("stdout = %q, want fake prompt output", got)
+	}
+	if out := stderr.String(); !strings.Contains(out, "session: 00000000-0000-7000-8000-000000000123") {
+		t.Fatalf("interactive stderr missing updated session:\n%s", out)
 	}
 }
 
