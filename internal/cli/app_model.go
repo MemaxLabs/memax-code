@@ -11,12 +11,13 @@ const (
 )
 
 type appShellFrame struct {
-	Header     string
-	Panels     []appShellPanel
-	Footer     string
-	Width      int
-	Height     int
-	Transcript []string
+	Header           string
+	Panels           []appShellPanel
+	Footer           string
+	Width            int
+	Height           int
+	Transcript       []string
+	TranscriptOffset int
 }
 
 type appShellPanel struct {
@@ -69,13 +70,13 @@ func (f appShellFrame) Lines() []string {
 	}
 
 	lines = append(lines, "", "[transcript]")
-	// Tight terminals preserve status panels and footer first; transcript tail
-	// may temporarily collapse until the app shell gets a scrollable viewport.
+	// Tight terminals preserve status panels and footer first; transcript rows
+	// may temporarily collapse until the app shell gets interactive scrolling.
 	transcriptBudget := f.Height - len(lines) - 2
 	if transcriptBudget < 0 {
 		transcriptBudget = 0
 	}
-	lines = append(lines, tailLines(f.Transcript, transcriptBudget)...)
+	lines = append(lines, newAppTranscriptViewport(f.Transcript, transcriptBudget, f.TranscriptOffset).Lines()...)
 	lines = append(lines, rule, f.Footer)
 	return fitFrameHeight(lines, f.Height)
 }
@@ -172,12 +173,73 @@ func appApprovalAttentionSummary(approval string) string {
 	return strings.TrimPrefix(approval, "requested:")
 }
 
-func tailLines(lines []string, limit int) []string {
-	if limit <= 0 {
+type appTranscriptViewport struct {
+	lines  []string
+	height int
+	offset int
+}
+
+func newAppTranscriptViewport(lines []string, height, offset int) appTranscriptViewport {
+	if offset < 0 {
+		offset = 0
+	}
+	return appTranscriptViewport{
+		lines:  lines,
+		height: height,
+		offset: offset,
+	}
+}
+
+func (v appTranscriptViewport) Lines() []string {
+	if v.height <= 0 || len(v.lines) == 0 {
 		return nil
 	}
-	if len(lines) <= limit {
-		return append([]string(nil), lines...)
+
+	offset := v.offset
+	maxOffset := len(v.lines) - v.height
+	if maxOffset < 0 {
+		maxOffset = 0
 	}
-	return append([]string(nil), lines[len(lines)-limit:]...)
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+
+	end := len(v.lines) - offset
+	start := end - v.height
+	if start < 0 {
+		start = 0
+	}
+
+	hasOlder := start > 0
+	hasNewer := end < len(v.lines)
+	if v.height < 3 || (!hasOlder && !hasNewer) {
+		// Marker rows need at least one content row between them; tiny panes
+		// keep raw transcript rows instead of spending space on indicators.
+		return append([]string(nil), v.lines[start:end]...)
+	}
+
+	contentStart := start
+	contentEnd := end
+	visible := make([]string, 0, v.height)
+	if hasOlder {
+		contentStart++
+		visible = append(visible, appHiddenLine("↑", contentStart, "earlier"))
+	}
+	if hasNewer {
+		contentEnd--
+	}
+	if contentStart < contentEnd {
+		visible = append(visible, v.lines[contentStart:contentEnd]...)
+	}
+	if hasNewer {
+		visible = append(visible, appHiddenLine("↓", len(v.lines)-contentEnd, "newer"))
+	}
+	return visible
+}
+
+func appHiddenLine(prefix string, count int, label string) string {
+	if count == 1 {
+		return fmt.Sprintf("%s 1 %s line", prefix, label)
+	}
+	return fmt.Sprintf("%s %d %s lines", prefix, count, label)
 }

@@ -91,3 +91,99 @@ func TestAppShellFrameTranscriptViewportKeepsRecentLines(t *testing.T) {
 		t.Fatalf("frame height = %d, want <= 13:\n%s", len(lines), strings.Join(lines, "\n"))
 	}
 }
+
+func TestAppTranscriptViewportMarksHiddenEarlierLines(t *testing.T) {
+	got := newAppTranscriptViewport([]string{
+		"one",
+		"two",
+		"three",
+		"four",
+		"five",
+	}, 3, 0).Lines()
+	want := []string{"↑ 3 earlier lines", "four", "five"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("viewport lines = %#v, want %#v", got, want)
+	}
+}
+
+func TestAppTranscriptViewportCanScrollBack(t *testing.T) {
+	got := newAppTranscriptViewport([]string{
+		"one",
+		"two",
+		"three",
+		"four",
+		"five",
+		"six",
+	}, 4, 2).Lines()
+	want := []string{"one", "two", "three", "↓ 3 newer lines"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("viewport lines = %#v, want %#v", got, want)
+	}
+}
+
+func TestAppTranscriptViewportMarksBothDirections(t *testing.T) {
+	got := newAppTranscriptViewport([]string{
+		"one",
+		"two",
+		"three",
+		"four",
+		"five",
+		"six",
+		"seven",
+		"eight",
+		"nine",
+		"ten",
+	}, 3, 5).Lines()
+	want := []string{"↑ 3 earlier lines", "four", "↓ 6 newer lines"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("viewport lines = %#v, want %#v", got, want)
+	}
+}
+
+func TestAppTranscriptViewportClampsOffsetPastTop(t *testing.T) {
+	got := newAppTranscriptViewport([]string{
+		"one",
+		"two",
+		"three",
+		"four",
+		"five",
+	}, 3, 99).Lines()
+	want := []string{"one", "two", "↓ 3 newer lines"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("viewport lines = %#v, want %#v", got, want)
+	}
+}
+
+func TestAppTranscriptViewportShowsAllLinesWhenTheyFit(t *testing.T) {
+	got := newAppTranscriptViewport([]string{
+		"one",
+		"two",
+		"three",
+	}, 4, 0).Lines()
+	want := []string{"one", "two", "three"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("viewport lines = %#v, want %#v", got, want)
+	}
+}
+
+func TestAppTranscriptViewportOmitsMarkersOnTinyHeights(t *testing.T) {
+	got := newAppTranscriptViewport([]string{
+		"one",
+		"two",
+		"three",
+		"four",
+	}, 2, 0).Lines()
+	want := []string{"three", "four"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("viewport lines = %#v, want %#v", got, want)
+	}
+}
+
+func TestAppHiddenLineFormatsSingularAndPlural(t *testing.T) {
+	if got, want := appHiddenLine("↑", 1, "earlier"), "↑ 1 earlier line"; got != want {
+		t.Fatalf("hidden line = %q, want %q", got, want)
+	}
+	if got, want := appHiddenLine("↓", 2, "newer"), "↓ 2 newer lines"; got != want {
+		t.Fatalf("hidden line = %q, want %q", got, want)
+	}
+}
