@@ -135,8 +135,9 @@ shell automatically. `--interactive` remains useful when you want that behavior
 to be explicit in scripts, wrappers, or docs.
 
 `--interactive --ui app` now uses a single terminal surface. Prompts, slash
-commands, and app-shell query rendering all go through the same output stream
-so the dashboard and the shell stop fighting over the terminal.
+commands, session state, composer state, and query transcript all go through
+the same app shell surface so the dashboard and the shell stop fighting over
+the terminal.
 
 Inside the shell, type normal prompts to continue the current session. Slash
 commands control local session state without calling a model:

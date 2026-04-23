@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -26,8 +27,32 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 		runPrompt = runPromptWithSession
 	}
 	shellOut := interactiveShellWriter(opts.UI, stdout, stderr)
+	var inputObserver interactiveInputObserver
+	var appShell *appInteractiveShell
+	if opts.UI == renderModeApp {
+		appShell = newAppInteractiveShell(stdout)
+		shellOut = appShell
+		inputObserver = appShell
+		baseRunPrompt := runPrompt
+		runPrompt = func(ctx context.Context, _ io.Writer, turnOpts options) (string, error) {
+			captureOpts := turnOpts
+			captureOpts.UI = renderModeTUI
+			var transcript bytes.Buffer
+			sessionID, err := baseRunPrompt(ctx, &transcript, captureOpts)
+			appShell.SetSession(sessionID)
+			if transcript.Len() > 0 {
+				appShell.appendTranscript(transcript.String())
+				appShell.redraw()
+			}
+			return sessionID, err
+		}
+	}
 	currentSession := opts.ResumeSessionID
 	composer := &interactiveComposer{}
+	if appShell != nil {
+		appShell.SetSession(currentSession)
+		appShell.ObservePrompt(composer.promptLabel(), composerBuffer{}, composer)
+	}
 	historyStore := newPersistentPromptHistory(opts.HistoryFile)
 	if entries, err := historyStore.Load(); err != nil {
 		fmt.Fprintf(shellOut, "warning: %v\n", err)
@@ -37,7 +62,7 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 	fmt.Fprintln(shellOut, "Memax Code interactive shell")
 	fmt.Fprintln(shellOut, "Type /help for commands, /quit to exit.")
 
-	lineReader, err := newInteractiveLineReader(stdin, shellOut)
+	lineReader, err := newInteractiveLineReader(stdin, shellOut, inputObserver)
 	if err != nil {
 		return err
 	}
@@ -66,6 +91,10 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 		}
 		if isInteractiveCommandLine(commandCandidate) {
 			result := handleInteractiveCommand(ctx, shellOut, opts, &currentSession, composer, commandCandidate)
+			if appShell != nil {
+				appShell.SetSession(currentSession)
+				appShell.ObservePrompt(composer.promptLabel(), composer.buffer, composer)
+			}
 			if result.Done {
 				return firstErr
 			}
@@ -90,6 +119,10 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 				currentSession = sessionID
 			}
 			fmt.Fprintf(shellOut, "error: %v\n", err)
+			if appShell != nil {
+				appShell.SetSession(currentSession)
+				appShell.ObservePrompt(composer.promptLabel(), composer.buffer, composer)
+			}
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -102,6 +135,10 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 			if err := historyStore.Append(promptText); err != nil {
 				fmt.Fprintf(shellOut, "warning: %v\n", err)
 			}
+		}
+		if appShell != nil {
+			appShell.SetSession(currentSession)
+			appShell.ObservePrompt(composer.promptLabel(), composer.buffer, composer)
 		}
 	}
 	return firstErr

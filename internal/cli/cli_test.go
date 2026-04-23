@@ -1634,10 +1634,54 @@ func TestRunInteractiveAppUsesSingleOutputSurface(t *testing.T) {
 	}
 	out := stdout.String()
 	for _, want := range []string{
+		appClearScreen,
+		"[transcript] interactive shell",
 		"Memax Code interactive shell",
 		"Type /help for commands, /quit to exit.",
+		"[session]",
+		"id: none",
+		"[composer]",
+		"prompt: memax>",
+		"draft: inactive",
 		"slash commands:",
 		"bye",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive app stdout missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunInteractiveAppCapturesPromptRunTranscript(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := runInteractiveWithRunner(
+		context.Background(),
+		strings.NewReader("first prompt\n/quit\n"),
+		&stdout,
+		&stderr,
+		options{SessionDir: t.TempDir(), UI: renderModeApp},
+		func(_ context.Context, w io.Writer, opts options) (string, error) {
+			fmt.Fprintln(w, "[assistant]")
+			fmt.Fprintln(w, "working on it")
+			fmt.Fprintln(w, "[result]")
+			fmt.Fprintln(w, "done")
+			return "00000000-0000-7000-8000-000000000123", nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("runInteractiveWithRunner() error = %v", err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty when app shell owns the surface", stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"[session]",
+		"id: 00000000-0000-7000-8000-000000000123",
+		"[assistant]",
+		"working on it",
+		"[result]",
+		"done",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("interactive app stdout missing %q:\n%s", want, out)

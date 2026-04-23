@@ -16,11 +16,15 @@ type interactiveLineReader interface {
 	ReadLine(context.Context, string, *interactiveComposer) (string, bool, error)
 }
 
-func newInteractiveLineReader(stdin io.Reader, stderr io.Writer) (interactiveLineReader, error) {
-	if input, ok := stdin.(*os.File); ok && writerIsTerminal(stderr) && term.IsTerminal(int(input.Fd())) {
-		return newTerminalRawKeyLineReader(input, stderr), nil
+func newInteractiveLineReader(stdin io.Reader, stderr io.Writer, observers ...interactiveInputObserver) (interactiveLineReader, error) {
+	var observer interactiveInputObserver
+	if len(observers) > 0 {
+		observer = observers[0]
 	}
-	return newScannerLineReader(stdin, stderr), nil
+	if input, ok := stdin.(*os.File); ok && writerIsTerminal(stderr) && term.IsTerminal(int(input.Fd())) {
+		return newTerminalRawKeyLineReader(input, stderr, observer), nil
+	}
+	return newScannerLineReader(stdin, stderr, observer), nil
 }
 
 func writerIsTerminal(w io.Writer) bool {
@@ -32,21 +36,34 @@ func writerIsTerminal(w io.Writer) bool {
 }
 
 type scannerLineReader struct {
-	scanner *bufio.Scanner
-	out     io.Writer
+	scanner  *bufio.Scanner
+	out      io.Writer
+	observer interactiveInputObserver
 }
 
-func newScannerLineReader(r io.Reader, out io.Writer) *scannerLineReader {
+func newScannerLineReader(r io.Reader, out io.Writer, observer ...interactiveInputObserver) *scannerLineReader {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), interactiveScannerMaxBytes)
-	return &scannerLineReader{scanner: scanner, out: out}
+	var inputObserver interactiveInputObserver
+	if len(observer) > 0 {
+		inputObserver = observer[0]
+	}
+	return &scannerLineReader{scanner: scanner, out: out, observer: inputObserver}
 }
 
-func (r *scannerLineReader) ReadLine(ctx context.Context, prompt string, _ *interactiveComposer) (string, bool, error) {
+func (r *scannerLineReader) ReadLine(ctx context.Context, prompt string, composer *interactiveComposer) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
 	}
-	fmt.Fprint(r.out, prompt)
+	if r.observer != nil {
+		var buffer composerBuffer
+		if composer != nil {
+			buffer = composer.buffer
+		}
+		r.observer.ObservePrompt(prompt, buffer, composer)
+	} else {
+		fmt.Fprint(r.out, prompt)
+	}
 	if !r.scanner.Scan() {
 		if err := r.scanner.Err(); err != nil {
 			return "", false, fmt.Errorf("read interactive input: %w", err)
@@ -57,18 +74,20 @@ func (r *scannerLineReader) ReadLine(ctx context.Context, prompt string, _ *inte
 }
 
 type rawKeyLineReader struct {
-	input *bufio.Reader
-	out   io.Writer
+	input    *bufio.Reader
+	out      io.Writer
+	observer interactiveInputObserver
 }
 
 type terminalRawKeyLineReader struct {
-	file  *os.File
-	input *bufio.Reader
-	out   io.Writer
+	file     *os.File
+	input    *bufio.Reader
+	out      io.Writer
+	observer interactiveInputObserver
 }
 
-func newTerminalRawKeyLineReader(input *os.File, out io.Writer) *terminalRawKeyLineReader {
-	return &terminalRawKeyLineReader{file: input, input: bufio.NewReader(input), out: out}
+func newTerminalRawKeyLineReader(input *os.File, out io.Writer, observer interactiveInputObserver) *terminalRawKeyLineReader {
+	return &terminalRawKeyLineReader{file: input, input: bufio.NewReader(input), out: out, observer: observer}
 }
 
 func (r *terminalRawKeyLineReader) ReadLine(ctx context.Context, prompt string, composer *interactiveComposer) (string, bool, error) {
@@ -79,11 +98,15 @@ func (r *terminalRawKeyLineReader) ReadLine(ctx context.Context, prompt string, 
 	defer func() {
 		_ = term.Restore(int(r.file.Fd()), state)
 	}()
-	return (&rawKeyLineReader{input: r.input, out: r.out}).ReadLine(ctx, prompt, composer)
+	return (&rawKeyLineReader{input: r.input, out: r.out, observer: r.observer}).ReadLine(ctx, prompt, composer)
 }
 
-func newRawKeyLineReader(input io.Reader, out io.Writer) *rawKeyLineReader {
-	return &rawKeyLineReader{input: bufio.NewReader(input), out: out}
+func newRawKeyLineReader(input io.Reader, out io.Writer, observer ...interactiveInputObserver) *rawKeyLineReader {
+	var inputObserver interactiveInputObserver
+	if len(observer) > 0 {
+		inputObserver = observer[0]
+	}
+	return &rawKeyLineReader{input: bufio.NewReader(input), out: out, observer: inputObserver}
 }
 
 func (r *rawKeyLineReader) ReadLine(ctx context.Context, prompt string, composer *interactiveComposer) (string, bool, error) {
@@ -91,7 +114,7 @@ func (r *rawKeyLineReader) ReadLine(ctx context.Context, prompt string, composer
 		return "", false, err
 	}
 	var buffer composerBuffer
-	r.redraw(prompt, &buffer)
+	r.redraw(prompt, &buffer, composer)
 	for {
 		if err := ctx.Err(); err != nil {
 			return "", false, err
@@ -113,7 +136,7 @@ func (r *rawKeyLineReader) ReadLine(ctx context.Context, prompt string, composer
 			if composer != nil {
 				composer.history.ResetTraversal()
 			}
-			r.redraw(prompt, &buffer)
+			r.redraw(prompt, &buffer, composer)
 		case rawKeyEnter:
 			fmt.Fprintln(r.out)
 			if composer != nil {
@@ -126,7 +149,7 @@ func (r *rawKeyLineReader) ReadLine(ctx context.Context, prompt string, composer
 				composer.history.ResetTraversal()
 			}
 			fmt.Fprintln(r.out, "^C")
-			r.redraw(prompt, &buffer)
+			r.redraw(prompt, &buffer, composer)
 		case rawKeyCtrlD:
 			if buffer.Text() == "" {
 				fmt.Fprintln(r.out)
@@ -135,29 +158,29 @@ func (r *rawKeyLineReader) ReadLine(ctx context.Context, prompt string, composer
 			if buffer.Delete() && composer != nil {
 				composer.history.ResetTraversal()
 			}
-			r.redraw(prompt, &buffer)
+			r.redraw(prompt, &buffer, composer)
 		case rawKeyBackspace:
 			if buffer.Backspace() && composer != nil {
 				composer.history.ResetTraversal()
 			}
-			r.redraw(prompt, &buffer)
+			r.redraw(prompt, &buffer, composer)
 		case rawKeyDelete:
 			if buffer.Delete() && composer != nil {
 				composer.history.ResetTraversal()
 			}
-			r.redraw(prompt, &buffer)
+			r.redraw(prompt, &buffer, composer)
 		case rawKeyLeft:
 			buffer.MoveLeft()
-			r.redraw(prompt, &buffer)
+			r.redraw(prompt, &buffer, composer)
 		case rawKeyRight:
 			buffer.MoveRight()
-			r.redraw(prompt, &buffer)
+			r.redraw(prompt, &buffer, composer)
 		case rawKeyHome:
 			buffer.MoveStart()
-			r.redraw(prompt, &buffer)
+			r.redraw(prompt, &buffer, composer)
 		case rawKeyEnd:
 			buffer.MoveEnd()
-			r.redraw(prompt, &buffer)
+			r.redraw(prompt, &buffer, composer)
 		case rawKeyHistoryPrev:
 			if composer == nil {
 				break
@@ -165,7 +188,7 @@ func (r *rawKeyLineReader) ReadLine(ctx context.Context, prompt string, composer
 			text, ok := composer.history.Previous(buffer.Text())
 			if ok {
 				buffer.SetText(text)
-				r.redraw(prompt, &buffer)
+				r.redraw(prompt, &buffer, composer)
 			}
 		case rawKeyHistoryNext:
 			if composer == nil {
@@ -174,15 +197,19 @@ func (r *rawKeyLineReader) ReadLine(ctx context.Context, prompt string, composer
 			text, ok := composer.history.Next()
 			if ok {
 				buffer.SetText(text)
-				r.redraw(prompt, &buffer)
+				r.redraw(prompt, &buffer, composer)
 			}
 		case rawKeyClear:
-			r.redraw(prompt, &buffer)
+			r.redraw(prompt, &buffer, composer)
 		}
 	}
 }
 
-func (r *rawKeyLineReader) redraw(prompt string, buffer *composerBuffer) {
+func (r *rawKeyLineReader) redraw(prompt string, buffer *composerBuffer, composer *interactiveComposer) {
+	if r.observer != nil {
+		r.observer.ObservePrompt(prompt, *buffer, composer)
+		return
+	}
 	text := buffer.Text()
 	fmt.Fprintf(r.out, "\r\x1b[2K%s%s", prompt, text)
 	if back := len([]rune(text)) - buffer.Cursor(); back > 0 {
