@@ -207,10 +207,10 @@ CI logs and redirected output remain stable.
 `--ui app` is opt-in while the terminal UX is maturing. When output is
 redirected, it falls back to the plain renderer so scripts never receive
 terminal control sequences. The app shell redraws a stable dashboard with
-phase, elapsed time, active work, recent activity, transcript tail, and footer
-controls. It intentionally uses an inline screen for now: pre-existing
-scrollback remains available, while the dashboard keeps only a bounded
-transcript tail. Use `--ui tui` when full session scrollback matters. `--ui
+phase, elapsed time, active work, attention items, recent activity, transcript
+tail, and footer controls. It intentionally uses an inline screen for now:
+pre-existing scrollback remains available, while the dashboard keeps only a
+bounded transcript tail. Use `--ui tui` when full session scrollback matters. `--ui
 live` is the lighter-weight status line mode; it reports phase, elapsed time,
 tool errors, active tool, command, approval, compact activity counts, and usage
 while preserving the sectioned transcript underneath.

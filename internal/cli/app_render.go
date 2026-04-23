@@ -16,8 +16,6 @@ const (
 	defaultAppShellHeight = 28
 	appShellTickInterval  = 120 * time.Millisecond
 	maxAppTranscriptLines = 512
-	maxAppActiveCommands  = 3
-	maxAppRecentLines     = 4
 )
 
 type appRenderState struct {
@@ -84,90 +82,7 @@ func (s *appRenderState) redraw(w io.Writer) {
 }
 
 func (s *appRenderState) frameLines(activity activitySnapshot, width, height int) []string {
-	lines := make([]string, 0, height)
-	lines = append(lines, s.headerLine(activity), strings.Repeat("-", width))
-
-	lines = append(lines, "[active]")
-	lines = append(lines, appActiveLines(activity)...)
-
-	lines = append(lines, "", "[recent]")
-	if recent := appRecentLines(activity); len(recent) > 0 {
-		for _, line := range recent {
-			lines = append(lines, "  "+line)
-		}
-	} else {
-		lines = append(lines, "  none")
-	}
-
-	lines = append(lines, "", "[transcript]")
-	footer := "Ctrl+C cancel | /help commands | --ui tui for scrollback logs"
-	transcriptBudget := height - len(lines) - 2
-	if transcriptBudget < 0 {
-		transcriptBudget = 0
-	}
-	lines = append(lines, s.transcriptTail.lines(transcriptBudget)...)
-	lines = append(lines, strings.Repeat("-", width), footer)
-	return fitFrameHeight(lines, height)
-}
-
-func appActiveLines(activity activitySnapshot) []string {
-	if activity.ActiveTool == "" && len(activity.ActiveCommands) == 0 {
-		return []string{"  idle"}
-	}
-	lines := make([]string, 0, maxAppActiveCommands+2)
-	if activity.ActiveTool != "" {
-		lines = append(lines, "  tool: "+activity.ActiveTool)
-	}
-	limit := len(activity.ActiveCommands)
-	if limit > maxAppActiveCommands {
-		limit = maxAppActiveCommands
-	}
-	for _, command := range activity.ActiveCommands[:limit] {
-		lines = append(lines, "  command: "+command.summary())
-	}
-	if extra := len(activity.ActiveCommands) - limit; extra > 0 {
-		lines = append(lines, fmt.Sprintf("  ... %d more active commands", extra))
-	}
-	return lines
-}
-
-func appRecentLines(activity activitySnapshot) []string {
-	var lines []string
-	if activity.LastCommandState != "" {
-		lines = append(lines, "command_status: "+activity.LastCommandState)
-	} else if activity.LastCommand != "" {
-		lines = append(lines, "command: "+activity.LastCommand)
-	}
-	if activity.LastPatch != "" {
-		lines = append(lines, "patch: "+activity.LastPatch)
-	}
-	if activity.LastVerification != "" {
-		lines = append(lines, "verification: "+activity.LastVerification)
-	}
-	if activity.LastApproval != "" {
-		lines = append(lines, "approval: "+activity.LastApproval)
-	}
-	if len(lines) > maxAppRecentLines {
-		return lines[len(lines)-maxAppRecentLines:]
-	}
-	return lines
-}
-
-func (s *appRenderState) headerLine(activity activitySnapshot) string {
-	parts := []string{"Memax Code", "phase=" + activity.Phase}
-	if elapsed := s.elapsedStatus(); elapsed != "" {
-		parts = append(parts, "elapsed="+elapsed)
-	}
-	if activity.ToolErrors > 0 {
-		parts = append(parts, fmt.Sprintf("tool_errors=%d", activity.ToolErrors))
-	}
-	if counts := activity.liveCountsLine(); counts != "" {
-		parts = append(parts, counts)
-	}
-	if activity.Usage != "" {
-		parts = append(parts, activity.Usage)
-	}
-	return strings.Join(parts, " | ")
+	return newAppShellFrame(activity, s.transcriptTail.lines(maxAppTranscriptLines), width, height, s.elapsedStatus()).Lines()
 }
 
 func (s *appRenderState) markStarted() {
