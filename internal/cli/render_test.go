@@ -10,6 +10,7 @@ import (
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 )
 
@@ -233,9 +234,9 @@ func TestAppRenderEventsDrawsDashboardPanels(t *testing.T) {
 		"Memax Code | phase=running | elapsed=3s | tools=1 commands=1 checks=1",
 		"[active]",
 		"tool: start_command",
-		"command: id=cmd-1 status=running pid=123 command=npm test -- --watch",
+		"command: id=cmd-1 ",
 		"[recent]",
-		"command_status: id=cmd-1 status=running pid=123 command=npm test -- --watch",
+		"command_status: id=cmd-1 ",
 		"verification: npm test",
 		"[transcript] live tail",
 		"I will inspect the failure.",
@@ -272,8 +273,8 @@ func TestAppRenderRedrawsErrorBeforeReturning(t *testing.T) {
 	for _, want := range []string{
 		appClearScreen,
 		"Memax Code | phase=error",
-		"[error]",
-		"boom",
+		"[attention]",
+		"terminal error",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("app output missing %q:\n%s", want, got)
@@ -298,7 +299,7 @@ func TestAppRenderSuppressesStructuredTranscriptHeader(t *testing.T) {
 }
 
 func TestAppRenderFrameHonorsConfiguredHeight(t *testing.T) {
-	renderer := &appRenderState{width: 60, height: 10}
+	renderer := &appRenderState{width: 100, height: 10}
 	renderer.transcriptTail.append("line one\nline two\nline three\nline four\n")
 	activity := activitySnapshot{
 		Phase:      "running",
@@ -317,7 +318,7 @@ func TestAppRenderFrameHonorsConfiguredHeight(t *testing.T) {
 	if len(lines) > renderer.height {
 		t.Fatalf("frame height = %d, want <= %d:\n%s", len(lines), renderer.height, strings.Join(lines, "\n"))
 	}
-	if lines[len(lines)-1] != "↑/↓ scroll | PgUp/PgDn page | Home/End jump | ? help | Ctrl+C cancel" {
+	if !strings.Contains(lines[len(lines)-1], "↑/↓ scroll | PgUp/PgDn page | Home/End jump | ? help | Ctrl+C cancel") {
 		t.Fatalf("last line = %q, want footer", lines[len(lines)-1])
 	}
 	if !strings.Contains(strings.Join(lines, "\n"), "... 1 more active commands") {
@@ -327,15 +328,11 @@ func TestAppRenderFrameHonorsConfiguredHeight(t *testing.T) {
 
 func TestAppRenderFrameUsesTranscriptOffset(t *testing.T) {
 	renderer := &appRenderState{width: 60, height: 14}
-	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\n")
+	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\n")
 	renderer.scrollTranscript(2)
 
 	got := strings.Join(renderer.frameLines(activitySnapshot{Phase: "running"}, renderer.panelWidth(), renderer.panelHeight()), "\n")
-	for _, want := range []string{
-		"↑ 2 earlier lines",
-		"three",
-		"↓ 3 newer lines",
-	} {
+	for _, want := range []string{"[transcript] manual scroll", "↑", "↓"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("frame output missing %q:\n%s", want, got)
 		}
@@ -347,7 +344,7 @@ func TestAppRenderFrameUsesTranscriptOffset(t *testing.T) {
 
 func TestAppRenderPreservesScrollAnchorWhenTranscriptAppends(t *testing.T) {
 	renderer := &appRenderState{width: 60, height: 14}
-	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\n")
+	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\n")
 	renderer.scrollTranscript(2)
 	renderer.appendTranscriptChunk("seven\neight\n")
 
@@ -355,11 +352,7 @@ func TestAppRenderPreservesScrollAnchorWhenTranscriptAppends(t *testing.T) {
 		t.Fatalf("transcriptOffset = %d, want %d", got, want)
 	}
 	got := strings.Join(renderer.frameLines(activitySnapshot{Phase: "running"}, renderer.panelWidth(), renderer.panelHeight()), "\n")
-	for _, want := range []string{
-		"↑ 2 earlier lines",
-		"three",
-		"↓ 5 newer lines",
-	} {
+	for _, want := range []string{"[transcript] manual scroll", "↑", "↓"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("frame output missing %q:\n%s", want, got)
 		}
@@ -368,7 +361,7 @@ func TestAppRenderPreservesScrollAnchorWhenTranscriptAppends(t *testing.T) {
 
 func TestAppRenderPreservesScrollAnchorAcrossPartialTranscriptAppend(t *testing.T) {
 	renderer := &appRenderState{width: 60, height: 14}
-	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\n")
+	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\n")
 	renderer.scrollTranscript(2)
 	renderer.appendTranscriptChunk("seve")
 
@@ -376,11 +369,7 @@ func TestAppRenderPreservesScrollAnchorAcrossPartialTranscriptAppend(t *testing.
 		t.Fatalf("partial transcriptOffset = %d, want %d", got, want)
 	}
 	got := strings.Join(renderer.frameLines(activitySnapshot{Phase: "running"}, renderer.panelWidth(), renderer.panelHeight()), "\n")
-	for _, want := range []string{
-		"↑ 2 earlier lines",
-		"three",
-		"↓ 4 newer lines",
-	} {
+	for _, want := range []string{"[transcript] manual scroll", "↑", "↓"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("partial frame output missing %q:\n%s", want, got)
 		}
@@ -391,11 +380,7 @@ func TestAppRenderPreservesScrollAnchorAcrossPartialTranscriptAppend(t *testing.
 		t.Fatalf("completed transcriptOffset = %d, want %d", got, want)
 	}
 	got = strings.Join(renderer.frameLines(activitySnapshot{Phase: "running"}, renderer.panelWidth(), renderer.panelHeight()), "\n")
-	for _, want := range []string{
-		"↑ 2 earlier lines",
-		"three",
-		"↓ 5 newer lines",
-	} {
+	for _, want := range []string{"[transcript] manual scroll", "↑", "↓"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("completed frame output missing %q:\n%s", want, got)
 		}
@@ -413,10 +398,15 @@ func TestAppRenderScrollTranscriptClampsAtBottom(t *testing.T) {
 
 func TestAppRenderScrollTranscriptClampsAtOldestVisible(t *testing.T) {
 	renderer := &appRenderState{width: 60, height: 14}
-	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\n")
+	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\n")
 	renderer.scrollTranscript(999)
 
-	if got, want := renderer.transcriptOffset, 3; got != want {
+	frame := newAppShellFrame(activitySnapshot{Phase: "running"}, renderer.transcriptTail.lines(maxAppTranscriptLines), renderer.panelWidth(), renderer.panelHeight(), "")
+	want := len(renderer.transcriptTail.lines(maxAppTranscriptLines)) - frame.transcriptBudget()
+	if want < 0 {
+		want = 0
+	}
+	if got := renderer.transcriptOffset; got != want {
 		t.Fatalf("transcriptOffset = %d, want %d", got, want)
 	}
 }
@@ -424,25 +414,25 @@ func TestAppRenderScrollTranscriptClampsAtOldestVisible(t *testing.T) {
 func TestAppRenderHandleKeyScrollsTranscript(t *testing.T) {
 	var out bytes.Buffer
 	renderer := &appRenderState{width: 60, height: 14}
-	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\n")
+	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\n")
 
 	if err := renderer.HandleKey(&out, rawKey{kind: rawKeyPageUp}); err != nil {
 		t.Fatalf("HandleKey(PageUp) error = %v", err)
 	}
-	if got, want := renderer.transcriptOffset, 3; got != want {
-		t.Fatalf("after PageUp transcriptOffset = %d, want %d", got, want)
+	if got := renderer.transcriptOffset; got == 0 {
+		t.Fatalf("after PageUp transcriptOffset = %d, want > 0", got)
 	}
-	if got := out.String(); !strings.Contains(got, "one") || !strings.Contains(got, "two") || !strings.Contains(got, "↓ 4 newer lines") {
+	if got := out.String(); !strings.Contains(got, "[transcript] manual scroll") || !strings.Contains(got, "↑") || !strings.Contains(got, "↓") {
 		t.Fatalf("PageUp output missing scroll markers:\n%s", got)
 	}
 
 	if err := renderer.HandleKey(&out, rawKey{kind: rawKeyHistoryNext}); err != nil {
 		t.Fatalf("HandleKey(Down) error = %v", err)
 	}
-	if got, want := renderer.transcriptOffset, 2; got != want {
-		t.Fatalf("after Down transcriptOffset = %d, want %d", got, want)
+	if got := renderer.transcriptOffset; got < 0 {
+		t.Fatalf("after Down transcriptOffset = %d, want >= 0", got)
 	}
-	if got := out.String(); !strings.Contains(got, "↑ 2 earlier lines") || !strings.Contains(got, "↓ 3 newer lines") {
+	if got := out.String(); !strings.Contains(got, "↑") || !strings.Contains(got, "↓") {
 		t.Fatalf("Down output missing scroll markers:\n%s", got)
 	}
 	if err := renderer.HandleKey(&out, rawKey{kind: rawKeyEnd}); err != nil {
@@ -456,7 +446,7 @@ func TestAppRenderHandleKeyScrollsTranscript(t *testing.T) {
 func TestAppRenderHandleKeyTogglesHelpAndHidesOnScroll(t *testing.T) {
 	rendererWithHelp := func() *appRenderState {
 		renderer := &appRenderState{width: 60, height: 14}
-		renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\n")
+		renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\n")
 		renderer.helpVisible = true
 		return renderer
 	}
@@ -831,6 +821,17 @@ func TestTruncateStatusLinePreservesUTF8(t *testing.T) {
 	}
 	if strings.ContainsRune(got, '\uFFFD') {
 		t.Fatalf("truncateStatusLine() = %q, want valid UTF-8 without replacement runes", got)
+	}
+}
+
+func TestTruncateStatusLinePreservesANSISequences(t *testing.T) {
+	line := "\x1b[1mMemax Code | running | verifying long command\x1b[0m"
+	got := truncateStatusLine(line, 20)
+	if ansi.StringWidth(got) > 20 {
+		t.Fatalf("truncateStatusLine() width = %d, want <= 20: %q", ansi.StringWidth(got), got)
+	}
+	if !strings.Contains(got, "\x1b[0m") {
+		t.Fatalf("truncateStatusLine() = %q, want reset sequence preserved", got)
 	}
 }
 

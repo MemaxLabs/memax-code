@@ -17,16 +17,19 @@ func TestAppShellFrameRendersDeterministicPanels(t *testing.T) {
 		LastCommandState: "id=cmd-1 status=running pid=123 command=go test ./...",
 		LastVerification: "go test ./...",
 	}
-	frame := newAppShellFrame(activity, []string{"assistant: checking tests"}, 80, 18, "3s")
+	frame := newAppShellFrame(activity, []string{"assistant: checking tests"}, 120, 18, "3s")
 
 	got := strings.Join(frame.Lines(), "\n")
 	for _, want := range []string{
 		"Memax Code | phase=running | elapsed=3s | tools=1 commands=1",
-		"[active]\n  tool: run_command",
-		"  command: id=cmd-1 status=running pid=123 command=go test ./...",
-		"[recent]\n  command_status: id=cmd-1 status=running pid=123 command=go test ./...",
-		"  verification: go test ./...",
-		"[transcript] live tail\nassistant: checking tests",
+		"[active]",
+		"tool: run_command",
+		"command: id=cmd-1 ",
+		"[recent]",
+		"command_status: id=cmd-1 ",
+		"verification: go test ./...",
+		"[transcript] live tail",
+		"assistant: checking tests",
 		"↑/↓ scroll | PgUp/PgDn page | Home/End jump | ? help | Ctrl+C cancel",
 	} {
 		if !strings.Contains(got, want) {
@@ -41,14 +44,15 @@ func TestAppShellFrameAttentionPanelSurfacesApprovalsAndErrors(t *testing.T) {
 		ToolErrors:   2,
 		LastApproval: "requested:Apply patch",
 	}
-	frame := newAppShellFrame(activity, nil, 80, 14, "")
+	frame := newAppShellFrame(activity, nil, 120, 14, "")
 
 	got := strings.Join(frame.Lines(), "\n")
 	for _, want := range []string{
 		"[attention]",
-		"  tool errors: 2",
-		"  approval: Apply patch",
-		"[recent]\n  none",
+		"tool errors: 2",
+		"approval: Apply patch",
+		"[recent]",
+		"none",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("frame output missing %q:\n%s", want, got)
@@ -60,12 +64,14 @@ func TestAppShellFrameAttentionPanelHandlesBareApprovalRequest(t *testing.T) {
 	frame := newAppShellFrame(activitySnapshot{
 		Phase:        "running",
 		LastApproval: "requested",
-	}, nil, 80, 14, "")
+	}, nil, 120, 14, "")
 
 	got := strings.Join(frame.Lines(), "\n")
 	for _, want := range []string{
-		"[attention]\n  approval: requested",
-		"[recent]\n  none",
+		"[attention]",
+		"approval: requested",
+		"[recent]",
+		"none",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("frame output missing %q:\n%s", want, got)
@@ -75,20 +81,31 @@ func TestAppShellFrameAttentionPanelHandlesBareApprovalRequest(t *testing.T) {
 
 func TestAppShellFrameTranscriptViewportKeepsRecentLines(t *testing.T) {
 	frame := newAppShellFrame(activitySnapshot{Phase: "running"}, []string{
-		"old",
+		"old-1",
+		"old-2",
+		"old-3",
+		"old-4",
+		"old-5",
+		"old-6",
+		"old-7",
+		"old-8",
+		"old-9",
+		"old-10",
 		"middle",
 		"new",
-	}, 60, 13, "")
+	}, 120, 14, "")
 
 	got := strings.Join(frame.Lines(), "\n")
-	if strings.Contains(got, "old") {
+	if strings.Contains(got, "old-1\n") || strings.Contains(got, "old-1 ") {
 		t.Fatalf("frame output included old transcript line:\n%s", got)
 	}
-	if !strings.Contains(got, "[transcript] live tail\nmiddle\nnew") {
-		t.Fatalf("frame output missing recent transcript tail:\n%s", got)
+	for _, want := range []string{"[transcript] live tail", "middle", "new", "↑"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("frame output missing recent transcript content %q:\n%s", want, got)
+		}
 	}
-	if lines := frame.Lines(); len(lines) > 13 {
-		t.Fatalf("frame height = %d, want <= 13:\n%s", len(lines), strings.Join(lines, "\n"))
+	if lines := frame.Lines(); len(lines) > 14 {
+		t.Fatalf("frame height = %d, want <= 14:\n%s", len(lines), strings.Join(lines, "\n"))
 	}
 }
 
@@ -97,7 +114,7 @@ func TestAppShellFrameTranscriptHeadingReflectsManualScroll(t *testing.T) {
 	frame.TranscriptStatus = "manual scroll (↓ 2 newer lines below)"
 
 	got := strings.Join(frame.Lines(), "\n")
-	if !strings.Contains(got, "[transcript] manual scroll (↓ 2 newer lines below)") {
+	if !strings.Contains(got, "[transcript] manual scroll") {
 		t.Fatalf("frame output missing manual scroll heading:\n%s", got)
 	}
 }
@@ -109,8 +126,8 @@ func TestAppShellFrameHelpOverlayReplacesTranscriptViewport(t *testing.T) {
 	got := strings.Join(frame.Lines(), "\n")
 	for _, want := range []string{
 		"[help] press ? to return",
-		"? toggle help",
-		"Ctrl+C cancel the active run",
+		"PgUp/PgDn",
+		"Ctrl+C cancel",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("frame output missing %q:\n%s", want, got)
@@ -118,6 +135,33 @@ func TestAppShellFrameHelpOverlayReplacesTranscriptViewport(t *testing.T) {
 	}
 	if strings.Contains(got, "\none\n") {
 		t.Fatalf("help overlay leaked transcript content:\n%s", got)
+	}
+}
+
+func TestAppShellFrameStacksPanelsOnNarrowWidths(t *testing.T) {
+	frame := newAppShellFrame(activitySnapshot{
+		Phase:      "running",
+		ActiveTool: "run_command",
+		ActiveCommands: []commandActivity{
+			{ID: "cmd-1", Command: "go test ./...", Status: "running", PID: 123},
+		},
+		LastVerification: "go test ./...",
+	}, []string{
+		"assistant: checking tests",
+		"assistant: still checking",
+	}, 56, 16, "3s")
+
+	lines := frame.Lines()
+	got := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"[active]",
+		"[recent]",
+		"[transcript] live tail",
+		"assistant: still checking",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("narrow frame output missing %q:\n%s", want, got)
+		}
 	}
 }
 

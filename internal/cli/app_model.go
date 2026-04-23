@@ -3,11 +3,26 @@ package cli
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/lipgloss"
 )
 
 const (
 	maxAppActiveCommands = 3
 	maxAppRecentLines    = 4
+	minAppSidebarWidth   = 84
+)
+
+var (
+	appShellChromeStyle = lipgloss.NewStyle()
+	appShellPanelStyle  = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				Padding(0, 1)
+	appShellHeaderStyle = lipgloss.NewStyle().Bold(true)
+	appShellFooterStyle = lipgloss.NewStyle()
 )
 
 type appShellFrame struct {
@@ -25,6 +40,56 @@ type appShellFrame struct {
 type appShellPanel struct {
 	Title string
 	Lines []string
+}
+
+type appShellLayout struct {
+	useSidebar       bool
+	sidebarWidth     int
+	sidebarHeight    int
+	transcriptWidth  int
+	transcriptHeight int
+}
+
+type appShellKeyMap struct {
+	Scroll key.Binding
+	Page   key.Binding
+	Jump   key.Binding
+	Help   key.Binding
+	Cancel key.Binding
+}
+
+func (m appShellKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{m.Scroll, m.Page, m.Jump, m.Help, m.Cancel}
+}
+
+func (m appShellKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{m.Scroll, m.Page, m.Jump},
+		{m.Help, m.Cancel},
+	}
+}
+
+var appKeys = appShellKeyMap{
+	Scroll: key.NewBinding(
+		key.WithKeys("up", "down"),
+		key.WithHelp("↑/↓", "scroll"),
+	),
+	Page: key.NewBinding(
+		key.WithKeys("pgup", "pgdown"),
+		key.WithHelp("PgUp/PgDn", "page"),
+	),
+	Jump: key.NewBinding(
+		key.WithKeys("home", "end"),
+		key.WithHelp("Home/End", "jump"),
+	),
+	Help: key.NewBinding(
+		key.WithKeys("?"),
+		key.WithHelp("?", "help"),
+	),
+	Cancel: key.NewBinding(
+		key.WithKeys("ctrl+c"),
+		key.WithHelp("Ctrl+C", "cancel"),
+	),
 }
 
 func newAppShellFrame(activity activitySnapshot, transcript []string, width, height int, elapsed string) appShellFrame {
@@ -51,53 +116,159 @@ func appPanels(activity activitySnapshot) []appShellPanel {
 }
 
 func (f appShellFrame) Lines() []string {
-	lines := f.transcriptPrefixLines()
-	transcriptBudget := appTranscriptBudget(f.Height, len(lines))
-	if f.HelpVisible {
-		lines = append(lines, appHelpLines(transcriptBudget)...)
-	} else {
-		lines = append(lines, newAppTranscriptViewport(f.Transcript, transcriptBudget, f.TranscriptOffset).Lines()...)
-	}
-	lines = append(lines, appRule(f.Width), f.Footer)
+	lines := strings.Split(f.View(), "\n")
 	return fitFrameHeight(lines, f.Height)
 }
 
-func (f appShellFrame) transcriptBudget() int {
-	return appTranscriptBudget(f.Height, len(f.transcriptPrefixLines()))
+func (f appShellFrame) View() string {
+	width := f.Width
+	if width <= 0 {
+		width = defaultAppShellWidth
+	}
+	height := f.Height
+	if height <= 0 {
+		height = defaultAppShellHeight
+	}
+	header := appShellHeaderStyle.Width(width).Render(truncateStatusLine(f.Header, width))
+	bodyHeight := appBodyHeight(height)
+	body := appShellChromeStyle.Width(width).Height(bodyHeight).Render(f.bodyView(width, bodyHeight))
+	footer := appShellFooterStyle.Width(width).Render(truncateStatusLine(f.Footer, width))
+	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
 
-func appTranscriptBudget(height, prefixLines int) int {
-	budget := height - prefixLines - 2
-	if budget < 0 {
+func (f appShellFrame) transcriptBudget() int {
+	layout := f.layout()
+	if layout.transcriptHeight <= 0 {
 		return 0
 	}
-	return budget
+	frameSize := appShellPanelStyle.GetVerticalFrameSize()
+	if frameSize >= layout.transcriptHeight {
+		return 0
+	}
+	return layout.transcriptHeight - frameSize - 1
 }
 
-func (f appShellFrame) transcriptPrefixLines() []string {
-	capacity := len(f.Panels)*3 + maxAppActiveCommands + maxAppRecentLines + 8
-	if capacity < f.Height {
-		capacity = f.Height
+func appBodyHeight(height int) int {
+	if height <= 2 {
+		if height < 0 {
+			return 0
+		}
+		return height
 	}
-	lines := make([]string, 0, capacity)
-	rule := appRule(f.Width)
-	lines = append(lines, f.Header, rule)
-	for index, panel := range f.Panels {
-		if index > 0 {
-			lines = append(lines, "")
+	return height - 2
+}
+
+func (f appShellFrame) bodyView(width, height int) string {
+	if height <= 0 {
+		return ""
+	}
+	layout := f.layout()
+	sidebar := appShellChromeStyle.Width(layout.sidebarWidth).Height(layout.sidebarHeight).Render(f.sidebarView(layout.sidebarWidth, layout.sidebarHeight))
+	transcript := appShellChromeStyle.Width(layout.transcriptWidth).Height(layout.transcriptHeight).Render(f.transcriptView(layout.transcriptWidth, layout.transcriptHeight))
+	if layout.useSidebar {
+		return lipgloss.JoinHorizontal(lipgloss.Top, sidebar, " ", transcript)
+	}
+	if layout.sidebarHeight <= 0 {
+		return transcript
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, transcript, sidebar)
+}
+
+func (f appShellFrame) bodyUsesSidebar() bool {
+	width := f.Width
+	if width <= 0 {
+		width = defaultAppShellWidth
+	}
+	return width >= minAppSidebarWidth
+}
+
+func appSidebarWidth(width int) int {
+	sidebar := width / 3
+	if sidebar < 28 {
+		sidebar = 28
+	}
+	if sidebar > 36 {
+		sidebar = 36
+	}
+	return sidebar
+}
+
+func (f appShellFrame) layout() appShellLayout {
+	width := f.Width
+	if width <= 0 {
+		width = defaultAppShellWidth
+	}
+	height := appBodyHeight(f.Height)
+	if height <= 0 {
+		return appShellLayout{}
+	}
+	if f.bodyUsesSidebar() {
+		sidebarWidth := appSidebarWidth(width)
+		transcriptWidth := width - sidebarWidth - 1
+		if transcriptWidth < 24 {
+			transcriptWidth = 24
+			sidebarWidth = max(18, width-transcriptWidth-1)
 		}
-		lines = append(lines, "["+panel.Title+"]")
-		if len(panel.Lines) == 0 {
-			lines = append(lines, "  none")
-			continue
-		}
-		for _, line := range panel.Lines {
-			lines = append(lines, "  "+line)
+		return appShellLayout{
+			useSidebar:       true,
+			sidebarWidth:     sidebarWidth,
+			sidebarHeight:    height,
+			transcriptWidth:  transcriptWidth,
+			transcriptHeight: height,
 		}
 	}
 
-	lines = append(lines, "", f.transcriptHeading())
-	return lines
+	sidebarHeight := min(max(6, len(f.Panels)*4), max(0, height-5))
+	transcriptHeight := height - sidebarHeight
+	if sidebarHeight > 0 {
+		transcriptHeight--
+	}
+	if transcriptHeight <= 0 {
+		transcriptHeight = height
+		sidebarHeight = 0
+	}
+	return appShellLayout{
+		useSidebar:       false,
+		sidebarWidth:     width,
+		sidebarHeight:    sidebarHeight,
+		transcriptWidth:  width,
+		transcriptHeight: transcriptHeight,
+	}
+}
+
+func (f appShellFrame) sidebarView(width, height int) string {
+	if len(f.Panels) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(f.Panels))
+	for _, panel := range f.Panels {
+		parts = append(parts, appPanelBox(panel.Title, panel.Lines, width))
+	}
+	return lipgloss.NewStyle().Width(width).Height(height).Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
+}
+
+func (f appShellFrame) transcriptView(width, height int) string {
+	panelStyle := appShellPanelStyle
+	innerWidth := width - panelStyle.GetHorizontalFrameSize()
+	innerHeight := height - panelStyle.GetVerticalFrameSize()
+	if innerWidth < 1 {
+		innerWidth = 1
+	}
+	if innerHeight < 1 {
+		innerHeight = 1
+	}
+	vp := viewport.New(innerWidth, innerHeight)
+	vp.SetContent(f.transcriptContent(innerWidth, innerHeight))
+	return panelStyle.Render(vp.View())
+}
+
+func (f appShellFrame) transcriptContent(width, height int) string {
+	if f.HelpVisible {
+		return strings.Join(appHelpLines(width), "\n")
+	}
+	lines := []string{appShellHeaderStyle.Render(truncateStatusLine(f.transcriptHeading(), width))}
+	lines = append(lines, newAppTranscriptViewport(f.Transcript, max(0, height-1), f.TranscriptOffset).Lines()...)
+	return strings.Join(lines, "\n")
 }
 
 func (f appShellFrame) transcriptHeading() string {
@@ -108,13 +279,6 @@ func (f appShellFrame) transcriptHeading() string {
 		return "[transcript]"
 	}
 	return "[transcript] " + f.TranscriptStatus
-}
-
-func appRule(width int) string {
-	if width <= 0 {
-		return ""
-	}
-	return strings.Repeat("-", width)
 }
 
 func appHeaderLine(activity activitySnapshot, elapsed string) string {
@@ -202,6 +366,24 @@ func appApprovalAttentionSummary(approval string) string {
 	return strings.TrimPrefix(approval, "requested:")
 }
 
+func appPanelBox(title string, lines []string, width int) string {
+	panelStyle := appShellPanelStyle
+	innerWidth := width - panelStyle.GetHorizontalFrameSize()
+	if innerWidth < 1 {
+		innerWidth = 1
+	}
+	content := make([]string, 0, len(lines)+1)
+	content = append(content, appShellHeaderStyle.Render(truncateStatusLine("["+title+"]", innerWidth)))
+	if len(lines) == 0 {
+		content = append(content, "  none")
+	} else {
+		for _, line := range lines {
+			content = append(content, truncateStatusLine("  "+line, innerWidth))
+		}
+	}
+	return panelStyle.Render(strings.Join(content, "\n"))
+}
+
 type appTranscriptViewport struct {
 	lines  []string
 	height int
@@ -242,8 +424,6 @@ func (v appTranscriptViewport) Lines() []string {
 	hasOlder := start > 0
 	hasNewer := end < len(v.lines)
 	if v.height < 3 || (!hasOlder && !hasNewer) {
-		// Marker rows need at least one content row between them; tiny panes
-		// keep raw transcript rows instead of spending space on indicators.
 		return append([]string(nil), v.lines[start:end]...)
 	}
 
@@ -273,24 +453,18 @@ func appHiddenLine(prefix string, count int, label string) string {
 	return fmt.Sprintf("%s %d %s lines", prefix, count, label)
 }
 
-func appHelpLines(height int) []string {
-	lines := []string{
-		"? toggle help",
-		"↑/↓ move one line through transcript history",
-		"PgUp/PgDn move one page through transcript history",
-		"Home jump to the oldest visible page",
-		"End return to the live tail",
+func appHelpLines(width int) []string {
+	helpView := help.New()
+	helpView.Width = width
+	helpView.ShowAll = true
+	helpView.ShortSeparator = " | "
+	helpView.FullSeparator = "    "
+	return []string{
+		appShellHeaderStyle.Render("[help] press ? to return"),
+		helpView.View(appKeys),
+		"",
 		"Ctrl+C cancel the active run",
+		"Home jumps to the oldest retained transcript line",
+		"End returns to the live transcript tail",
 	}
-	if height <= 0 {
-		return nil
-	}
-	if len(lines) <= height {
-		return lines
-	}
-	if height == 1 {
-		return []string{lines[0]}
-	}
-	visible := append([]string(nil), lines[:height-1]...)
-	return append(visible, "…")
 }

@@ -13,7 +13,7 @@ import (
 const (
 	appClearScreen        = "\x1b[H\x1b[2J"
 	defaultAppShellWidth  = defaultLiveStatusWidth
-	defaultAppShellHeight = 28
+	defaultAppShellHeight = 24
 	appShellTickInterval  = 120 * time.Millisecond
 	maxAppTranscriptLines = 512
 )
@@ -22,6 +22,9 @@ type appRenderState struct {
 	// The first app shell reuses the structured transcript renderer as its
 	// transcript model. Keep the buffered tail bounded here so a richer
 	// event-native transcript model can replace it without changing UI modes.
+	// When the app shell graduates to a full Bubble Tea program, consolidate the
+	// current hand-rolled transcript viewport with the framework viewport model
+	// instead of maintaining both scroll systems in parallel.
 	transcriptRenderer       tuiRenderState
 	transcriptTail           appTranscriptTail
 	transcriptHeaderStripped bool

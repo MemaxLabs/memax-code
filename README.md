@@ -32,7 +32,8 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
 The CLI now has the first terminal UI foundation: `auto` chooses structured
 terminal rendering for interactive output and plain rendering for logs, tests,
 and pipes. `--ui app` opts into an early app-shell dashboard with stable
-active-work, attention, recent-activity, transcript viewport, and footer panels.
+active-work, attention, recent-activity, a bounded transcript viewport, and
+footer controls in a persistent sidebar-plus-transcript shell.
 `--ui live` keeps a lighter live status line while preserving the sectioned
 transcript underneath.
 The status surfaces track active tools, active command sessions, recent command
@@ -238,8 +239,9 @@ CI logs and redirected output remain stable.
 redirected, it falls back to the plain renderer so scripts never receive
 terminal control sequences. The app shell redraws a stable dashboard with
 phase, elapsed time, active work, attention items, recent activity, transcript
-tail, visible transcript view state, and footer controls. It intentionally uses
-an inline screen for now:
+tail, visible transcript view state, and footer controls. The current shell is
+now laid out as a dedicated sidebar plus transcript pane instead of a single
+linear dashboard dump. It intentionally uses an inline screen for now:
 pre-existing scrollback remains available, while the dashboard keeps only a
 bounded transcript viewport and marks hidden earlier/newer lines. In real
 terminals, `--ui app` accepts Up/Down for line scrolling, PageUp/PageDown for

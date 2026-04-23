@@ -9,6 +9,7 @@ import (
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const clearLine = "\r\x1b[2K"
@@ -185,12 +186,11 @@ func formatElapsed(elapsed time.Duration) string {
 }
 
 func truncateStatusLine(line string, width int) string {
-	runes := []rune(line)
-	if width <= 0 || len(runes) <= width {
+	if width <= 0 {
 		return line
 	}
-	if width <= 3 {
-		return string(runes[:width])
+	if ansi.StringWidth(line) <= width {
+		return line
 	}
-	return string(runes[:width-3]) + "..."
+	return ansi.Truncate(line, width, "...")
 }
