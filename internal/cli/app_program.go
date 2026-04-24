@@ -450,9 +450,11 @@ func (m *appProgramModel) View() string {
 		width = defaultAppShellWidth
 	}
 
-	rows := make([]string, 0, 4)
-	rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
-	rows = append(rows, m.activityStatusView())
+	rows := make([]string, 0, 6)
+	if activity := m.activityStatusView(); activity != "" {
+		rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
+		rows = append(rows, activity)
+	}
 	rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 	rows = append(rows, m.composerView(width))
 	rows = append(rows, m.bottomStatusView())

@@ -1183,8 +1183,8 @@ func TestAppProgramViewUsesQuietIdleStatus(t *testing.T) {
 			break
 		}
 	}
-	if promptAt != 4 || rows[promptAt-1] != "" || rows[promptAt-2] != "" || rows[promptAt-3] != "" || rows[promptAt-4] != "" {
-		t.Fatalf("idle view should reserve status slot and composer margin before prompt:\n%s", view)
+	if promptAt != 2 || rows[promptAt-1] != "" || rows[promptAt-2] != "" {
+		t.Fatalf("idle view should use one outside margin plus composer padding before prompt:\n%s", view)
 	}
 }
 
@@ -1388,7 +1388,7 @@ func TestAppProgramViewShowsActivityOnlyWhileRunning(t *testing.T) {
 	}
 }
 
-func TestAppProgramViewKeepsBottomHeightStableWhenActivityHides(t *testing.T) {
+func TestAppProgramViewCompactsWhenActivityHides(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.width = 100
 	model.running = true
@@ -1397,8 +1397,57 @@ func TestAppProgramViewKeepsBottomHeightStableWhenActivityHides(t *testing.T) {
 	model.statusLine = "idle"
 	idleRows := strippedViewRows(ansi.Strip(model.View()))
 
-	if len(idleRows) != len(runningRows) {
-		t.Fatalf("bottom view height changed when activity hid: idle=%d running=%d\nidle:\n%s\nrunning:\n%s", len(idleRows), len(runningRows), strings.Join(idleRows, "\n"), strings.Join(runningRows, "\n"))
+	if got, want := len(runningRows)-len(idleRows), 2; got != want {
+		t.Fatalf("idle view reclaimed %d rows, want %d: idle=%d running=%d\nidle:\n%s\nrunning:\n%s", got, want, len(idleRows), len(runningRows), strings.Join(idleRows, "\n"), strings.Join(runningRows, "\n"))
+	}
+	for _, row := range idleRows {
+		if strings.Contains(row, "thinking") {
+			t.Fatalf("idle view leaked activity status:\n%s", strings.Join(idleRows, "\n"))
+		}
+	}
+}
+
+func TestAppProgramViewKeepsActivityRowForCancelingAndError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*appProgramModel)
+		want string
+	}{
+		{
+			name: "canceling",
+			set: func(model *appProgramModel) {
+				model.running = true
+				model.canceling = true
+			},
+			want: "canceling",
+		},
+		{
+			name: "error",
+			set: func(model *appProgramModel) {
+				model.lastError = "boom"
+			},
+			want: "! boom",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+			model.width = 100
+			tc.set(model)
+
+			rows := strippedViewRows(ansi.Strip(model.View()))
+			statusAt, promptAt := -1, -1
+			for i, row := range rows {
+				if statusAt == -1 && strings.Contains(row, tc.want) {
+					statusAt = i
+				}
+				if strings.HasPrefix(row, "› Ask Memax Code") {
+					promptAt = i
+				}
+			}
+			if statusAt != 1 || promptAt-statusAt != 3 {
+				t.Fatalf("%s view should keep activity row above composer:\n%s", tc.name, strings.Join(rows, "\n"))
+			}
+		})
 	}
 }
 
