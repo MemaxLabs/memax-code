@@ -518,6 +518,9 @@ func (m *appProgramModel) helpView() string {
 func (m *appProgramModel) composerView(width int) string {
 	contentWidth := appProgramComposerContentWidth(width)
 	lines := strings.Split(m.input.View(), "\n")
+	if m.input.Value() == "" {
+		lines = []string{appProgramEmptyComposerLine(m.input.Placeholder)}
+	}
 	for i, line := range lines {
 		lines[i] = lipgloss.PlaceHorizontal(
 			contentWidth,
@@ -527,6 +530,14 @@ func (m *appProgramModel) composerView(width int) string {
 		)
 	}
 	return appProgramComposerStyle.Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func appProgramEmptyComposerLine(placeholder string) string {
+	return appProgramAccentStyle.
+		Background(appProgramComposerBackground).
+		Render("› ") + appProgramMutedStyle.
+		Background(appProgramComposerBackground).
+		Render(placeholder)
 }
 
 func appProgramComposerContentWidth(width int) int {

@@ -114,6 +114,17 @@ func (t *appTranscriptTail) appendStandaloneLine(line string) []string {
 	return appended
 }
 
+func (t *appTranscriptTail) appendBlankLine() []string {
+	appended := t.flushPartial()
+	if len(t.entries) == 0 || t.entries[len(t.entries)-1] == "" {
+		return appended
+	}
+	if t.appendLine(appTranscriptBlankLine) {
+		appended = append(appended, "")
+	}
+	return appended
+}
+
 func (t *appTranscriptTail) flushPartial() []string {
 	if strings.TrimSpace(t.partial) == "" {
 		t.partial = ""

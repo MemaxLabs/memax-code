@@ -213,19 +213,30 @@ func (f *appTranscriptFormatter) appendLocalTranscriptLine(kind, text string) {
 	f.queuePrints(f.transcript.append(f.compactor.flush()))
 	f.compactor.resetSection()
 	f.lastActivityCommandKey = ""
+	if kind == "user" {
+		f.appendTranscriptSpacer()
+	}
 	f.queuePrints(f.transcript.appendStandaloneLine(compactAppProgramLocalLine(kind, text)))
+	if kind == "user" {
+		f.appendTranscriptSpacer()
+	}
 }
 
 func (f *appTranscriptFormatter) appendActivityGroup(lines ...string) {
 	f.flushTranscriptPartial()
 	f.compactor.resetSection()
 	f.lastActivityCommandKey = ""
+	f.appendTranscriptSpacer()
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		f.queuePrints(f.transcript.appendStandaloneLine(line))
 	}
+}
+
+func (f *appTranscriptFormatter) appendTranscriptSpacer() {
+	f.queuePrints(f.transcript.appendBlankLine())
 }
 
 func (f *appTranscriptFormatter) appendCommandActivityGroup(key string, lines ...string) {
@@ -238,6 +249,11 @@ func (f *appTranscriptFormatter) appendCommandActivityGroup(key string, lines ..
 		f.queuePrints(f.transcript.appendStandaloneLine(line))
 	}
 	f.lastActivityCommandKey = key
+}
+
+func (f *appTranscriptFormatter) appendCommandBlock(key string, lines ...string) {
+	f.appendTranscriptSpacer()
+	f.appendCommandActivityGroup(key, lines...)
 }
 
 func (f *appTranscriptFormatter) storePendingTool(toolUse *model.ToolUse) {
@@ -355,7 +371,7 @@ func (f *appTranscriptFormatter) appendGroupedCommandEvent(event memaxagent.Even
 		f.ensurePendingCommands()
 		group := f.pendingCommandGroup(key, command)
 		if strings.TrimSpace(command.CommandID) != "" && !group.printed {
-			f.appendCommandActivityGroup(key, group.renderHeader()...)
+			f.appendCommandBlock(key, group.renderHeader()...)
 			f.markCommandGroupRendered(group)
 			group.printed = true
 		}
@@ -391,7 +407,7 @@ func (f *appTranscriptFormatter) appendGroupedCommandEvent(event memaxagent.Even
 			}
 		}
 		if !group.printed {
-			f.appendCommandActivityGroup(key, group.render()...)
+			f.appendCommandBlock(key, group.render()...)
 			f.markCommandGroupRendered(group)
 		}
 		f.deletePendingCommandGroup(key)
@@ -480,7 +496,7 @@ func (f *appTranscriptFormatter) flushPendingCommandGroups() {
 			continue
 		}
 		if !group.printed {
-			f.appendCommandActivityGroup(key, group.render()...)
+			f.appendCommandBlock(key, group.render()...)
 			f.markCommandGroupRendered(group)
 		}
 		f.markCommandGroupFlushed(key, group)
@@ -498,7 +514,7 @@ func (f *appTranscriptFormatter) flushUnprintedCommandGroups() {
 		if group == nil || group.printed {
 			continue
 		}
-		f.appendCommandActivityGroup(key, group.render()...)
+		f.appendCommandBlock(key, group.render()...)
 		f.markCommandGroupRendered(group)
 		f.markCommandGroupFlushed(key, group)
 		f.removeCommandFallbackKey(group.fallbackKey, key)
@@ -518,7 +534,7 @@ func (f *appTranscriptFormatter) printUnprintedCommandGroups() {
 		if group == nil || group.printed {
 			continue
 		}
-		f.appendCommandActivityGroup(key, group.render()...)
+		f.appendCommandBlock(key, group.render()...)
 		f.markCommandGroupRendered(group)
 		group.printed = true
 	}
@@ -529,7 +545,7 @@ func (f *appTranscriptFormatter) appendPrintedCommandChild(key string, group *ap
 		return
 	}
 	if group != nil && f.lastActivityCommandKey != key {
-		f.appendCommandActivityGroup(key, group.renderContinuationHeader()...)
+		f.appendCommandBlock(key, group.renderContinuationHeader()...)
 	}
 	f.appendCommandActivityGroup(key, child)
 }

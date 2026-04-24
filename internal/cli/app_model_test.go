@@ -291,16 +291,19 @@ func TestAppProgramStructuredRepeatedCommandsWithoutIDsStaySeparate(t *testing.T
 	}
 
 	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
-	want := strings.Join([]string{
+	for _, want := range []string{
 		"• Bash(ls -la)",
 		"  └ output chunks=1 next_seq=2",
 		"  └ done exit=0",
-		"• Bash(ls -la)",
 		"  └ output chunks=2 next_seq=3",
 		"  └ done exit=0",
-	}, "\n")
-	if !strings.Contains(got, want) {
-		t.Fatalf("repeated commands without IDs were not kept separate:\n%s", got)
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("repeated commands without IDs missing %q:\n%s", want, got)
+		}
+	}
+	if count := countTranscriptLine(got, "• Bash(ls -la)"); count != 2 {
+		t.Fatalf("command header count = %d, want 2:\n%s", count, got)
 	}
 }
 
@@ -842,17 +845,11 @@ func TestAppProgramStructuredNameOnlyToolResultsUseFIFO(t *testing.T) {
 	}
 
 	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
-	want := strings.Join([]string{
-		"• read_file call",
-		"  └ ok",
-		"• read_file call",
-		"  └ ok",
-	}, "\n")
-	if !strings.Contains(got, want) {
-		t.Fatalf("name-only tool result blocks were not FIFO grouped:\n%s", got)
-	}
 	if count := strings.Count(got, "• read_file call"); count != 2 {
 		t.Fatalf("read_file header count = %d, want 2:\n%s", count, got)
+	}
+	if count := strings.Count(got, "  └ ok"); count != 2 {
+		t.Fatalf("read_file ok count = %d, want 2:\n%s", count, got)
 	}
 }
 
@@ -1199,8 +1196,58 @@ func TestAppProgramComposerViewPaintsTrailingWhitespace(t *testing.T) {
 	if strings.Contains(raw, "\x1b[0m  \x1b[0m") {
 		t.Fatalf("composer rendered unpainted trailing whitespace gap:\n%q", raw)
 	}
+	if strings.Contains(raw, "\x1b[7") {
+		t.Fatalf("empty composer placeholder rendered inverse cursor block:\n%q", raw)
+	}
 	if !strings.Contains(raw, "\x1b[48;5;235m") {
 		t.Fatalf("composer missing expected background color:\n%q", raw)
+	}
+}
+
+func TestAppProgramUserPromptTranscriptHasVerticalPadding(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+
+	model.appendLocalTranscriptLine("dim", "Welcome.")
+	model.appendLocalTranscriptLine("user", "› inspect the repo")
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	want := strings.Join([]string{
+		"Welcome.",
+		"",
+		" › inspect the repo ",
+	}, "\n")
+	if !strings.Contains(got, want) {
+		t.Fatalf("user prompt missing vertical padding before prompt:\n%s", got)
+	}
+	if !strings.HasSuffix(got, " › inspect the repo \n") {
+		t.Fatalf("user prompt missing trailing padding line:\n%q", got)
+	}
+}
+
+func TestAppProgramToolCallsHaveSpacing(t *testing.T) {
+	app := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	app.transcript = appTranscriptTail{}
+
+	for _, event := range []memaxagent.Event{
+		{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{ID: "tool-1", Name: "read_file"}},
+		{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{ToolUseID: "tool-1", Name: "read_file", Content: "ok"}},
+		{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{ID: "tool-2", Name: "workspace_list_files"}},
+		{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{ToolUseID: "tool-2", Name: "workspace_list_files", Content: "ok"}},
+	} {
+		app.appendEvent(event)
+	}
+
+	got := ansi.Strip(strings.Join(app.transcript.lines(maxAppTranscriptLines), "\n"))
+	want := strings.Join([]string{
+		"• read_file call",
+		"  └ ok",
+		"",
+		"• workspace_list_files call",
+		"  └ ok",
+	}, "\n")
+	if !strings.Contains(got, want) {
+		t.Fatalf("tool calls missing spacer:\n%s", got)
 	}
 }
 
