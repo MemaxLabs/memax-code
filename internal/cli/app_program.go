@@ -518,6 +518,7 @@ type appProgramTranscriptCompactor struct {
 	assistantInCodeBlock    bool
 	assistantHasContent     bool
 	assistantAtLineBoundary bool
+	outputHasOpenLine       bool
 	lastActivityTool        string
 	activityDetail          *appProgramActivityDetail
 }
@@ -603,6 +604,7 @@ func (c *appProgramTranscriptCompactor) compact(text string) string {
 	if text != "" && trailingNewline {
 		text += "\n"
 	}
+	c.outputHasOpenLine = text != "" && !strings.HasSuffix(text, "\n")
 	return text
 }
 
@@ -624,6 +626,7 @@ func (c *appProgramTranscriptCompactor) compactLine(line string) []string {
 	}
 	if section, label, ok := compactAppProgramSectionLabel(trimmed); ok {
 		out := c.flushActivityDetail()
+		c.lastActivityTool = ""
 		if section == "assistant" {
 			c.assistantHasContent = false
 			c.assistantAtLineBoundary = false
@@ -852,21 +855,23 @@ func (c *appProgramTranscriptCompactor) compactActivityLine(trimmed string) []st
 		return append(out, appProgramErrorStyle.Render("! "+strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))))
 	}
 	if strings.HasPrefix(trimmed, "result:") {
+		out := c.flushActivityDetail()
 		if appToolShowsResultTail(c.lastActivityTool) {
 			c.skipActivityDetail = true
 			c.activityDetail = &appProgramActivityDetail{label: "output", style: appProgramDimStyle}
 			c.activityDetail.append(strings.TrimSpace(strings.TrimPrefix(trimmed, "result:")))
-			return nil
+			return out
 		}
 		c.activityDetail = nil
 		c.skipActivityDetail = true
-		return nil
+		return out
 	}
 	if strings.HasPrefix(trimmed, "error:") {
+		out := c.flushActivityDetail()
 		c.skipActivityDetail = true
 		c.activityDetail = &appProgramActivityDetail{label: "error", style: appProgramErrorStyle}
 		c.activityDetail.append(strings.TrimSpace(strings.TrimPrefix(trimmed, "error:")))
-		return nil
+		return out
 	}
 	if c.activityDetail != nil {
 		c.activityDetail.append(trimmed)
@@ -1027,7 +1032,12 @@ func (c *appProgramTranscriptCompactor) flush() string {
 	if len(out) == 0 {
 		return ""
 	}
-	return strings.Join(out, "\n") + "\n"
+	text := strings.Join(out, "\n") + "\n"
+	if c.outputHasOpenLine {
+		text = "\n" + text
+	}
+	c.outputHasOpenLine = false
+	return text
 }
 
 func compactAppProgramErrorLine(trimmed string) string {

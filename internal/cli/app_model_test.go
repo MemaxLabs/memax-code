@@ -472,6 +472,7 @@ func TestCompactAppProgramTranscriptTextTailsCommandOutputResults(t *testing.T) 
 	for _, want := range []string{
 		"• Wait for command output call",
 		"  Wait for command output ok",
+		"  Wait for command output ok\n  output tail:",
 		"output tail:",
 		"next_seq: 4",
 		"resume_after_seq: 3",
@@ -493,6 +494,42 @@ func TestCompactAppProgramTranscriptTextTailsCommandOutputResults(t *testing.T) 
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("command output transcript leaked %q:\n%s", unwanted, got)
 		}
+	}
+}
+
+func TestCompactAppProgramTranscriptTextFlushesConsecutiveResultDetails(t *testing.T) {
+	got := ansi.Strip(compactAppProgramTranscriptText(strings.Join([]string{
+		"[activity]",
+		"> tool wait_command_output call",
+		"< tool wait_command_output ok",
+		"  result: command output for cmd-1",
+		"  next_seq: 5",
+		"  result: command output for cmd-1",
+		"  next_seq: 6",
+	}, "\n")))
+
+	for _, want := range []string{
+		"  output: next_seq: 5",
+		"  output: next_seq: 6",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("consecutive result detail missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestCompactAppProgramTranscriptTextFlushDoesNotMergeOpenLine(t *testing.T) {
+	var compactor appProgramTranscriptCompactor
+	got := ansi.Strip(compactor.compact(strings.Join([]string{
+		"[activity]",
+		"> tool wait_command_output call",
+		"< tool wait_command_output ok",
+		"  result: command output for cmd-1",
+		"  next_seq: 5",
+	}, "\n")) + compactor.flush())
+
+	if !strings.Contains(got, "  Wait for command output ok\n  output: next_seq: 5") {
+		t.Fatalf("flush merged open line:\n%s", got)
 	}
 }
 
