@@ -403,6 +403,172 @@ func TestAppProgramStructuredCommandToolDoesNotDuplicateHeader(t *testing.T) {
 	}
 }
 
+func TestAppProgramStructuredRunCommandRendersBeforeResult(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:    "tool-run-1",
+		Name:  "run_command",
+		Input: json.RawMessage(`{"command":"sleep 10 && curl -sS https://api.memax.app/health"}`),
+	}})
+
+	before := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(before, "• Bash(sleep 10 && curl -sS https://api.memax.app/health)") {
+		t.Fatalf("run_command did not render before result:\n%s", before)
+	}
+	if strings.Contains(before, "done exit=0") {
+		t.Fatalf("run_command completion rendered before result:\n%s", before)
+	}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		ToolUseID: "tool-run-1",
+		Name:      "run_command",
+		Content:   `{"status":"ok"}`,
+		Metadata: map[string]any{
+			model.MetadataCommandOperation: "run",
+			model.MetadataCommandString:    "sleep 10 && curl -sS https://api.memax.app/health",
+			model.MetadataCommandExitCode:  0,
+		},
+	}})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
+		Operation: "run",
+		Command:   "sleep 10 && curl -sS https://api.memax.app/health",
+		ExitCode:  0,
+	}})
+
+	after := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := countTranscriptLine(after, "• Bash(sleep 10 && curl -sS https://api.memax.app/health)"); count != 1 {
+		t.Fatalf("run_command header count = %d, want 1:\n%s", count, after)
+	}
+	if !strings.Contains(after, "• Bash(sleep 10 && curl -sS https://api.memax.app/health)\n  └ done exit=0") {
+		t.Fatalf("run_command completion did not attach under invocation:\n%s", after)
+	}
+}
+
+func TestAppProgramStructuredRunCommandFinishWithoutCommandStaysGrouped(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:    "tool-run-1",
+		Name:  "run_command",
+		Input: json.RawMessage(`{"command":"go test ./..."}`),
+	}})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Command:   "go test ./...",
+	}})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		ExitCode:  0,
+	}})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		ToolUseID: "tool-run-1",
+		Name:      "run_command",
+		Content:   "ok",
+	}})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := countTranscriptLine(got, "• Bash(go test ./...)"); count != 1 {
+		t.Fatalf("command header count = %d, want 1:\n%s", count, got)
+	}
+	if strings.Contains(got, "• Command") {
+		t.Fatalf("command finish without command string rendered phantom header:\n%s", got)
+	}
+	if !strings.Contains(got, "• Bash(go test ./...)\n  └ done id=cmd-1 exit=0") {
+		t.Fatalf("command completion did not attach under invocation:\n%s", got)
+	}
+}
+
+func TestAppProgramStructuredSequentialIdenticalRunCommandsUseSeparateGroups(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	emitRun := func(toolID, commandID string) {
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+			ID:    toolID,
+			Name:  "run_command",
+			Input: json.RawMessage(`{"command":"echo hello"}`),
+		}})
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+			CommandID: commandID,
+			Command:   "echo hello",
+		}})
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
+			CommandID: commandID,
+			Command:   "echo hello",
+			ExitCode:  0,
+		}})
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+			ToolUseID: toolID,
+			Name:      "run_command",
+			Content:   "hello",
+			Metadata: map[string]any{
+				model.MetadataCommandOperation: "run",
+				model.MetadataCommandString:    "echo hello",
+				model.MetadataCommandExitCode:  0,
+			},
+		}})
+	}
+
+	emitRun("tool-run-1", "cmd-1")
+	emitRun("tool-run-2", "cmd-2")
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := countTranscriptLine(got, "• Bash(echo hello)"); count != 2 {
+		t.Fatalf("command header count = %d, want 2:\n%s", count, got)
+	}
+	if count := countTranscriptLine(got, "  └ done id=cmd-1 exit=0"); count != 1 {
+		t.Fatalf("cmd-1 completion count = %d, want 1:\n%s", count, got)
+	}
+	if count := countTranscriptLine(got, "  └ done id=cmd-2 exit=0"); count != 1 {
+		t.Fatalf("cmd-2 completion count = %d, want 1:\n%s", count, got)
+	}
+}
+
+func TestAppProgramStructuredSequentialIdenticalRunCommandsWithoutStartedUseSeparateGroups(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	emitRun := func(toolID, commandID string) {
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+			ID:    toolID,
+			Name:  "run_command",
+			Input: json.RawMessage(`{"command":"ls -la"}`),
+		}})
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+			ToolUseID: toolID,
+			Name:      "run_command",
+			Content:   "total 16",
+			Metadata: map[string]any{
+				model.MetadataCommandOperation: "run",
+				model.MetadataCommandString:    "ls -la",
+				model.MetadataCommandExitCode:  0,
+			},
+		}})
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
+			CommandID: commandID,
+			Command:   "ls -la",
+			ExitCode:  0,
+		}})
+	}
+
+	emitRun("tool-run-1", "cmd-1")
+	emitRun("tool-run-2", "cmd-2")
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := countTranscriptLine(got, "• Bash(ls -la)"); count != 2 {
+		t.Fatalf("command header count = %d, want 2:\n%s", count, got)
+	}
+	if count := countTranscriptLine(got, "  └ done id=cmd-1 exit=0"); count != 1 {
+		t.Fatalf("cmd-1 completion count = %d, want 1:\n%s", count, got)
+	}
+	if count := countTranscriptLine(got, "  └ done id=cmd-2 exit=0"); count != 1 {
+		t.Fatalf("cmd-2 completion count = %d, want 1:\n%s", count, got)
+	}
+}
+
 func TestAppProgramStructuredCommandToolWithoutMetadataDoesNotDuplicateRenderedCommand(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
@@ -652,6 +818,12 @@ func TestAppProgramStructuredStartCommandResultBeforeFinishDoesNotDuplicateHeade
 		Name:  "start_command",
 		Input: json.RawMessage(`{"command":"npm test -- --watch"}`),
 	}})
+
+	before := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(before, "• Bash(npm test -- --watch)") {
+		t.Fatalf("start_command did not render before result:\n%s", before)
+	}
+
 	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
 		CommandID: "cmd-1",
 		Command:   "npm test -- --watch",

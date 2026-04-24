@@ -17,6 +17,7 @@ type appTranscriptFormatter struct {
 	pendingToolsByName     map[string][]*model.ToolUse
 	pendingCommands        map[string]*appProgramCommandGroup
 	pendingCommandOrder    []string
+	pendingCommandID       map[string]string
 	pendingCommandFallback map[string][]string
 	flushedCommandKeys     map[string]bool
 	renderedCommandToolIDs map[string]bool
@@ -126,6 +127,9 @@ func (f *appTranscriptFormatter) appendToolUse(toolUse *model.ToolUse) {
 	alreadyRendered := f.pendingToolIDAlreadyRendered(toolUse.ID)
 	f.storePendingTool(toolUse)
 	if appToolUseDefersToCommandLifecycle(toolUse.Name) {
+		if !alreadyRendered {
+			f.appendImmediateCommandToolUse(toolUse)
+		}
 		return
 	}
 	if alreadyRendered {
@@ -200,6 +204,39 @@ func (f *appTranscriptFormatter) appendCommandEvent(event memaxagent.Event) {
 		return
 	}
 	f.appendGroupedCommandEvent(event)
+}
+
+func (f *appTranscriptFormatter) appendImmediateCommandToolUse(toolUse *model.ToolUse) bool {
+	if toolUse == nil {
+		return false
+	}
+	operation := ""
+	switch toolUse.Name {
+	case "run_command":
+		operation = "run"
+	case "start_command":
+		operation = "start"
+	default:
+		return false
+	}
+	command := appToolUseCommand(toolUse)
+	if command == "" {
+		return false
+	}
+	commandEvent := &memaxagent.CommandEvent{
+		Operation: operation,
+		Command:   command,
+	}
+	key := f.startCommandGroupKey(commandEvent)
+	f.ensurePendingCommands()
+	group := f.pendingCommandGroup(key, commandEvent)
+	if group.printed {
+		return true
+	}
+	f.appendCommandBlock(key, group.renderHeader()...)
+	f.markCommandGroupRendered(group)
+	group.printed = true
+	return true
 }
 
 func (f *appTranscriptFormatter) appendApprovalEvent(action string, approval *memaxagent.ApprovalEvent) {
@@ -561,7 +598,7 @@ func (f *appTranscriptFormatter) appendGroupedCommandEvent(event memaxagent.Even
 			f.markCommandGroupRendered(group)
 		}
 		f.deletePendingCommandGroup(key)
-		f.finishCommandGroupKey(command, key)
+		f.finishCommandGroupKey(command, key, group)
 		f.markCommandGroupFlushed(key, group)
 	}
 }
@@ -569,6 +606,9 @@ func (f *appTranscriptFormatter) appendGroupedCommandEvent(event memaxagent.Even
 func (f *appTranscriptFormatter) ensurePendingCommands() {
 	if f.pendingCommands == nil {
 		f.pendingCommands = make(map[string]*appProgramCommandGroup)
+	}
+	if f.pendingCommandID == nil {
+		f.pendingCommandID = make(map[string]string)
 	}
 	if f.pendingCommandFallback == nil {
 		f.pendingCommandFallback = make(map[string][]string)
@@ -653,6 +693,7 @@ func (f *appTranscriptFormatter) flushPendingCommandGroups() {
 		f.deletePendingCommandGroup(key)
 	}
 	f.pendingCommandFallback = nil
+	f.pendingCommandID = nil
 }
 
 func (f *appTranscriptFormatter) flushUnprintedCommandGroups() {
@@ -672,6 +713,7 @@ func (f *appTranscriptFormatter) flushUnprintedCommandGroups() {
 	}
 	if len(f.pendingCommands) == 0 {
 		f.pendingCommandFallback = nil
+		f.pendingCommandID = nil
 	}
 }
 
@@ -773,7 +815,17 @@ func (f *appTranscriptFormatter) commandGroupWasFlushed(key string) bool {
 func (f *appTranscriptFormatter) startCommandGroupKey(command *memaxagent.CommandEvent) string {
 	f.ensurePendingCommands()
 	if id := strings.TrimSpace(command.CommandID); id != "" {
-		return "id:" + id
+		if key := f.pendingCommandID[id]; key != "" {
+			return key
+		}
+		fallback := appCommandFallbackKey(command)
+		if queue := f.pendingCommandFallback[fallback]; len(queue) > 0 {
+			f.pendingCommandID[id] = queue[0]
+			return queue[0]
+		}
+		key := "id:" + id
+		f.pendingCommandID[id] = key
+		return key
 	}
 	f.nextCommandGroup++
 	key := fmt.Sprintf("anon:%d", f.nextCommandGroup)
@@ -784,7 +836,26 @@ func (f *appTranscriptFormatter) startCommandGroupKey(command *memaxagent.Comman
 
 func (f *appTranscriptFormatter) commandGroupKey(command *memaxagent.CommandEvent) string {
 	if id := strings.TrimSpace(command.CommandID); id != "" {
-		return "id:" + id
+		if key := f.pendingCommandID[id]; key != "" {
+			return key
+		}
+		key := "id:" + id
+		if f.pendingCommands[key] != nil {
+			f.ensurePendingCommands()
+			f.pendingCommandID[id] = key
+			return key
+		}
+		fallback := appCommandFallbackKey(command)
+		if len(f.pendingCommandFallback) > 0 {
+			if queue := f.pendingCommandFallback[fallback]; len(queue) > 0 {
+				f.ensurePendingCommands()
+				f.pendingCommandID[id] = queue[0]
+				return queue[0]
+			}
+		}
+		f.ensurePendingCommands()
+		f.pendingCommandID[id] = key
+		return key
 	}
 	// Without a command ID, simultaneous identical commands cannot be
 	// disambiguated. The fallback queue preserves serialized command pairs.
@@ -797,8 +868,17 @@ func (f *appTranscriptFormatter) commandGroupKey(command *memaxagent.CommandEven
 	return fallback
 }
 
-func (f *appTranscriptFormatter) finishCommandGroupKey(command *memaxagent.CommandEvent, key string) {
-	if strings.TrimSpace(command.CommandID) != "" || len(f.pendingCommandFallback) == 0 {
+func (f *appTranscriptFormatter) finishCommandGroupKey(command *memaxagent.CommandEvent, key string, group *appProgramCommandGroup) {
+	if len(f.pendingCommandFallback) == 0 && len(f.pendingCommandID) == 0 {
+		return
+	}
+	if command != nil {
+		if id := strings.TrimSpace(command.CommandID); id != "" && f.pendingCommandID[id] == key {
+			delete(f.pendingCommandID, id)
+		}
+	}
+	if group != nil && strings.TrimSpace(group.fallbackKey) != "" {
+		f.removeCommandFallbackKey(group.fallbackKey, key)
 		return
 	}
 	f.removeCommandFallbackKey(appCommandFallbackKey(command), key)
