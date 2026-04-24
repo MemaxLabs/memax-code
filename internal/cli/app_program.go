@@ -516,6 +516,7 @@ type appProgramTranscriptCompactor struct {
 	assistantInCodeBlock    bool
 	assistantHasContent     bool
 	assistantAtLineBoundary bool
+	assistantLineBuffer     string
 	outputHasOpenLine       bool
 	lastActivityTool        string
 	activityDetail          *appProgramActivityDetail
@@ -574,7 +575,8 @@ func (c *appProgramTranscriptCompactor) compact(text string) string {
 	out := make([]string, 0, len(lines))
 	leadingAssistantBoundary := c.section == "assistant" && strings.HasPrefix(text, "\n")
 	for i, line := range lines {
-		for _, compacted := range c.compactLine(line) {
+		completeLine := trailingNewline || i < len(lines)-1
+		for _, compacted := range c.compactLine(line, completeLine) {
 			if c.section == "assistant" && compacted == appTranscriptBlankLine && !c.assistantHasContent {
 				continue
 			}
@@ -600,7 +602,7 @@ func (c *appProgramTranscriptCompactor) compact(text string) string {
 		c.outputHasOpenLine = false
 		return "\n"
 	}
-	if text != "" && trailingNewline {
+	if text != "" && (trailingNewline || c.assistantLineBuffer != "") {
 		text += "\n"
 	}
 	if text != "" {
@@ -622,32 +624,43 @@ func (c *appProgramTranscriptCompactor) startSection(section string) string {
 	if section == "assistant" {
 		c.assistantHasContent = false
 		c.assistantAtLineBoundary = false
+		c.assistantLineBuffer = ""
 	}
 	return out
 }
 
 func (c *appProgramTranscriptCompactor) dropWhitespaceOnlyChunk(text string) bool {
+	if c.section == "assistant" {
+		return text == ""
+	}
 	return strings.TrimSpace(text) == "" && (c.section != "assistant" || !strings.Contains(text, "\n"))
 }
 
-func (c *appProgramTranscriptCompactor) compactLine(line string) []string {
+func (c *appProgramTranscriptCompactor) compactLine(line string, completeLine bool) []string {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
+		if c.section == "assistant" {
+			if !completeLine {
+				c.assistantLineBuffer += line
+				return nil
+			}
+			out := c.flushAssistantLineBuffer()
+			return append(out, appTranscriptBlankLine)
+		}
 		if c.activityDetail != nil {
 			c.activityDetail.append("")
 			return nil
 		}
-		if c.section == "assistant" {
-			return []string{appTranscriptBlankLine}
-		}
 		return []string{line}
 	}
 	if section, label, ok := compactAppProgramSectionLabel(trimmed); ok {
-		out := c.flushActivityDetail()
+		out := c.flushAssistantLineBuffer()
+		out = append(out, c.flushActivityDetail()...)
 		c.lastActivityTool = ""
 		if section == "assistant" {
 			c.assistantHasContent = false
 			c.assistantAtLineBoundary = false
+			c.assistantLineBuffer = ""
 		}
 		c.section = section
 		c.skipActivityDetail = false
@@ -659,7 +672,7 @@ func (c *appProgramTranscriptCompactor) compactLine(line string) []string {
 	}
 	switch c.section {
 	case "assistant":
-		return []string{c.compactAssistantLine(line)}
+		return c.compactAssistantLineChunk(line, completeLine)
 	case "activity":
 		return c.compactActivityLine(trimmed)
 	case "result", "session", "usage", "status":
@@ -669,6 +682,18 @@ func (c *appProgramTranscriptCompactor) compactLine(line string) []string {
 	default:
 		return []string{line}
 	}
+}
+
+func (c *appProgramTranscriptCompactor) compactAssistantLineChunk(line string, completeLine bool) []string {
+	if !completeLine {
+		c.assistantLineBuffer += line
+		return nil
+	}
+	if c.assistantLineBuffer != "" {
+		line = c.assistantLineBuffer + line
+		c.assistantLineBuffer = ""
+	}
+	return []string{c.compactAssistantLine(line)}
 }
 
 func compactAppProgramLocalLine(kind, text string) string {
@@ -1209,8 +1234,21 @@ func (c *appProgramTranscriptCompactor) flushActivityDetail() []string {
 	return out
 }
 
+func (c *appProgramTranscriptCompactor) flushAssistantLineBuffer() []string {
+	if c.section != "assistant" || c.assistantLineBuffer == "" {
+		return nil
+	}
+	line := c.assistantLineBuffer
+	c.assistantLineBuffer = ""
+	if strings.TrimSpace(line) == "" {
+		return nil
+	}
+	return []string{c.compactAssistantLine(line)}
+}
+
 func (c *appProgramTranscriptCompactor) flush() string {
-	out := c.flushActivityDetail()
+	out := c.flushAssistantLineBuffer()
+	out = append(out, c.flushActivityDetail()...)
 	if len(out) == 0 {
 		return ""
 	}

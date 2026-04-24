@@ -566,6 +566,106 @@ func TestAppProgramInlineMarkdownHandlesUnclosedMarkers(t *testing.T) {
 	}
 }
 
+func TestAppProgramTranscriptRendersAssistantMarkdownAcrossChunks(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{}
+
+	for _, chunk := range []string{
+		"[assistant]\nThis repo is called **",
+		"Memax Code",
+		"** and uses `",
+		"Go",
+		"`.\n",
+	} {
+		model.appendTranscript(chunk)
+	}
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(got, "This repo is called Memax Code and uses Go.") {
+		t.Fatalf("split assistant markdown was not rendered:\n%s", got)
+	}
+	for _, unwanted := range []string{"**", "`Go`"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("split assistant markdown leaked %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestAppProgramTranscriptPreservesAssistantSpaceChunks(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{}
+
+	for _, chunk := range []string{
+		"[assistant]\nWhat",
+		" ",
+		"it",
+		" ",
+		"supports\n",
+	} {
+		model.appendTranscript(chunk)
+	}
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(got, "What it supports") {
+		t.Fatalf("assistant space chunks were not preserved:\n%s", got)
+	}
+	if strings.Contains(got, "Whatit") || strings.Contains(got, "itsupports") {
+		t.Fatalf("assistant space chunks were glued:\n%s", got)
+	}
+}
+
+func TestAppProgramTranscriptRendersAssistantHeadingsAcrossChunks(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{}
+
+	for _, chunk := range []string{
+		"[assistant]\n### High level",
+		"\n",
+		"From `README.md`, this is a **coding-agent CLI**.\n",
+	} {
+		model.appendTranscript(chunk)
+	}
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"High level",
+		"From README.md, this is a coding-agent CLI.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("assistant heading markdown missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"###", "**", "`README.md`", "levelFrom"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("assistant heading markdown leaked %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestAppProgramTranscriptSeparatesCompleteLineBeforePartial(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{}
+
+	for _, chunk := range []string{
+		"[assistant]\nfirst sentence.\nThis is **Memax",
+		" Code**.\n",
+	} {
+		model.appendTranscript(chunk)
+	}
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(got, "first sentence.\nThis is Memax Code.") {
+		t.Fatalf("complete line glued to following partial:\n%s", got)
+	}
+	if strings.Contains(got, "sentence.This") || strings.Contains(got, "**Memax") {
+		t.Fatalf("complete line before partial rendered incorrectly:\n%s", got)
+	}
+}
+
 func TestAppProgramTranscriptPreservesStreamedAssistantBlankLines(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.transcript = appTranscriptTail{}

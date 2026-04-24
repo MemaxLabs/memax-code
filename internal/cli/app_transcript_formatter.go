@@ -171,6 +171,7 @@ func (f *appTranscriptFormatter) appendLocalTranscriptLine(kind, text string) {
 	if kind == "" || text == "" {
 		return
 	}
+	f.queuePrints(f.transcript.append(f.compactor.flush()))
 	f.queuePrints(f.transcript.appendStandaloneLine(compactAppProgramLocalLine(kind, text)))
 }
 
