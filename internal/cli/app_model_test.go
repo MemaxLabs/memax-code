@@ -42,11 +42,11 @@ func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T)
 
 	for _, want := range []string{
 		"working on it",
-		"• tool run_command call",
-		"  tool run_command ok",
-		"! tool run_command error",
-		"• command id=cmd-1 command=\"go test ./...\"",
-		"✓ command command=\"go test ./...\" exit=0 timeout=false",
+		"• Bash call",
+		"  Bash ok",
+		"! Bash error",
+		"• Bash(go test ./...) started id=cmd-1",
+		"✓ Bash(go test ./...) done exit=0",
 		"! command cmd-2 stopped status=killed",
 		"✓ check go test ./... passed=true",
 		"? approval Apply patch",
@@ -56,7 +56,7 @@ func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T)
 			t.Fatalf("compact transcript missing %q:\n%s", want, got)
 		}
 	}
-	for _, unwanted := range []string{"[session]", "[assistant]", "[activity]", "[result]", "[usage]", "[status]", "[error]", "Assistant", "Activity", "Result", "Usage", "Status", "Error", "$ command", "+ command", "019db69e-3b4f-7d79-a333-34d708f1d4a6", "done", "input=10", "phase: done", "line one", "line two"} {
+	for _, unwanted := range []string{"[session]", "[assistant]", "[activity]", "[result]", "[usage]", "[status]", "[error]", "Assistant", "Activity", "Result", "Usage", "Status", "Error", "$ command", "+ command", "019db69e-3b4f-7d79-a333-34d708f1d4a6", "input=10", "phase: done", "line one", "line two"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("compact transcript leaked %q:\n%s", unwanted, got)
 		}
@@ -175,7 +175,7 @@ func TestAppProgramFinishPromptErrorFlushesToolErrorTail(t *testing.T) {
 
 	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
 	for _, want := range []string{
-		"! tool run_command error",
+		"! Bash error",
 		"error tail:",
 		"line one",
 		"line two",
@@ -432,14 +432,14 @@ func TestCompactAppProgramTranscriptTextTailsToolErrors(t *testing.T) {
 	}, "\n")))
 
 	for _, want := range []string{
-		"! tool run_command error",
+		"! Bash error",
 		"error tail:",
 		"line three",
 		"line four",
 		"line five",
 		"line six",
 		"line seven",
-		"• tool read_file call",
+		"• read_file call",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("error tail missing %q:\n%s", want, got)
@@ -448,6 +448,50 @@ func TestCompactAppProgramTranscriptTextTailsToolErrors(t *testing.T) {
 	for _, unwanted := range []string{"line one", "line two"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("error tail leaked old line %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestCompactAppProgramTranscriptTextTailsCommandOutputResults(t *testing.T) {
+	got := ansi.Strip(compactAppProgramTranscriptText(strings.Join([]string{
+		"[activity]",
+		"> tool wait_command_output call",
+		"< tool wait_command_output ok",
+		"  result: command output for cmd-1: npm test -- --watch",
+		"  status: running",
+		"  next_seq: 4",
+		"  resume_after_seq: 3",
+		"  [stdout #3]",
+		"  PASS widget.test.ts",
+		"> tool run_command call",
+		"< tool run_command ok",
+		"  result: command succeeded: go test ./...",
+		"  verbose output that should stay collapsed",
+	}, "\n")))
+
+	for _, want := range []string{
+		"• Wait for command output call",
+		"  Wait for command output ok",
+		"output tail:",
+		"next_seq: 4",
+		"resume_after_seq: 3",
+		"[stdout #3]",
+		"PASS widget.test.ts",
+		"• Bash call",
+		"  Bash ok",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("command output transcript missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"command output for cmd-1",
+		"status: running",
+		"command succeeded: go test ./...",
+		"verbose output that should stay collapsed",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("command output transcript leaked %q:\n%s", unwanted, got)
 		}
 	}
 }
@@ -469,12 +513,12 @@ func TestAppProgramTranscriptCompactorStreamsToolErrorTail(t *testing.T) {
 	got := ansi.Strip(out.String())
 
 	for _, want := range []string{
-		"! tool run_command error",
+		"! Bash error",
 		"error tail:",
 		"line one",
 		"line two",
 		"line three",
-		"• tool read_file call",
+		"• read_file call",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("streamed error tail missing %q:\n%s", want, got)

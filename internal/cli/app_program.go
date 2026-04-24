@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -517,6 +518,7 @@ type appProgramTranscriptCompactor struct {
 	assistantInCodeBlock    bool
 	assistantHasContent     bool
 	assistantAtLineBoundary bool
+	lastActivityTool        string
 	activityDetail          *appProgramActivityDetail
 }
 
@@ -531,11 +533,19 @@ func (d *appProgramActivityDetail) append(line string) {
 	if strings.TrimSpace(line) == "" {
 		return
 	}
+	if d.label == "output" && appSkipCommandOutputDetailLine(line) {
+		return
+	}
 	d.lines = append(d.lines, line)
 	const maxActivityDetailTailLines = 5
 	if len(d.lines) > maxActivityDetailTailLines {
 		d.lines = append([]string(nil), d.lines[len(d.lines)-maxActivityDetailTailLines:]...)
 	}
+}
+
+func appSkipCommandOutputDetailLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasPrefix(trimmed, "command output for ") || strings.HasPrefix(trimmed, "wrote input to command session ") || strings.HasPrefix(trimmed, "status:")
 }
 
 func (d *appProgramActivityDetail) render() []string {
@@ -786,32 +796,35 @@ func (c *appProgramTranscriptCompactor) compactActivityLine(trimmed string) []st
 	if strings.HasPrefix(trimmed, "> tool ") {
 		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return append(out, appProgramToolStyle.Render("• "+strings.TrimSpace(strings.TrimPrefix(trimmed, "> "))))
+		c.lastActivityTool = appActivityToolName(trimmed)
+		return append(out, appProgramToolStyle.Render("• "+appFormatToolLine(strings.TrimSpace(strings.TrimPrefix(trimmed, "> ")))))
 	}
 	if strings.HasPrefix(trimmed, "< tool ") {
 		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return append(out, appProgramDimStyle.Render("  "+strings.TrimSpace(strings.TrimPrefix(trimmed, "< "))))
+		c.lastActivityTool = appActivityToolName(trimmed)
+		return append(out, appProgramDimStyle.Render("  "+appFormatToolLine(strings.TrimSpace(strings.TrimPrefix(trimmed, "< ")))))
 	}
 	if strings.HasPrefix(trimmed, "! tool ") {
 		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return append(out, appProgramErrorStyle.Render("! "+strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))))
+		c.lastActivityTool = appActivityToolName(trimmed)
+		return append(out, appProgramErrorStyle.Render("! "+appFormatToolLine(strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))))
 	}
 	if strings.HasPrefix(trimmed, "$ command ") {
 		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return append(out, appProgramToolStyle.Render("• "+strings.TrimSpace(strings.TrimPrefix(trimmed, "$ "))))
+		return append(out, appProgramToolStyle.Render("• "+appFormatCommandLine("started", strings.TrimSpace(strings.TrimPrefix(trimmed, "$ command ")))))
 	}
 	if strings.HasPrefix(trimmed, "+ command ") {
 		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return append(out, appProgramSuccessStyle.Render("✓ "+strings.TrimSpace(strings.TrimPrefix(trimmed, "+ "))))
+		return append(out, appProgramSuccessStyle.Render("✓ "+appFormatCommandLine("done", strings.TrimSpace(strings.TrimPrefix(trimmed, "+ command ")))))
 	}
 	if strings.HasPrefix(trimmed, "! command ") {
 		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return append(out, appProgramErrorStyle.Render("! "+strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))))
+		return append(out, appProgramErrorStyle.Render("! "+appFormatCommandLine("failed", strings.TrimSpace(strings.TrimPrefix(trimmed, "! command ")))))
 	}
 	if strings.HasPrefix(trimmed, "+ check ") {
 		out := c.flushActivityDetail()
@@ -839,6 +852,12 @@ func (c *appProgramTranscriptCompactor) compactActivityLine(trimmed string) []st
 		return append(out, appProgramErrorStyle.Render("! "+strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))))
 	}
 	if strings.HasPrefix(trimmed, "result:") {
+		if appToolShowsResultTail(c.lastActivityTool) {
+			c.skipActivityDetail = true
+			c.activityDetail = &appProgramActivityDetail{label: "output", style: appProgramDimStyle}
+			c.activityDetail.append(strings.TrimSpace(strings.TrimPrefix(trimmed, "result:")))
+			return nil
+		}
 		c.activityDetail = nil
 		c.skipActivityDetail = true
 		return nil
@@ -857,6 +876,141 @@ func (c *appProgramTranscriptCompactor) compactActivityLine(trimmed string) []st
 		return nil
 	}
 	return []string{appProgramDimStyle.Render(trimmed)}
+}
+
+func appActivityToolName(trimmed string) string {
+	fields := strings.Fields(trimmed)
+	if len(fields) < 3 || fields[1] != "tool" {
+		return ""
+	}
+	return fields[2]
+}
+
+func appFormatToolLine(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) < 2 || fields[0] != "tool" {
+		return line
+	}
+	name := fields[1]
+	switch name {
+	case "run_command", "start_command":
+		name = "Bash"
+	case "read_command_output":
+		name = "Read command output"
+	case "wait_command_output":
+		name = "Wait for command output"
+	case "write_command_input":
+		name = "Write command input"
+	case "stop_command":
+		name = "Stop command"
+	case "resize_command_terminal":
+		name = "Resize command terminal"
+	case "workspace_apply_patch":
+		name = "Apply patch"
+	}
+	if len(fields) > 2 {
+		return name + " " + strings.Join(fields[2:], " ")
+	}
+	return name
+}
+
+func appToolShowsResultTail(name string) bool {
+	switch name {
+	case "read_command_output", "wait_command_output", "write_command_input":
+		return true
+	default:
+		return false
+	}
+}
+
+func appFormatCommandLine(status, raw string) string {
+	fields := appParseActivityFields(raw)
+	command := fields["command"]
+	if command == "" {
+		return strings.TrimSpace("command " + raw)
+	}
+	parts := []string{"Bash(" + command + ")"}
+	switch status {
+	case "started":
+		parts = append(parts, "started")
+	case "done":
+		parts = append(parts, "done")
+	case "failed":
+		parts = append(parts, "failed")
+	}
+	if id := fields["id"]; id != "" {
+		parts = append(parts, "id="+id)
+	}
+	if pid := fields["pid"]; pid != "" && status == "started" {
+		parts = append(parts, "pid="+pid)
+	}
+	if exit := fields["exit"]; exit != "" && status != "started" {
+		parts = append(parts, "exit="+exit)
+	}
+	if timeout := fields["timeout"]; timeout == "true" {
+		parts = append(parts, "timeout=true")
+	}
+	return strings.Join(parts, " ")
+}
+
+func appParseActivityFields(raw string) map[string]string {
+	fields := make(map[string]string)
+	for i := 0; i < len(raw); {
+		for i < len(raw) && raw[i] == ' ' {
+			i++
+		}
+		start := i
+		for i < len(raw) && raw[i] != '=' && raw[i] != ' ' {
+			i++
+		}
+		if i >= len(raw) || raw[i] != '=' || start == i {
+			for i < len(raw) && raw[i] != ' ' {
+				i++
+			}
+			continue
+		}
+		key := raw[start:i]
+		i++
+		if i >= len(raw) {
+			fields[key] = ""
+			break
+		}
+		if raw[i] == '"' {
+			value, next := appParseQuotedActivityValue(raw[i:])
+			fields[key] = value
+			i += next
+			continue
+		}
+		valueStart := i
+		for i < len(raw) && raw[i] != ' ' {
+			i++
+		}
+		fields[key] = raw[valueStart:i]
+	}
+	return fields
+}
+
+func appParseQuotedActivityValue(raw string) (string, int) {
+	for i := 1; i < len(raw); i++ {
+		if raw[i] != '"' || appEscapedQuote(raw, i) {
+			continue
+		}
+		quoted := raw[:i+1]
+		value, err := strconv.Unquote(quoted)
+		if err != nil {
+			return strings.Trim(quoted, `"`), i + 1
+		}
+		return value, i + 1
+	}
+	return strings.TrimPrefix(raw, `"`), len(raw)
+}
+
+func appEscapedQuote(raw string, quoteIndex int) bool {
+	backslashes := 0
+	for i := quoteIndex - 1; i >= 0 && raw[i] == '\\'; i-- {
+		backslashes++
+	}
+	return backslashes%2 == 1
 }
 
 func (c *appProgramTranscriptCompactor) flushActivityDetail() []string {
