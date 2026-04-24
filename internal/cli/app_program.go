@@ -388,15 +388,6 @@ func (m *appProgramModel) syncComposerView() {
 	m.resize()
 }
 
-func (m *appProgramModel) appendTranscript(text string) {
-	compacted := m.compactor.compact(text)
-	if compacted == "" {
-		return
-	}
-	m.queuePrints(m.transcript.append(compacted))
-	m.resize()
-}
-
 func (m *appProgramModel) appendEvent(event memaxagent.Event) {
 	switch event.Kind {
 	case memaxagent.EventSessionStarted:
