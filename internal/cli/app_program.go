@@ -104,17 +104,17 @@ type appProgramExternalStatusMsg struct {
 type appProgramTickMsg time.Time
 
 type appProgramModel struct {
-	ctx        context.Context
-	opts       options
-	runPrompt  interactivePromptRunner
-	runEvents  interactiveEventPromptRunner
-	program    *tea.Program
-	history    persistentPromptHistory
-	composer   interactiveComposer
-	input      textarea.Model
-	help       help.Model
-	keys       appProgramKeyMap
-	transcript appTranscriptTail
+	ctx       context.Context
+	opts      options
+	runPrompt interactivePromptRunner
+	runEvents interactiveEventPromptRunner
+	program   *tea.Program
+	history   persistentPromptHistory
+	composer  interactiveComposer
+	input     textarea.Model
+	help      help.Model
+	keys      appProgramKeyMap
+	appTranscriptFormatter
 	width      int
 	height     int
 	sessionID  string
@@ -123,8 +123,6 @@ type appProgramModel struct {
 	running    bool
 	showHelp   bool
 	firstErr   error
-	compactor  appProgramTranscriptCompactor
-	pending    []string
 	spinner    int
 	tickArmed  bool
 }
@@ -405,175 +403,9 @@ func (m *appProgramModel) appendEvent(event memaxagent.Event) {
 		if event.SessionID != "" {
 			m.sessionID = event.SessionID
 		}
-	case memaxagent.EventAssistant:
-		if event.Message != nil {
-			m.appendAssistantText(event.Message.PlainText())
-		}
-	case memaxagent.EventToolUse:
-		m.appendToolUse(event.ToolUse)
-	case memaxagent.EventToolResult:
-		m.appendToolResult(event.ToolResult)
-	case memaxagent.EventWorkspaceCheckpoint:
-		if event.Workspace != nil {
-			m.appendActivityLine(appProgramDimStyle.Render("~ checkpoint " + event.Workspace.CheckpointID))
-		}
-	case memaxagent.EventWorkspacePatch:
-		if event.Workspace != nil {
-			m.appendActivityLine(appProgramDimStyle.Render("~ patch " + workspaceSummary(event.Workspace)))
-		}
-	case memaxagent.EventWorkspaceDiff:
-		if event.Workspace != nil {
-			m.appendActivityLine(appProgramDimStyle.Render("~ diff " + workspaceSummary(event.Workspace)))
-		}
-	case memaxagent.EventWorkspaceRestore:
-		if event.Workspace != nil {
-			m.appendActivityLine(appProgramDimStyle.Render("~ restore " + event.Workspace.CheckpointID))
-		}
-	case memaxagent.EventCommandStarted, memaxagent.EventCommandFinished, memaxagent.EventCommandOutput,
-		memaxagent.EventCommandInput, memaxagent.EventCommandResized, memaxagent.EventCommandStopped:
-		m.appendCommandEvent(event)
-	case memaxagent.EventVerification:
-		if event.Verification != nil {
-			line := fmt.Sprintf("check %s passed=%t", event.Verification.Name, event.Verification.Passed)
-			if event.Verification.Passed {
-				m.appendActivityLine(appProgramSuccessStyle.Render("✓ " + line))
-			} else {
-				m.appendActivityLine(appProgramErrorStyle.Render("! " + line))
-			}
-		}
-	case memaxagent.EventApprovalRequested:
-		m.appendApprovalEvent("requested", event.Approval)
-	case memaxagent.EventApprovalGranted:
-		m.appendApprovalEvent("granted", event.Approval)
-	case memaxagent.EventApprovalDenied:
-		m.appendApprovalEvent("denied", event.Approval)
-	case memaxagent.EventApprovalConsumed:
-		m.appendApprovalEvent("consumed", event.Approval)
-	case memaxagent.EventError:
-		if event.Err != nil {
-			m.appendLocalTranscriptLine("error", "error: "+event.Err.Error())
-		}
-	case memaxagent.EventResult, memaxagent.EventUsage, memaxagent.EventToolUseStart, memaxagent.EventToolUseDelta:
-		// The interactive app renders assistant text, concrete tool execution,
-		// and final prompt status directly. Result/usage sections are status
-		// metadata here, not transcript rows.
+	default:
+		m.appTranscriptFormatter.appendEvent(event)
 	}
-}
-
-func (m *appProgramModel) appendAssistantText(text string) {
-	if text == "" {
-		return
-	}
-	m.queueCompactorFlush(m.compactor.startSection("assistant"))
-	m.appendTranscript(text)
-}
-
-func (m *appProgramModel) appendActivityLine(line string) {
-	if strings.TrimSpace(line) == "" {
-		return
-	}
-	m.flushTranscriptPartial()
-	m.queuePrints(m.transcript.appendStandaloneLine(line))
-	m.resize()
-}
-
-func (m *appProgramModel) appendToolUse(toolUse *model.ToolUse) {
-	if toolUse == nil {
-		return
-	}
-	m.appendActivityLine(appProgramToolStyle.Render("• " + appToolUseDisplay(toolUse)))
-}
-
-func (m *appProgramModel) appendToolResult(result *model.ToolResult) {
-	if result == nil {
-		return
-	}
-	name := appToolDisplayName(result.Name)
-	if result.IsError {
-		m.appendActivityLine(appProgramErrorStyle.Render("! " + name + " error"))
-		m.appendActivityDetail("error", appProgramErrorStyle, result.Content)
-		return
-	}
-	m.appendActivityLine(appProgramDimStyle.Render("  " + name + " ok"))
-	if appToolShowsResultTail(result.Name) {
-		m.appendActivityDetail("output", appProgramDimStyle, result.Content)
-	}
-}
-
-func (m *appProgramModel) appendCommandEvent(event memaxagent.Event) {
-	if event.Command == nil {
-		return
-	}
-	line, style := appCommandEventLine(event)
-	if line == "" {
-		return
-	}
-	m.appendActivityLine(style.Render(line))
-}
-
-func (m *appProgramModel) appendApprovalEvent(action string, approval *memaxagent.ApprovalEvent) {
-	line := approvalLine(action, approval)
-	if line == "" {
-		return
-	}
-	prefix := approvalTimelinePrefix(action)
-	style := appProgramSuccessStyle
-	if prefix == "?" {
-		style = appProgramAccentStyle
-	} else if prefix == "!" {
-		style = appProgramErrorStyle
-		prefix = "!"
-	} else {
-		prefix = "✓"
-	}
-	m.appendActivityLine(style.Render(prefix + " approval " + line))
-}
-
-func (m *appProgramModel) appendActivityDetail(label string, style lipgloss.Style, content string) {
-	detail := &appProgramActivityDetail{label: label, style: style}
-	for _, line := range strings.Split(strings.TrimSpace(content), "\n") {
-		detail.append(line)
-	}
-	for _, line := range detail.render() {
-		m.appendActivityLine(line)
-	}
-}
-
-func (m *appProgramModel) queueCompactorFlush(text string) {
-	if text == "" {
-		return
-	}
-	m.queuePrints(m.transcript.append(text))
-	m.resize()
-}
-
-func (m *appProgramModel) appendTranscriptLine(text string) {
-	if strings.TrimSpace(text) == "" {
-		return
-	}
-	m.appendTranscript(text + "\n")
-}
-
-func (m *appProgramModel) appendLocalTranscriptLine(kind, text string) {
-	kind = strings.TrimSpace(kind)
-	text = strings.TrimSpace(normalizeAppTranscriptText(text))
-	if kind == "" || text == "" {
-		return
-	}
-	m.queuePrints(m.transcript.appendStandaloneLine(compactAppProgramLocalLine(kind, text)))
-	m.resize()
-}
-
-func (m *appProgramModel) flushTranscriptPartial() {
-	m.queuePrints(m.transcript.append(m.compactor.flush()))
-	m.queuePrints(m.transcript.flushPartial())
-}
-
-func (m *appProgramModel) queuePrints(lines []string) {
-	if len(lines) == 0 {
-		return
-	}
-	m.pending = append(m.pending, lines...)
 }
 
 func (m *appProgramModel) flushPrints() tea.Cmd {
@@ -582,15 +414,6 @@ func (m *appProgramModel) flushPrints() tea.Cmd {
 		return nil
 	}
 	return tea.Println(strings.Join(lines, "\n"))
-}
-
-func (m *appProgramModel) drainPendingPrints() []string {
-	if len(m.pending) == 0 {
-		return nil
-	}
-	lines := append([]string(nil), m.pending...)
-	m.pending = nil
-	return lines
 }
 
 func (m *appProgramModel) withFlush(cmd tea.Cmd) tea.Cmd {

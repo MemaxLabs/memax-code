@@ -16,9 +16,8 @@ const (
 )
 
 type appRenderState struct {
-	transcriptTail appTranscriptTail
-	compactor      appProgramTranscriptCompactor
-	firstErr       error
+	formatter appTranscriptFormatter
+	firstErr  error
 }
 
 func (s *appRenderState) Render(w io.Writer, event memaxagent.Event) error {
@@ -28,14 +27,8 @@ func (s *appRenderState) Render(w io.Writer, event memaxagent.Event) error {
 }
 
 func (s *appRenderState) Finish(w io.Writer) error {
-	var model appProgramModel
-	model.transcript = s.transcriptTail
-	model.compactor = s.compactor
-	model.input = newAppProgramTextarea()
-	model.flushTranscriptPartial()
-	s.transcriptTail = model.transcript
-	s.compactor = model.compactor
-	writeAppRenderLines(w, model.drainPendingPrints())
+	s.formatter.flushTranscriptPartial()
+	writeAppRenderLines(w, s.formatter.drainPendingPrints())
 	return s.firstErr
 }
 
@@ -59,19 +52,14 @@ func (s *appRenderState) HandleKey(w io.Writer, key rawKey) error {
 
 func (s *appRenderState) renderEvent(event memaxagent.Event) ([]string, error) {
 	if event.Kind == memaxagent.EventSessionStarted && event.SessionID != "" {
-		return []string{appProgramDimStyle.Render("session " + event.SessionID)}, nil
+		s.formatter.appendLocalTranscriptLine("dim", "session "+event.SessionID)
+		return s.formatter.drainPendingPrints(), nil
 	}
-	var model appProgramModel
-	model.transcript = s.transcriptTail
-	model.compactor = s.compactor
-	model.input = newAppProgramTextarea()
-	model.appendEvent(event)
-	s.transcriptTail = model.transcript
-	s.compactor = model.compactor
+	s.formatter.appendEvent(event)
 	if event.Kind == memaxagent.EventError && event.Err != nil && s.firstErr == nil {
 		s.firstErr = event.Err
 	}
-	return model.drainPendingPrints(), event.Err
+	return s.formatter.drainPendingPrints(), event.Err
 }
 
 func normalizeAppTranscriptText(text string) string {
