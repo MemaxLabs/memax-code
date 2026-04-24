@@ -96,6 +96,9 @@ func (f *appTranscriptFormatter) appendAssistantText(text string) {
 	}
 	f.flushUnprintedCommandGroups()
 	f.lastActivityCommandKey = ""
+	if f.compactor.section != "assistant" {
+		f.appendTranscriptSpacer()
+	}
 	f.queueCompactorFlush(f.compactor.startSection("assistant"))
 	f.appendTranscript(text)
 }

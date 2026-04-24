@@ -1183,8 +1183,8 @@ func TestAppProgramViewUsesQuietIdleStatus(t *testing.T) {
 			break
 		}
 	}
-	if promptAt != 2 || rows[promptAt-1] != "" || rows[promptAt-2] != "" {
-		t.Fatalf("idle view should have exactly one margin row plus composer padding before prompt:\n%s", view)
+	if promptAt != 4 || rows[promptAt-1] != "" || rows[promptAt-2] != "" || rows[promptAt-3] != "" || rows[promptAt-4] != "" {
+		t.Fatalf("idle view should reserve status slot and composer margin before prompt:\n%s", view)
 	}
 }
 
@@ -1271,6 +1271,61 @@ func TestAppProgramToolCallsHaveSpacing(t *testing.T) {
 	}
 }
 
+func TestAppProgramAssistantAfterUserPromptHasSingleSpacer(t *testing.T) {
+	app := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	app.transcript = appTranscriptTail{}
+
+	app.appendLocalTranscriptLine("user", "› inspect the repo")
+	app.appendEvent(memaxagent.Event{Kind: memaxagent.EventAssistant, Message: &model.Message{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{
+			{Type: model.ContentText, Text: "I will inspect it.\n"},
+		},
+	}})
+
+	got := ansi.Strip(strings.Join(app.transcript.lines(maxAppTranscriptLines), "\n"))
+	want := strings.Join([]string{
+		" › inspect the repo ",
+		"",
+		"• I will inspect it.",
+	}, "\n")
+	if !strings.Contains(got, want) {
+		t.Fatalf("assistant after user prompt missing single spacer:\n%s", got)
+	}
+	if strings.Contains(got, " › inspect the repo \n\n\n• I will inspect it.") {
+		t.Fatalf("assistant after user prompt rendered double spacer:\n%s", got)
+	}
+}
+
+func TestAppProgramAssistantAfterToolCallHasSpacing(t *testing.T) {
+	app := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	app.transcript = appTranscriptTail{}
+
+	for _, event := range []memaxagent.Event{
+		{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{ID: "tool-1", Name: "read_file"}},
+		{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{ToolUseID: "tool-1", Name: "read_file", Content: "ok"}},
+		{Kind: memaxagent.EventAssistant, Message: &model.Message{
+			Role: model.RoleAssistant,
+			Content: []model.ContentBlock{
+				{Type: model.ContentText, Text: "Done reading.\n"},
+			},
+		}},
+	} {
+		app.appendEvent(event)
+	}
+
+	got := ansi.Strip(strings.Join(app.transcript.lines(maxAppTranscriptLines), "\n"))
+	want := strings.Join([]string{
+		"• read_file call",
+		"  └ ok",
+		"",
+		"• Done reading.",
+	}, "\n")
+	if !strings.Contains(got, want) {
+		t.Fatalf("assistant after tool call missing spacer:\n%s", got)
+	}
+}
+
 func TestAppProgramComposerContentWidthHandlesNarrowTerminal(t *testing.T) {
 	for _, width := range []int{0, 1, 2, 3, 14, 80} {
 		if got := appProgramComposerContentWidth(width); got < 1 {
@@ -1330,6 +1385,20 @@ func TestAppProgramViewShowsActivityOnlyWhileRunning(t *testing.T) {
 	}
 	if promptAt-statusAt != 3 || rows[promptAt-1] != "" || rows[promptAt-2] != "" {
 		t.Fatalf("running view should have exactly one margin row plus composer padding before prompt:\n%s", view)
+	}
+}
+
+func TestAppProgramViewKeepsBottomHeightStableWhenActivityHides(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.width = 100
+	model.running = true
+	runningRows := strippedViewRows(ansi.Strip(model.View()))
+	model.running = false
+	model.statusLine = "idle"
+	idleRows := strippedViewRows(ansi.Strip(model.View()))
+
+	if len(idleRows) != len(runningRows) {
+		t.Fatalf("bottom view height changed when activity hid: idle=%d running=%d\nidle:\n%s\nrunning:\n%s", len(idleRows), len(runningRows), strings.Join(idleRows, "\n"), strings.Join(runningRows, "\n"))
 	}
 }
 

@@ -451,10 +451,8 @@ func (m *appProgramModel) View() string {
 	}
 
 	rows := make([]string, 0, 4)
-	if status := m.activityStatusView(); status != "" {
-		rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
-		rows = append(rows, status)
-	}
+	rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
+	rows = append(rows, m.activityStatusView())
 	rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 	rows = append(rows, m.composerView(width))
 	rows = append(rows, m.bottomStatusView())
