@@ -5,6 +5,37 @@ import (
 	"testing"
 )
 
+func TestCompactAppProgramTranscriptTextHidesStructuredSectionMarkers(t *testing.T) {
+	got := compactAppProgramTranscriptText(strings.Join([]string{
+		"[assistant]",
+		"working on it",
+		"[activity]",
+		"> tool run_command call",
+		"< tool run_command ok",
+		"[result]",
+		"done",
+	}, "\n"))
+
+	for _, want := range []string{
+		"Assistant",
+		"working on it",
+		"Activity",
+		"tool run_command call",
+		"tool run_command ok",
+		"Result",
+		"done",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("compact transcript missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"[assistant]", "[activity]", "[result]"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("compact transcript leaked %q:\n%s", unwanted, got)
+		}
+	}
+}
+
 func TestAppShellFrameRendersDeterministicPanels(t *testing.T) {
 	activity := activitySnapshot{
 		Phase:      "running",

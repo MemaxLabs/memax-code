@@ -1326,7 +1326,6 @@ func TestRunResumeWithoutPromptStartsInteractiveShellOnTerminalIO(t *testing.T) 
 	}
 	out := output.String()
 	for _, want := range []string{
-		"Conversation",
 		sess.ID,
 		"session: " + sess.ID,
 		"bye",
@@ -1388,9 +1387,9 @@ func TestRunWithoutPromptStartsAppShellOnTerminalIO(t *testing.T) {
 	}
 	out := output.String()
 	for _, want := range []string{
-		"Conversation",
-		"Memax Code interactive shell",
-		"Session none",
+		"Memax Code",
+		"Welcome. Type a task or /help.",
+		"session none",
 		"bye",
 	} {
 		if !strings.Contains(out, want) {
@@ -1734,10 +1733,10 @@ func TestRunInteractiveAppUsesSingleOutputSurface(t *testing.T) {
 
 	out := output.String()
 	for _, want := range []string{
-		"Conversation",
+		"Memax Code",
 		"none",
-		"Session none",
-		"Composer draft: inactive",
+		"session none",
+		"composer draft: inactive",
 		"/quit              exit",
 		"bye",
 	} {
@@ -1812,11 +1811,11 @@ func TestRunInteractiveAppCapturesPromptRunTranscript(t *testing.T) {
 
 	out := output.String()
 	for _, want := range []string{
-		"Conversation",
+		"Memax Code",
 		"00000000-0000-7000-8000-000000000123",
-		"[assistant]",
+		"Assistant",
 		"working on it",
-		"[result]",
+		"Result",
 		"done",
 		"bye",
 	} {

@@ -18,17 +18,18 @@ import (
 
 const (
 	appProgramMinComposer = 3
+	appProgramMaxBody     = 10
 )
 
 var (
-	appProgramBrandStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
-	appProgramTitleStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
-	appProgramMutedStyle      = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("244"))
-	appProgramErrorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	appProgramAccentStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
-	appProgramSidebarKeyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("249")).Bold(true)
-	appProgramRuleStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-	appProgramComposerStyle   = lipgloss.NewStyle().Padding(0, 1)
+	appProgramBrandStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
+	appProgramTitleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	appProgramMutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	appProgramDimStyle      = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("240"))
+	appProgramErrorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	appProgramAccentStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
+	appProgramSuccessStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
+	appProgramComposerStyle = lipgloss.NewStyle().Padding(0, 1)
 )
 
 type appProgramKeyMap struct {
@@ -135,6 +136,8 @@ func newAppProgramModel(ctx context.Context, opts options, runPrompt interactive
 	input.BlurredStyle.Base = lipgloss.NewStyle()
 	input.FocusedStyle.Placeholder = appProgramMutedStyle
 	input.FocusedStyle.Prompt = appProgramAccentStyle
+	input.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	input.BlurredStyle.CursorLine = lipgloss.NewStyle()
 	input.SetPromptFunc(2, func(lineIdx int) string {
 		if lineIdx == 0 {
 			return "› "
@@ -162,8 +165,7 @@ func newAppProgramModel(ctx context.Context, opts options, runPrompt interactive
 		keys:       appProgramKeys,
 		statusLine: "idle",
 	}
-	model.appendTranscriptLine("Memax Code interactive shell")
-	model.appendTranscriptLine("Type /help for commands, /quit to exit.")
+	model.appendTranscriptLine("Welcome. Type a task or /help.")
 	if opts.ResumeSessionID != "" {
 		model.sessionID = opts.ResumeSessionID
 		model.appendTranscriptLine("resumed session: " + opts.ResumeSessionID)
@@ -325,6 +327,9 @@ func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
 func (m *appProgramModel) finishPrompt(msg appProgramPromptDoneMsg) {
 	m.running = false
 	if strings.TrimSpace(msg.sessionID) != "" {
+		if m.sessionID != msg.sessionID {
+			m.appendTranscriptLine("session: " + msg.sessionID)
+		}
 		m.sessionID = msg.sessionID
 	}
 	if msg.err != nil {
@@ -364,7 +369,7 @@ func (m *appProgramModel) appendTranscript(text string) {
 		return
 	}
 	atBottom := m.viewport.AtBottom()
-	m.transcript.append(normalizeAppTranscriptText(text))
+	m.transcript.append(compactAppProgramTranscriptText(text))
 	m.refreshViewport(atBottom)
 }
 
@@ -396,7 +401,7 @@ func (m *appProgramModel) resize() {
 	if m.showHelp {
 		composerHeight = max(composerHeight, 5)
 	}
-	bodyHeight := max(8, height-composerHeight-7)
+	bodyHeight := min(appProgramMaxBody, max(8, height-composerHeight-6))
 	m.viewport.Width = width
 	m.viewport.Height = bodyHeight
 	if m.viewport.Width < 1 {
@@ -416,45 +421,59 @@ func (m *appProgramModel) View() string {
 		width = defaultAppShellWidth
 	}
 
-	header := appProgramBrandStyle.Render("Memax Code") + appProgramMutedStyle.Render("  ") + m.headerStatus()
+	header := appProgramBrandStyle.Render("Memax Code") + appProgramDimStyle.Render("  ") + m.headerStatus()
 	body := m.bodyView(width)
 	status := m.statusView()
 	composer := m.composerView(width)
-	footer := appProgramMutedStyle.Render(m.help.View(m.keys))
-	return lipgloss.JoinVertical(lipgloss.Left, header, appProgramRule(width), body, appProgramRule(width), status, composer, appProgramRule(width), footer)
+	footer := appProgramDimStyle.Render(m.help.View(m.keys))
+	return lipgloss.JoinVertical(lipgloss.Left, header, body, status, composer, footer)
 }
 
 func (m *appProgramModel) headerStatus() string {
-	parts := []string{m.statusLine}
+	parts := []string{m.phaseLabel()}
 	if m.sessionID != "" {
-		parts = append(parts, "session="+m.sessionID)
+		parts = append(parts, "session "+shortSessionID(m.sessionID))
 	}
 	if m.opts.Model != "" {
-		parts = append(parts, "model="+m.opts.Model)
+		parts = append(parts, m.opts.Model)
+	}
+	if m.opts.Effort != "" && m.opts.Effort != "auto" {
+		parts = append(parts, "effort "+m.opts.Effort)
 	}
 	if base := filepath.Base(m.opts.CWD); base != "" && base != "." && base != string(filepath.Separator) {
-		parts = append(parts, "dir="+base)
+		parts = append(parts, base)
 	}
-	return strings.Join(parts, " | ")
+	return appProgramMutedStyle.Render(strings.Join(parts, appProgramDimStyle.Render("  ·  ")))
+}
+
+func (m *appProgramModel) phaseLabel() string {
+	if m.lastError != "" {
+		return appProgramErrorStyle.Render("error")
+	}
+	if m.running {
+		return appProgramAccentStyle.Render("working")
+	}
+	return appProgramSuccessStyle.Render(m.statusLine)
 }
 
 func (m *appProgramModel) bodyView(width int) string {
 	return lipgloss.NewStyle().Width(width).Render(
-		appProgramTitleStyle.Render("Conversation") + "\n" +
-			appProgramMutedStyle.Render(m.transcriptStatusLine()) + "\n" +
-			m.viewport.View())
+		appProgramDimStyle.Render(appProgramRuleText(width)) + "\n" +
+			appProgramDimStyle.Render(m.transcriptStatusLine()) + "\n" +
+			m.viewport.View() + "\n" +
+			appProgramDimStyle.Render(appProgramRuleText(width)))
 }
 
 func (m *appProgramModel) statusView() string {
 	parts := []string{
-		appProgramSidebarKeyStyle.Render("Session") + " " + nonEmptyOr(m.sessionID, "none"),
-		appProgramSidebarKeyStyle.Render("Workspace") + " " + filepath.Base(m.opts.CWD),
-		appProgramSidebarKeyStyle.Render("Composer") + " " + m.composer.statusLine(),
+		appProgramTitleStyle.Render("session") + " " + nonEmptyOr(shortSessionID(m.sessionID), "none"),
+		appProgramTitleStyle.Render("workspace") + " " + filepath.Base(m.opts.CWD),
+		appProgramTitleStyle.Render("composer") + " " + m.composer.statusLine(),
 	}
 	if m.lastError != "" {
-		parts = append(parts, appProgramErrorStyle.Render("Error "+m.lastError))
+		parts = append(parts, appProgramErrorStyle.Render("error "+m.lastError))
 	}
-	lines := []string{strings.Join(parts, appProgramMutedStyle.Render("  •  "))}
+	lines := []string{strings.Join(parts, appProgramDimStyle.Render("  ·  "))}
 	if m.showHelp {
 		lines = append(lines, appProgramMutedStyle.Render("/help /status /session /pick /show /sessions /resume /new /draft /submit /cancel /quit"))
 	}
@@ -468,7 +487,7 @@ func (m *appProgramModel) composerView(width int) string {
 	}
 	head := appProgramTitleStyle.Render(title)
 	if m.composer.draftActive {
-		head += appProgramMutedStyle.Render("  draft mode")
+		head += appProgramDimStyle.Render("  draft mode")
 	}
 	return appProgramComposerStyle.Width(width).Render(head + "\n" + m.input.View())
 }
@@ -482,6 +501,78 @@ func (m *appProgramModel) transcriptStatusLine() string {
 		return "live tail · " + strconv.Itoa(len(lines)) + " lines"
 	}
 	return "scrollback · " + strconv.Itoa(len(lines)) + " lines"
+}
+
+func compactAppProgramTranscriptText(text string) string {
+	text = normalizeAppTranscriptText(text)
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, compactAppProgramTranscriptLine(line))
+	}
+	return strings.Join(out, "\n")
+}
+
+func compactAppProgramTranscriptLine(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return line
+	}
+	switch trimmed {
+	case "[assistant]":
+		return "Assistant"
+	case "[activity]":
+		return "Activity"
+	case "[result]":
+		return "Result"
+	case "[session]":
+		return "Session"
+	case "[usage]":
+		return "Usage"
+	case "[status]":
+		return "Status"
+	case "[error]":
+		return "Error"
+	}
+	if strings.HasPrefix(trimmed, "memax> ") {
+		return "› " + strings.TrimSpace(strings.TrimPrefix(trimmed, "memax> "))
+	}
+	if strings.HasPrefix(trimmed, "id: ") {
+		return "session " + strings.TrimSpace(strings.TrimPrefix(trimmed, "id: "))
+	}
+	if strings.HasPrefix(trimmed, "> tool ") {
+		return "• " + strings.TrimSpace(strings.TrimPrefix(trimmed, "> "))
+	}
+	if strings.HasPrefix(trimmed, "< tool ") {
+		return "  " + strings.TrimSpace(strings.TrimPrefix(trimmed, "< "))
+	}
+	if strings.HasPrefix(trimmed, "! tool ") {
+		return "! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))
+	}
+	if strings.HasPrefix(trimmed, "$ command ") {
+		return "• " + strings.TrimSpace(trimmed)
+	}
+	if strings.HasPrefix(trimmed, "+ command ") {
+		return "  " + strings.TrimSpace(trimmed)
+	}
+	if strings.HasPrefix(trimmed, "! command ") {
+		return "! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))
+	}
+	if strings.HasPrefix(trimmed, "input=") || strings.HasPrefix(trimmed, "phase:") {
+		return appProgramDimStyle.Render(trimmed)
+	}
+	return line
+}
+
+func shortSessionID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 func nonEmptyOr(value, fallback string) string {
@@ -524,9 +615,9 @@ func runInteractiveApp(ctx context.Context, stdin io.Reader, stdout io.Writer, o
 	return nil
 }
 
-func appProgramRule(width int) string {
+func appProgramRuleText(width int) string {
 	if width <= 0 {
 		width = defaultAppShellWidth
 	}
-	return appProgramRuleStyle.Render(strings.Repeat("─", max(8, width)))
+	return strings.Repeat("─", max(8, width))
 }
