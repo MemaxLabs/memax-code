@@ -27,6 +27,7 @@ func (s *appRenderState) Render(w io.Writer, event memaxagent.Event) error {
 }
 
 func (s *appRenderState) Finish(w io.Writer) error {
+	s.formatter.flushPendingCommandGroups()
 	s.formatter.flushTranscriptPartial()
 	writeAppRenderLines(w, s.formatter.drainPendingPrints())
 	return s.firstErr

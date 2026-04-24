@@ -206,6 +206,7 @@ func TestAppRenderEventsPrintInlineTranscript(t *testing.T) {
 		Message: &model.Message{Content: []model.ContentBlock{{Type: model.ContentText, Text: "I will inspect the failure."}}},
 	}
 	events <- memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:    "tool-start-1",
 		Name:  "start_command",
 		Input: []byte(`{"command":"npm test -- --watch"}`),
 	}}
@@ -213,6 +214,20 @@ func TestAppRenderEventsPrintInlineTranscript(t *testing.T) {
 		CommandID: "cmd-1",
 		Command:   "npm test -- --watch",
 		PID:       123,
+	}}
+	events <- memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		ToolUseID: "tool-start-1",
+		Name:      "start_command",
+		Content:   "ok",
+		Metadata: map[string]any{
+			model.MetadataCommandOperation: "start",
+			model.MetadataCommandString:    "npm test -- --watch",
+			model.MetadataCommandSessionID: "cmd-1",
+		},
+	}}
+	events <- memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		ExitCode:  0,
 	}}
 	events <- memaxagent.Event{Kind: memaxagent.EventVerification, Verification: &memaxagent.VerificationEvent{
 		Name:   "npm test",
@@ -230,12 +245,15 @@ func TestAppRenderEventsPrintInlineTranscript(t *testing.T) {
 		"session 00000000-0000-7000-8000-000000000001",
 		"I will inspect the failure.",
 		"• Bash(npm test -- --watch)",
-		"• Bash(npm test -- --watch) started id=cmd-1 pid=123",
+		"└ done id=cmd-1 exit=0",
 		"✓ check npm test passed=true",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("app output missing %q:\n%s", want, got)
 		}
+	}
+	if count := strings.Count(got, "• Bash(npm test -- --watch)"); count != 1 {
+		t.Fatalf("app output command header count = %d, want 1:\n%s", count, got)
 	}
 	for _, unwanted := range []string{"[active]", "[transcript]", "Memax Code | phase=", "\x1b[H\x1b[2J"} {
 		if strings.Contains(got, unwanted) {

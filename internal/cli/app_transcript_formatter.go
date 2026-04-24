@@ -10,9 +10,19 @@ import (
 )
 
 type appTranscriptFormatter struct {
-	transcript appTranscriptTail
-	compactor  appProgramTranscriptCompactor
-	pending    []string
+	transcript             appTranscriptTail
+	compactor              appProgramTranscriptCompactor
+	pending                []string
+	pendingToolsByID       map[string]*model.ToolUse
+	pendingToolsByName     map[string][]*model.ToolUse
+	pendingCommands        map[string]*appProgramCommandGroup
+	pendingCommandOrder    []string
+	pendingCommandFallback map[string][]string
+	flushedCommandKeys     map[string]bool
+	renderedCommandToolIDs map[string]bool
+	lastActivityCommandKey string
+	flushedAnonymous       bool
+	nextCommandGroup       int
 }
 
 func (f *appTranscriptFormatter) appendTranscript(text string) {
@@ -84,6 +94,8 @@ func (f *appTranscriptFormatter) appendAssistantText(text string) {
 	if text == "" {
 		return
 	}
+	f.flushUnprintedCommandGroups()
+	f.lastActivityCommandKey = ""
 	f.queueCompactorFlush(f.compactor.startSection("assistant"))
 	f.appendTranscript(text)
 }
@@ -92,8 +104,10 @@ func (f *appTranscriptFormatter) appendActivityLine(line string) {
 	if strings.TrimSpace(line) == "" {
 		return
 	}
+	f.flushUnprintedCommandGroups()
 	f.flushTranscriptPartial()
 	f.compactor.resetSection()
+	f.lastActivityCommandKey = ""
 	f.queuePrints(f.transcript.appendStandaloneLine(line))
 }
 
@@ -101,37 +115,63 @@ func (f *appTranscriptFormatter) appendToolUse(toolUse *model.ToolUse) {
 	if toolUse == nil {
 		return
 	}
-	f.appendActivityLine(appProgramToolStyle.Render("• " + appToolUseDisplay(toolUse)))
+	f.storePendingTool(toolUse)
 }
 
 func (f *appTranscriptFormatter) appendToolResult(result *model.ToolResult) {
 	if result == nil {
 		return
 	}
+	f.printUnprintedCommandGroups()
+	toolUse := f.takePendingTool(result.ToolUseID, result.Name)
 	name := appToolDisplayName(result.Name)
 	if result.IsError {
-		f.appendActivityLine(appProgramErrorStyle.Render("! " + name + " error"))
-		f.appendActivityDetail("error", appProgramErrorStyle, result.Content)
+		lines := make([]string, 0, 2)
+		if toolUse == nil {
+			lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplayOrName(nil, name)))
+		} else {
+			lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplay(toolUse)))
+		}
+		lines = append(lines, appProgramErrorStyle.Render("  └ error"))
+		lines = append(lines, appActivityTailLines("error", appProgramErrorStyle, result.Content)...)
+		f.appendActivityGroup(lines...)
 		return
 	}
 	if appToolResultIsRedundant(result.Name) {
+		if !appToolResultHasCommandLifecycleMetadata(result) {
+			if f.consumeRenderedCommandToolUse(toolUse, name) {
+				return
+			}
+			lines := make([]string, 0, 1)
+			if toolUse == nil {
+				lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplayOrName(nil, name)))
+			} else {
+				lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplay(toolUse)))
+			}
+			f.appendActivityGroup(lines...)
+		} else {
+			f.consumeRenderedCommandToolUse(toolUse, name)
+		}
 		return
 	}
-	f.appendActivityLine(appProgramDimStyle.Render("  " + name + " ok"))
-	if appToolShowsResultTail(result.Name) {
-		f.appendActivityDetail("output", appProgramDimStyle, result.Content)
+	lines := make([]string, 0, 2)
+	if toolUse == nil {
+		lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplayOrName(nil, name)))
+	} else {
+		lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplay(toolUse)))
 	}
+	lines = append(lines, appProgramDimStyle.Render("  └ ok"))
+	if appToolShowsResultTail(result.Name) {
+		lines = append(lines, appActivityTailLines("output", appProgramDimStyle, result.Content)...)
+	}
+	f.appendActivityGroup(lines...)
 }
 
 func (f *appTranscriptFormatter) appendCommandEvent(event memaxagent.Event) {
 	if event.Command == nil {
 		return
 	}
-	line, style := appCommandEventLine(event)
-	if line == "" {
-		return
-	}
-	f.appendActivityLine(style.Render(line))
+	f.appendGroupedCommandEvent(event)
 }
 
 func (f *appTranscriptFormatter) appendApprovalEvent(action string, approval *memaxagent.ApprovalEvent) {
@@ -153,13 +193,7 @@ func (f *appTranscriptFormatter) appendApprovalEvent(action string, approval *me
 }
 
 func (f *appTranscriptFormatter) appendActivityDetail(label string, style lipgloss.Style, content string) {
-	detail := &appProgramActivityDetail{label: label, style: style}
-	for _, line := range strings.Split(strings.TrimSpace(content), "\n") {
-		detail.append(line)
-	}
-	for _, line := range detail.render() {
-		f.appendActivityLine(line)
-	}
+	f.appendActivityGroup(appActivityTailLines(label, style, content)...)
 }
 
 func (f *appTranscriptFormatter) queueCompactorFlush(text string) {
@@ -175,9 +209,539 @@ func (f *appTranscriptFormatter) appendLocalTranscriptLine(kind, text string) {
 	if kind == "" || text == "" {
 		return
 	}
+	f.flushUnprintedCommandGroups()
 	f.queuePrints(f.transcript.append(f.compactor.flush()))
 	f.compactor.resetSection()
+	f.lastActivityCommandKey = ""
 	f.queuePrints(f.transcript.appendStandaloneLine(compactAppProgramLocalLine(kind, text)))
+}
+
+func (f *appTranscriptFormatter) appendActivityGroup(lines ...string) {
+	f.flushTranscriptPartial()
+	f.compactor.resetSection()
+	f.lastActivityCommandKey = ""
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		f.queuePrints(f.transcript.appendStandaloneLine(line))
+	}
+}
+
+func (f *appTranscriptFormatter) appendCommandActivityGroup(key string, lines ...string) {
+	f.flushTranscriptPartial()
+	f.compactor.resetSection()
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		f.queuePrints(f.transcript.appendStandaloneLine(line))
+	}
+	f.lastActivityCommandKey = key
+}
+
+func (f *appTranscriptFormatter) storePendingTool(toolUse *model.ToolUse) {
+	if toolUse == nil {
+		return
+	}
+	if f.pendingToolsByID == nil {
+		f.pendingToolsByID = make(map[string]*model.ToolUse)
+	}
+	if f.pendingToolsByName == nil {
+		f.pendingToolsByName = make(map[string][]*model.ToolUse)
+	}
+	if id := strings.TrimSpace(toolUse.ID); id != "" {
+		if existing := f.pendingToolsByID[id]; existing != nil {
+			f.removePendingTool(existing)
+		}
+		f.pendingToolsByID[id] = toolUse
+	}
+	name := strings.TrimSpace(toolUse.Name)
+	if name != "" {
+		f.pendingToolsByName[name] = append(f.pendingToolsByName[name], toolUse)
+	}
+}
+
+func (f *appTranscriptFormatter) takePendingTool(id, name string) *model.ToolUse {
+	if id = strings.TrimSpace(id); id != "" && len(f.pendingToolsByID) > 0 {
+		if toolUse := f.pendingToolsByID[id]; toolUse != nil {
+			f.removePendingTool(toolUse)
+			return toolUse
+		}
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || len(f.pendingToolsByName) == 0 {
+		return nil
+	}
+	queue := f.pendingToolsByName[name]
+	for len(queue) > 0 {
+		toolUse := queue[0]
+		queue = queue[1:]
+		f.pendingToolsByName[name] = queue
+		if toolUse != nil {
+			if id := strings.TrimSpace(toolUse.ID); id != "" {
+				delete(f.pendingToolsByID, id)
+			}
+			if len(queue) == 0 {
+				delete(f.pendingToolsByName, name)
+			}
+			return toolUse
+		}
+	}
+	delete(f.pendingToolsByName, name)
+	return nil
+}
+
+func (f *appTranscriptFormatter) removePendingTool(target *model.ToolUse) {
+	if target == nil {
+		return
+	}
+	if id := strings.TrimSpace(target.ID); id != "" {
+		delete(f.pendingToolsByID, id)
+	}
+	name := strings.TrimSpace(target.Name)
+	if name == "" || len(f.pendingToolsByName) == 0 {
+		return
+	}
+	queue := f.pendingToolsByName[name]
+	for i, toolUse := range queue {
+		if toolUse == target {
+			queue = append(queue[:i], queue[i+1:]...)
+			break
+		}
+	}
+	if len(queue) == 0 {
+		delete(f.pendingToolsByName, name)
+	} else {
+		f.pendingToolsByName[name] = queue
+	}
+}
+
+func appToolUseDisplayOrName(toolUse *model.ToolUse, fallback string) string {
+	if toolUse != nil {
+		return appToolUseDisplay(toolUse)
+	}
+	if strings.TrimSpace(fallback) == "" {
+		return "tool"
+	}
+	return fallback + " call"
+}
+
+func appToolResultHasCommandLifecycleMetadata(result *model.ToolResult) bool {
+	if result == nil || len(result.Metadata) == 0 {
+		return false
+	}
+	for _, key := range []string{
+		model.MetadataCommandOperation,
+		model.MetadataCommandString,
+		model.MetadataCommandSessionID,
+		model.MetadataCommandStatus,
+	} {
+		if _, ok := result.Metadata[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *appTranscriptFormatter) appendGroupedCommandEvent(event memaxagent.Event) {
+	command := event.Command
+	if command == nil {
+		return
+	}
+	switch event.Kind {
+	case memaxagent.EventCommandStarted:
+		key := f.startCommandGroupKey(command)
+		f.ensurePendingCommands()
+		group := f.pendingCommandGroup(key, command)
+		if strings.TrimSpace(command.CommandID) != "" && !group.printed {
+			f.appendCommandActivityGroup(key, group.renderHeader()...)
+			f.markCommandGroupRendered(group)
+			group.printed = true
+		}
+		return
+	case memaxagent.EventCommandOutput, memaxagent.EventCommandInput, memaxagent.EventCommandResized:
+		key := f.commandGroupKey(command)
+		if f.commandGroupWasFlushed(key) {
+			return
+		}
+		group := f.pendingCommandGroup(key, command)
+		if line := appCommandAuxLine(appCommandAuxAction(event.Kind), command); line != "" {
+			child := appProgramDimStyle.Render(appActivityChildLine(strings.TrimSpace(line)))
+			if group.printed {
+				f.appendPrintedCommandChild(key, group, child)
+			} else {
+				group.children = append(group.children, child)
+			}
+		}
+		return
+	case memaxagent.EventCommandFinished, memaxagent.EventCommandStopped:
+		key := f.commandGroupKey(command)
+		if f.commandGroupWasFlushed(key) {
+			return
+		}
+		group := f.pendingCommandGroup(key, command)
+		line, style := appCommandTerminalChildLine(event)
+		if line != "" {
+			child := style.Render(appActivityChildLine(line))
+			if group.printed {
+				f.appendPrintedCommandChild(key, group, child)
+			} else {
+				group.children = append(group.children, child)
+			}
+		}
+		if !group.printed {
+			f.appendCommandActivityGroup(key, group.render()...)
+			f.markCommandGroupRendered(group)
+		}
+		f.deletePendingCommandGroup(key)
+		f.finishCommandGroupKey(command, key)
+		f.markCommandGroupFlushed(key, group)
+	}
+}
+
+func (f *appTranscriptFormatter) ensurePendingCommands() {
+	if f.pendingCommands == nil {
+		f.pendingCommands = make(map[string]*appProgramCommandGroup)
+	}
+	if f.pendingCommandFallback == nil {
+		f.pendingCommandFallback = make(map[string][]string)
+	}
+}
+
+func (f *appTranscriptFormatter) pendingCommandGroup(key string, command *memaxagent.CommandEvent) *appProgramCommandGroup {
+	f.ensurePendingCommands()
+	group := f.pendingCommands[key]
+	if group == nil {
+		group = newAppProgramCommandGroup(command)
+		f.pendingCommands[key] = group
+		f.pendingCommandOrder = append(f.pendingCommandOrder, key)
+		return group
+	}
+	group.merge(command)
+	return group
+}
+
+type appProgramCommandGroup struct {
+	display     string
+	fallbackKey string
+	children    []string
+	printed     bool
+}
+
+func newAppProgramCommandGroup(command *memaxagent.CommandEvent) *appProgramCommandGroup {
+	group := &appProgramCommandGroup{}
+	group.merge(command)
+	return group
+}
+
+func (g *appProgramCommandGroup) merge(command *memaxagent.CommandEvent) {
+	if command == nil {
+		return
+	}
+	display := commandDisplay(memaxagent.Event{Command: command})
+	if display != "" {
+		g.display = display
+	}
+	if fallback := appCommandFallbackKey(command); fallback != "operation:" {
+		g.fallbackKey = fallback
+	}
+}
+
+func (g *appProgramCommandGroup) render() []string {
+	lines := g.renderHeader()
+	lines = append(lines, g.children...)
+	return lines
+}
+
+func (g *appProgramCommandGroup) renderHeader() []string {
+	display := g.display
+	if strings.TrimSpace(display) == "" {
+		return []string{appProgramToolStyle.Render("• Command")}
+	}
+	return []string{appProgramToolStyle.Render("• " + appCommandDisplay(display))}
+}
+
+func (g *appProgramCommandGroup) renderContinuationHeader() []string {
+	display := g.display
+	if strings.TrimSpace(display) == "" {
+		return []string{appProgramToolStyle.Render("• Command continued")}
+	}
+	return []string{appProgramToolStyle.Render("• " + appCommandDisplay(display) + " continued")}
+}
+
+func (f *appTranscriptFormatter) flushPendingCommandGroups() {
+	if len(f.pendingCommands) == 0 {
+		return
+	}
+	for _, key := range append([]string(nil), f.pendingCommandOrder...) {
+		group := f.pendingCommands[key]
+		if group == nil {
+			continue
+		}
+		if !group.printed {
+			f.appendCommandActivityGroup(key, group.render()...)
+			f.markCommandGroupRendered(group)
+		}
+		f.markCommandGroupFlushed(key, group)
+		f.deletePendingCommandGroup(key)
+	}
+	f.pendingCommandFallback = nil
+}
+
+func (f *appTranscriptFormatter) flushUnprintedCommandGroups() {
+	if len(f.pendingCommands) == 0 {
+		return
+	}
+	for _, key := range append([]string(nil), f.pendingCommandOrder...) {
+		group := f.pendingCommands[key]
+		if group == nil || group.printed {
+			continue
+		}
+		f.appendCommandActivityGroup(key, group.render()...)
+		f.markCommandGroupRendered(group)
+		f.markCommandGroupFlushed(key, group)
+		f.removeCommandFallbackKey(group.fallbackKey, key)
+		f.deletePendingCommandGroup(key)
+	}
+	if len(f.pendingCommands) == 0 {
+		f.pendingCommandFallback = nil
+	}
+}
+
+func (f *appTranscriptFormatter) printUnprintedCommandGroups() {
+	if len(f.pendingCommands) == 0 {
+		return
+	}
+	for _, key := range append([]string(nil), f.pendingCommandOrder...) {
+		group := f.pendingCommands[key]
+		if group == nil || group.printed {
+			continue
+		}
+		f.appendCommandActivityGroup(key, group.render()...)
+		f.markCommandGroupRendered(group)
+		group.printed = true
+	}
+}
+
+func (f *appTranscriptFormatter) appendPrintedCommandChild(key string, group *appProgramCommandGroup, child string) {
+	if strings.TrimSpace(child) == "" {
+		return
+	}
+	if group != nil && f.lastActivityCommandKey != key {
+		f.appendCommandActivityGroup(key, group.renderContinuationHeader()...)
+	}
+	f.appendCommandActivityGroup(key, child)
+}
+
+func (f *appTranscriptFormatter) markCommandGroupRendered(group *appProgramCommandGroup) {
+	if group == nil || strings.TrimSpace(group.display) == "" {
+		return
+	}
+	display := appCommandDisplay(group.display)
+	for id, toolUse := range f.pendingToolsByID {
+		if appToolUseDisplay(toolUse) != display {
+			continue
+		}
+		if f.renderedCommandToolIDs == nil {
+			f.renderedCommandToolIDs = make(map[string]bool)
+		}
+		f.renderedCommandToolIDs[id] = true
+	}
+}
+
+func (f *appTranscriptFormatter) consumeRenderedCommandToolUse(toolUse *model.ToolUse, fallbackName string) bool {
+	if toolUse == nil {
+		return false
+	}
+	id := strings.TrimSpace(toolUse.ID)
+	if id == "" || !f.renderedCommandToolIDs[id] {
+		return false
+	}
+	delete(f.renderedCommandToolIDs, id)
+	return true
+}
+
+func (f *appTranscriptFormatter) deletePendingCommandGroup(key string) {
+	delete(f.pendingCommands, key)
+	if len(f.pendingCommandOrder) == 0 {
+		return
+	}
+	next := f.pendingCommandOrder[:0]
+	for _, candidate := range f.pendingCommandOrder {
+		if candidate != key {
+			next = append(next, candidate)
+		}
+	}
+	f.pendingCommandOrder = next
+}
+
+func (f *appTranscriptFormatter) markCommandGroupFlushed(key string, group *appProgramCommandGroup) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return
+	}
+	if f.flushedCommandKeys == nil {
+		f.flushedCommandKeys = make(map[string]bool)
+	}
+	f.flushedCommandKeys[key] = true
+	if strings.HasPrefix(key, "anon:") {
+		f.flushedAnonymous = true
+	}
+	if group != nil && strings.TrimSpace(group.fallbackKey) != "" {
+		f.flushedCommandKeys[group.fallbackKey] = true
+	}
+}
+
+func (f *appTranscriptFormatter) commandGroupWasFlushed(key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+	if key == "operation:" && f.flushedAnonymous {
+		return true
+	}
+	return f.flushedCommandKeys[key]
+}
+
+func (f *appTranscriptFormatter) startCommandGroupKey(command *memaxagent.CommandEvent) string {
+	f.ensurePendingCommands()
+	if id := strings.TrimSpace(command.CommandID); id != "" {
+		return "id:" + id
+	}
+	f.nextCommandGroup++
+	key := fmt.Sprintf("anon:%d", f.nextCommandGroup)
+	fallback := appCommandFallbackKey(command)
+	f.pendingCommandFallback[fallback] = append(f.pendingCommandFallback[fallback], key)
+	return key
+}
+
+func (f *appTranscriptFormatter) commandGroupKey(command *memaxagent.CommandEvent) string {
+	if id := strings.TrimSpace(command.CommandID); id != "" {
+		return "id:" + id
+	}
+	// Without a command ID, simultaneous identical commands cannot be
+	// disambiguated. The fallback queue preserves serialized command pairs.
+	fallback := appCommandFallbackKey(command)
+	if len(f.pendingCommandFallback) > 0 {
+		if queue := f.pendingCommandFallback[fallback]; len(queue) > 0 {
+			return queue[0]
+		}
+	}
+	return fallback
+}
+
+func (f *appTranscriptFormatter) finishCommandGroupKey(command *memaxagent.CommandEvent, key string) {
+	if strings.TrimSpace(command.CommandID) != "" || len(f.pendingCommandFallback) == 0 {
+		return
+	}
+	f.removeCommandFallbackKey(appCommandFallbackKey(command), key)
+}
+
+func (f *appTranscriptFormatter) removeCommandFallbackKey(fallback, key string) {
+	if len(f.pendingCommandFallback) == 0 {
+		return
+	}
+	fallback = strings.TrimSpace(fallback)
+	if fallback == "" {
+		return
+	}
+	queue := f.pendingCommandFallback[fallback]
+	for i, candidate := range queue {
+		if candidate == key {
+			queue = append(queue[:i], queue[i+1:]...)
+			break
+		}
+	}
+	if len(queue) == 0 {
+		delete(f.pendingCommandFallback, fallback)
+	} else {
+		f.pendingCommandFallback[fallback] = queue
+	}
+}
+
+func appCommandFallbackKey(command *memaxagent.CommandEvent) string {
+	if command == nil {
+		return "command:"
+	}
+	if strings.TrimSpace(command.Command) != "" {
+		return "command:" + strings.TrimSpace(command.Command)
+	}
+	return "operation:" + strings.TrimSpace(command.Operation)
+}
+
+func appCommandAuxAction(kind memaxagent.EventKind) string {
+	switch kind {
+	case memaxagent.EventCommandOutput:
+		return "output"
+	case memaxagent.EventCommandInput:
+		return "input"
+	case memaxagent.EventCommandResized:
+		return "resize"
+	default:
+		return ""
+	}
+}
+
+func appCommandTerminalChildLine(event memaxagent.Event) (string, lipgloss.Style) {
+	command := event.Command
+	if command == nil {
+		return "", appProgramDimStyle
+	}
+	switch event.Kind {
+	case memaxagent.EventCommandFinished:
+		status := "done"
+		style := appProgramSuccessStyle
+		if command.ExitCode != 0 || command.TimedOut {
+			status = "failed"
+			style = appProgramErrorStyle
+		}
+		parts := []string{status}
+		if command.CommandID != "" {
+			parts = append(parts, "id="+command.CommandID)
+		}
+		parts = append(parts, fmt.Sprintf("exit=%d", command.ExitCode))
+		if command.TimedOut {
+			parts = append(parts, "timeout=true")
+		}
+		return strings.Join(parts, " "), style
+	case memaxagent.EventCommandStopped:
+		status := command.Status
+		if status == "" {
+			status = "stopped"
+		}
+		parts := []string{"stopped"}
+		if command.CommandID != "" {
+			parts = append(parts, "id="+command.CommandID)
+		}
+		parts = append(parts, "status="+status)
+		return strings.Join(parts, " "), appProgramErrorStyle
+	default:
+		return "", appProgramDimStyle
+	}
+}
+
+func appActivityTailLines(label string, style lipgloss.Style, content string) []string {
+	detail := &appProgramActivityDetail{label: label, style: style}
+	for _, line := range strings.Split(strings.TrimSpace(content), "\n") {
+		detail.append(line)
+	}
+	if len(detail.lines) == 0 {
+		return nil
+	}
+	if len(detail.lines) == 1 {
+		return []string{style.Render("  └ " + label + ": " + detail.lines[0])}
+	}
+	out := []string{style.Render("  └ " + label + " tail:")}
+	for _, line := range detail.lines {
+		out = append(out, style.Render("    "+line))
+	}
+	return out
+}
+
+func appActivityChildLine(line string) string {
+	line = strings.TrimSpace(line)
+	return "  └ " + line
 }
 
 func (f *appTranscriptFormatter) flushTranscriptPartial() {

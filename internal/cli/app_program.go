@@ -21,25 +21,27 @@ import (
 
 const (
 	appProgramMinComposer = 1
+	appProgramStatusInset = 2
 )
 
 var (
-	appProgramBrandStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
-	appProgramMutedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	appProgramDimStyle        = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("240"))
-	appProgramErrorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	appProgramAccentStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
-	appProgramSuccessStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
-	appProgramUserStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236")).Padding(0, 1)
-	appProgramToolStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
-	appProgramMarkdownStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	appProgramStrongStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
-	appProgramHeadingStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
-	appProgramCodeStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("188")).Background(lipgloss.Color("236")).Padding(0, 1)
-	appProgramInlineCodeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("188"))
-	appProgramQuoteStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Italic(true)
-	appProgramComposerStyle   = lipgloss.NewStyle().Background(lipgloss.Color("235")).Padding(1, 1)
-	appProgramStatusMetaStyle = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("242"))
+	appProgramComposerBackground = lipgloss.Color("235")
+	appProgramBrandStyle         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
+	appProgramMutedStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	appProgramDimStyle           = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("240"))
+	appProgramErrorStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	appProgramAccentStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
+	appProgramSuccessStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
+	appProgramUserStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236")).Padding(0, 1)
+	appProgramToolStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
+	appProgramMarkdownStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	appProgramStrongStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	appProgramHeadingStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
+	appProgramCodeStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("188")).Background(lipgloss.Color("236")).Padding(0, 1)
+	appProgramInlineCodeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("188"))
+	appProgramQuoteStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Italic(true)
+	appProgramComposerStyle      = lipgloss.NewStyle().Background(appProgramComposerBackground).Padding(1, 1)
+	appProgramStatusMetaStyle    = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("242"))
 )
 
 type appProgramTranscriptMsg struct {
@@ -120,12 +122,20 @@ func newAppProgramTextarea() textarea.Model {
 	input.Placeholder = "Ask Memax Code to inspect, change, or verify the repo"
 	input.ShowLineNumbers = false
 	input.SetHeight(appProgramMinComposer)
-	input.FocusedStyle.Base = lipgloss.NewStyle()
-	input.BlurredStyle.Base = lipgloss.NewStyle()
-	input.FocusedStyle.Placeholder = appProgramMutedStyle
-	input.FocusedStyle.Prompt = appProgramAccentStyle
-	input.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	input.BlurredStyle.CursorLine = lipgloss.NewStyle()
+	input.FocusedStyle.Base = lipgloss.NewStyle().Background(appProgramComposerBackground)
+	input.BlurredStyle.Base = lipgloss.NewStyle().Background(appProgramComposerBackground)
+	input.FocusedStyle.Placeholder = appProgramMutedStyle.Background(appProgramComposerBackground)
+	input.BlurredStyle.Placeholder = appProgramMutedStyle.Background(appProgramComposerBackground)
+	input.FocusedStyle.Prompt = appProgramAccentStyle.Background(appProgramComposerBackground)
+	input.BlurredStyle.Prompt = appProgramAccentStyle.Background(appProgramComposerBackground)
+	input.FocusedStyle.Text = appProgramMarkdownStyle.Background(appProgramComposerBackground)
+	input.BlurredStyle.Text = appProgramMarkdownStyle.Background(appProgramComposerBackground)
+	input.FocusedStyle.CursorLine = lipgloss.NewStyle().Background(appProgramComposerBackground)
+	input.BlurredStyle.CursorLine = lipgloss.NewStyle().Background(appProgramComposerBackground)
+	input.FocusedStyle.EndOfBuffer = lipgloss.NewStyle().Background(appProgramComposerBackground)
+	input.BlurredStyle.EndOfBuffer = lipgloss.NewStyle().Background(appProgramComposerBackground)
+	input.Cursor.Style = input.Cursor.Style.Background(appProgramComposerBackground)
+	input.Cursor.TextStyle = input.Cursor.TextStyle.Background(appProgramComposerBackground)
 	input.SetPromptFunc(2, func(lineIdx int) string {
 		if lineIdx == 0 {
 			return "› "
@@ -429,7 +439,7 @@ func (m *appProgramModel) resize() {
 		width = defaultAppShellWidth
 	}
 	composerHeight := max(appProgramMinComposer, min(8, strings.Count(m.input.Value(), "\n")+1))
-	m.input.SetWidth(max(12, width-2))
+	m.input.SetWidth(appProgramComposerContentWidth(width))
 	m.input.SetHeight(composerHeight)
 }
 
@@ -481,7 +491,7 @@ func (m *appProgramModel) bottomStatusView() string {
 	}
 	parts = append(parts, appProgramStatusPart("input", m.composer.statusLine()))
 	parts = append(parts, appProgramStatusMetaStyle.Render("F1 help"))
-	return strings.Join(parts, appProgramDimStyle.Render("  ·  "))
+	return lipgloss.NewStyle().PaddingLeft(appProgramStatusInset).Render(strings.Join(parts, appProgramDimStyle.Render("  ·  ")))
 }
 
 func appProgramStatusPart(label, value string) string {
@@ -506,7 +516,24 @@ func (m *appProgramModel) helpView() string {
 }
 
 func (m *appProgramModel) composerView(width int) string {
-	return appProgramComposerStyle.Width(width).Render(m.input.View())
+	contentWidth := appProgramComposerContentWidth(width)
+	lines := strings.Split(m.input.View(), "\n")
+	for i, line := range lines {
+		lines[i] = lipgloss.PlaceHorizontal(
+			contentWidth,
+			lipgloss.Left,
+			line,
+			lipgloss.WithWhitespaceBackground(appProgramComposerBackground),
+		)
+	}
+	return appProgramComposerStyle.Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func appProgramComposerContentWidth(width int) int {
+	if width <= 2 {
+		return 1
+	}
+	return width - 2
 }
 
 func compactAppProgramTranscriptText(text string) string {
@@ -1145,18 +1172,6 @@ func appFormatCommandLine(status, raw string) string {
 	return strings.Join(parts, " ")
 }
 
-func appCommandCompletionLine(prefix, status string, command *memaxagent.CommandEvent) string {
-	parts := []string{prefix + " " + status}
-	if command.CommandID != "" {
-		parts = append(parts, "id="+command.CommandID)
-	}
-	parts = append(parts, fmt.Sprintf("exit=%d", command.ExitCode))
-	if command.TimedOut {
-		parts = append(parts, "timeout=true")
-	}
-	return strings.Join(parts, " ")
-}
-
 func appCommandAuxLine(action string, command *memaxagent.CommandEvent) string {
 	idPart := ""
 	if command.CommandID != "" {
@@ -1169,56 +1184,8 @@ func appCommandAuxLine(action string, command *memaxagent.CommandEvent) string {
 		return fmt.Sprintf("  input%s bytes=%d", idPart, command.InputBytes)
 	case "resize":
 		return fmt.Sprintf("  resize%s cols=%d rows=%d", idPart, command.Cols, command.Rows)
-	case "stopped":
-		status := command.Status
-		if status == "" {
-			status = "stopped"
-		}
-		return fmt.Sprintf("! stopped%s status=%s", idPart, status)
 	default:
 		return ""
-	}
-}
-
-func appCommandEventLine(event memaxagent.Event) (string, lipgloss.Style) {
-	command := event.Command
-	if command == nil {
-		return "", appProgramDimStyle
-	}
-	switch event.Kind {
-	case memaxagent.EventCommandStarted:
-		display := commandDisplay(event)
-		if display == "" && command.CommandID != "" {
-			display = command.CommandID
-		}
-		parts := []string{"• " + appCommandDisplay(display), "started"}
-		if command.CommandID != "" {
-			parts = append(parts, "id="+command.CommandID)
-		}
-		if command.PID != 0 {
-			parts = append(parts, fmt.Sprintf("pid=%d", command.PID))
-		}
-		return strings.Join(parts, " "), appProgramToolStyle
-	case memaxagent.EventCommandFinished:
-		status := "done"
-		style := appProgramSuccessStyle
-		prefix := "✓"
-		if command.ExitCode != 0 || command.TimedOut {
-			status = "failed"
-			style = appProgramErrorStyle
-			prefix = "!"
-		}
-		return appCommandCompletionLine(prefix, status, command), style
-	case memaxagent.EventCommandOutput:
-		return appCommandAuxLine("output", command), appProgramDimStyle
-	case memaxagent.EventCommandInput:
-		return appCommandAuxLine("input", command), appProgramDimStyle
-	case memaxagent.EventCommandResized:
-		return appCommandAuxLine("resize", command), appProgramDimStyle
-	case memaxagent.EventCommandStopped:
-		return appCommandAuxLine("stopped", command), appProgramErrorStyle
-	default:
-		return "", appProgramDimStyle
 	}
 }
 
