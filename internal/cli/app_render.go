@@ -245,6 +245,8 @@ func (t *appTranscriptTail) append(text string) {
 }
 
 func (t *appTranscriptTail) appendStandaloneLine(line string) {
+	// Local rows are inserted at prompt/session boundaries, not mid-assistant
+	// stream. Flush first so local UI rows never glue onto streamed text.
 	t.flushPartial()
 	t.appendLine(line)
 }
@@ -296,6 +298,9 @@ func appTranscriptVisualLineCount(lines []string, width int) int {
 	if width < 1 {
 		width = 1
 	}
+	// Bubble's viewport scrolls logical lines, while the terminal wraps visual
+	// rows. Use display width here only to reserve enough vertical space for
+	// short transcripts before they reach the scrollable viewport path.
 	count := 0
 	for _, line := range lines {
 		lineWidth := ansi.StringWidth(line)
