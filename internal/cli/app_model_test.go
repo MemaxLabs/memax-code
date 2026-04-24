@@ -313,6 +313,62 @@ func TestAppProgramTranscriptPreservesStreamedAssistantBlankLines(t *testing.T) 
 	}
 }
 
+func TestAppProgramTranscriptPreservesSplitAssistantBlankLines(t *testing.T) {
+	tests := []struct {
+		name   string
+		chunks []string
+	}{
+		{
+			name: "paragraph break split after first newline",
+			chunks: []string{
+				"[assistant]\nparagraph one\n",
+				"\nparagraph two\n",
+			},
+		},
+		{
+			name: "paragraph break split as separate newline chunks",
+			chunks: []string{
+				"[assistant]\nparagraph one",
+				"\n",
+				"\n",
+				"paragraph two\n",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+			model.transcript = appTranscriptTail{}
+			model.compactor = appProgramTranscriptCompactor{}
+
+			for _, chunk := range tt.chunks {
+				model.appendTranscript(chunk)
+			}
+
+			got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+			if !strings.Contains(got, "paragraph one\n\nparagraph two") {
+				t.Fatalf("assistant split paragraph break was not preserved:\n%q", got)
+			}
+		})
+	}
+}
+
+func TestCompactAppProgramTranscriptTextKeepsDeepIndentedDashAsCode(t *testing.T) {
+	got := ansi.Strip(compactAppProgramTranscriptText(strings.Join([]string{
+		"[assistant]",
+		"code:",
+		"        - literal dash in indented text",
+	}, "\n")))
+
+	if strings.Contains(got, "• literal dash in indented text") {
+		t.Fatalf("deep indented dash was rendered as markdown bullet:\n%s", got)
+	}
+	if !strings.Contains(got, "        - literal dash in indented text") {
+		t.Fatalf("deep indented dash lost code indentation:\n%s", got)
+	}
+}
+
 func TestCompactAppProgramTranscriptTextDoesNotDuplicateTrailingNewline(t *testing.T) {
 	var compactor appProgramTranscriptCompactor
 	if got, want := compactor.compact("[assistant]\nhello\n"), "hello\n"; ansi.Strip(got) != want {

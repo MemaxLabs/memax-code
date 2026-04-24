@@ -512,10 +512,11 @@ func compactAppProgramTranscriptText(text string) string {
 }
 
 type appProgramTranscriptCompactor struct {
-	section              string
-	skipActivityDetail   bool
-	assistantInCodeBlock bool
-	activityDetail       *appProgramActivityDetail
+	section                 string
+	skipActivityDetail      bool
+	assistantInCodeBlock    bool
+	assistantAtLineBoundary bool
+	activityDetail          *appProgramActivityDetail
 }
 
 type appProgramActivityDetail struct {
@@ -552,7 +553,7 @@ func (d *appProgramActivityDetail) render() []string {
 
 func (c *appProgramTranscriptCompactor) compact(text string) string {
 	text = normalizeAppTranscriptText(text)
-	if strings.TrimSpace(text) == "" && (c.section != "assistant" || !strings.Contains(text, "\n")) {
+	if c.dropWhitespaceOnlyChunk(text) {
 		return ""
 	}
 	trailingNewline := strings.HasSuffix(text, "\n")
@@ -565,7 +566,11 @@ func (c *appProgramTranscriptCompactor) compact(text string) string {
 	for i, line := range lines {
 		for _, compacted := range c.compactLine(line) {
 			if leadingAssistantBoundary && i == 0 && compacted == appTranscriptBlankLine {
-				out = append(out, "")
+				if c.assistantAtLineBoundary {
+					out = append(out, appTranscriptBlankLine)
+				} else {
+					out = append(out, "")
+				}
 				continue
 			}
 			if compacted != "" {
@@ -573,6 +578,7 @@ func (c *appProgramTranscriptCompactor) compact(text string) string {
 			}
 		}
 	}
+	c.assistantAtLineBoundary = c.section == "assistant" && trailingNewline
 	text = strings.Join(out, "\n")
 	if text == "" && leadingAssistantBoundary && trailingNewline {
 		return "\n"
@@ -581,6 +587,10 @@ func (c *appProgramTranscriptCompactor) compact(text string) string {
 		text += "\n"
 	}
 	return text
+}
+
+func (c *appProgramTranscriptCompactor) dropWhitespaceOnlyChunk(text string) bool {
+	return strings.TrimSpace(text) == "" && (c.section != "assistant" || !strings.Contains(text, "\n"))
 }
 
 func (c *appProgramTranscriptCompactor) compactLine(line string) []string {
@@ -701,7 +711,10 @@ func appMarkdownHeading(line string) (heading string, ok bool) {
 }
 
 func appMarkdownBulletLine(line string) (indent, bullet, rest string, ok bool) {
-	indent, content := appMarkdownIndentPrefix(line)
+	width, indent, content := appMarkdownIndentPrefix(line)
+	if width > 6 {
+		return "", "", "", false
+	}
 	bullet, rest, ok = appMarkdownBullet(content)
 	if !ok {
 		return "", "", "", false
@@ -709,8 +722,7 @@ func appMarkdownBulletLine(line string) (indent, bullet, rest string, ok bool) {
 	return indent, bullet, rest, true
 }
 
-func appMarkdownIndentPrefix(line string) (indent, content string) {
-	width := 0
+func appMarkdownIndentPrefix(line string) (width int, indent, content string) {
 	i := 0
 	for i < len(line) {
 		switch line[i] {
@@ -722,15 +734,15 @@ func appMarkdownIndentPrefix(line string) (indent, content string) {
 			i++
 		default:
 			if width > 6 {
-				width = 6
+				return width, strings.Repeat(" ", 6), line[i:]
 			}
-			return strings.Repeat(" ", width), line[i:]
+			return width, strings.Repeat(" ", width), line[i:]
 		}
 	}
 	if width > 6 {
-		width = 6
+		return width, strings.Repeat(" ", 6), ""
 	}
-	return strings.Repeat(" ", width), ""
+	return width, strings.Repeat(" ", width), ""
 }
 
 func appMarkdownBullet(line string) (bullet, rest string, ok bool) {
