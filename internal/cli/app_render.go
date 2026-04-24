@@ -227,9 +227,9 @@ type appTranscriptTail struct {
 	limit   int
 }
 
-func (t *appTranscriptTail) append(text string) {
+func (t *appTranscriptTail) append(text string) []string {
 	if text == "" {
-		return
+		return nil
 	}
 	text = t.partial + text
 	parts := strings.Split(text, "\n")
@@ -239,37 +239,48 @@ func (t *appTranscriptTail) append(text string) {
 		t.partial = parts[len(parts)-1]
 		parts = parts[:len(parts)-1]
 	}
+	appended := make([]string, 0, len(parts))
 	for _, line := range parts {
-		t.appendLine(line)
+		if t.appendLine(line) {
+			appended = append(appended, line)
+		}
 	}
+	return appended
 }
 
-func (t *appTranscriptTail) appendStandaloneLine(line string) {
+func (t *appTranscriptTail) appendStandaloneLine(line string) []string {
 	// Local rows are inserted at prompt/session boundaries, not mid-assistant
 	// stream. Flush first so local UI rows never glue onto streamed text.
-	t.flushPartial()
-	t.appendLine(line)
+	appended := t.flushPartial()
+	if t.appendLine(line) {
+		appended = append(appended, line)
+	}
+	return appended
 }
 
-func (t *appTranscriptTail) flushPartial() {
+func (t *appTranscriptTail) flushPartial() []string {
 	if strings.TrimSpace(t.partial) == "" {
 		t.partial = ""
-		return
+		return nil
 	}
 	partial := t.partial
 	t.partial = ""
-	t.appendLine(partial)
+	if t.appendLine(partial) {
+		return []string{partial}
+	}
+	return nil
 }
 
-func (t *appTranscriptTail) appendLine(line string) {
+func (t *appTranscriptTail) appendLine(line string) bool {
 	if strings.TrimSpace(line) == "" {
-		return
+		return false
 	}
 	t.entries = append(t.entries, line)
 	limit := t.effectiveLimit()
 	if len(t.entries) > limit {
 		t.entries = append([]string(nil), t.entries[len(t.entries)-limit:]...)
 	}
+	return true
 }
 
 func (t *appTranscriptTail) lines(limit int) []string {

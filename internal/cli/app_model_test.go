@@ -20,6 +20,8 @@ func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T)
 		"[activity]",
 		"> tool run_command call",
 		"< tool run_command ok",
+		"  result: line one",
+		"  line two",
 		"! tool run_command error",
 		"$ command id=cmd-1 command=\"go test ./...\"",
 		"+ command command=\"go test ./...\" exit=0 timeout=false",
@@ -37,7 +39,6 @@ func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T)
 	}, "\n"))
 
 	for _, want := range []string{
-		"session 019db69e-3b4f-7d79-a333-34d708f1d4a6",
 		"working on it",
 		"• tool run_command call",
 		"  tool run_command ok",
@@ -47,19 +48,47 @@ func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T)
 		"! command cmd-2 stopped status=killed",
 		"✓ check go test ./... passed=true",
 		"? approval Apply patch",
-		"done",
-		"input=10 output=2 total=12",
-		"phase: done",
 		"boom",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("compact transcript missing %q:\n%s", want, got)
 		}
 	}
-	for _, unwanted := range []string{"[session]", "[assistant]", "[activity]", "[result]", "[usage]", "[status]", "[error]", "Assistant", "Activity", "Result", "Usage", "Status", "Error", "$ command", "+ command"} {
+	for _, unwanted := range []string{"[session]", "[assistant]", "[activity]", "[result]", "[usage]", "[status]", "[error]", "Assistant", "Activity", "Result", "Usage", "Status", "Error", "$ command", "+ command", "019db69e-3b4f-7d79-a333-34d708f1d4a6", "done", "input=10", "phase: done", "line one", "line two"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("compact transcript leaked %q:\n%s", unwanted, got)
 		}
+	}
+}
+
+func TestAppProgramComposerDefaultsToOneLineAndExpandsForMultiline(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.width = 80
+	model.height = 24
+	model.resize()
+
+	if got, want := model.input.Height(), 1; got != want {
+		t.Fatalf("input height = %d, want %d", got, want)
+	}
+	model.input.SetValue("line one\nline two\nline three")
+	model.resize()
+	if got, want := model.input.Height(), 3; got != want {
+		t.Fatalf("multiline input height = %d, want %d", got, want)
+	}
+}
+
+func TestAppProgramBackslashEnterInsertsNewline(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.input.SetValue("line one\\")
+
+	if !model.consumeTrailingBackslashForNewline() {
+		t.Fatal("consumeTrailingBackslashForNewline() = false, want true")
+	}
+	if got, want := model.input.Value(), "line one\n"; got != want {
+		t.Fatalf("input value = %q, want %q", got, want)
+	}
+	if got, want := model.input.Height(), 2; got != want {
+		t.Fatalf("input height = %d, want %d", got, want)
 	}
 }
 
@@ -103,20 +132,6 @@ func TestAppProgramLocalLineFlushesStreamingPartial(t *testing.T) {
 	}
 	if strings.Contains(strings.ReplaceAll(got, " ", ""), "hello›next") {
 		t.Fatalf("local row glued to streaming partial:\n%q", got)
-	}
-}
-
-func TestAppProgramResizeCountsWrappedTranscriptRows(t *testing.T) {
-	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
-	model.width = 10
-	model.height = 20
-	model.transcript = appTranscriptTail{}
-	model.transcript.append("abcdefghijklmnopqrstuvwxyz\n")
-
-	model.resize()
-
-	if got, want := model.viewport.Height, 3; got != want {
-		t.Fatalf("viewport height = %d, want %d for wrapped transcript line", got, want)
 	}
 }
 

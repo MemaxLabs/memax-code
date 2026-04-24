@@ -1304,7 +1304,7 @@ func TestRunResumeWithoutPromptStartsInteractiveShellOnTerminalIO(t *testing.T) 
 		}, tty, tty, tty)
 	}()
 
-	if _, err := io.WriteString(ptmx, "/session\n/quit\n"); err != nil {
+	if _, err := io.WriteString(ptmx, "/session\r/quit\r"); err != nil {
 		t.Fatalf("WriteString() error = %v", err)
 	}
 
@@ -1365,7 +1365,7 @@ func TestRunWithoutPromptStartsAppShellOnTerminalIO(t *testing.T) {
 		}, tty, tty, tty)
 	}()
 
-	if _, err := io.WriteString(ptmx, "/quit\n"); err != nil {
+	if _, err := io.WriteString(ptmx, "/quit\r"); err != nil {
 		t.Fatalf("WriteString() error = %v", err)
 	}
 
@@ -1711,7 +1711,7 @@ func TestRunInteractiveAppUsesSingleOutputSurface(t *testing.T) {
 		)
 	}()
 
-	if _, err := io.WriteString(ptmx, "/help\n/quit\n"); err != nil {
+	if _, err := io.WriteString(ptmx, "/help\r/quit\r"); err != nil {
 		t.Fatalf("WriteString() error = %v", err)
 	}
 	select {
@@ -1739,7 +1739,7 @@ func TestRunInteractiveAppUsesSingleOutputSurface(t *testing.T) {
 		"Memax Code",
 		"none",
 		"session none",
-		"composer draft: inactive",
+		"input draft: inactive",
 		"/quit              exit",
 		"bye",
 	} {
@@ -1785,11 +1785,11 @@ func TestRunInteractiveAppCapturesPromptRunTranscript(t *testing.T) {
 		)
 	}()
 
-	if _, err := io.WriteString(ptmx, "first prompt\n"); err != nil {
+	if _, err := io.WriteString(ptmx, "first prompt\r"); err != nil {
 		t.Fatalf("WriteString() error = %v", err)
 	}
 	time.Sleep(100 * time.Millisecond)
-	if _, err := io.WriteString(ptmx, "/quit\n"); err != nil {
+	if _, err := io.WriteString(ptmx, "/quit\r"); err != nil {
 		t.Fatalf("WriteString() error = %v", err)
 	}
 	select {
@@ -1817,8 +1817,6 @@ func TestRunInteractiveAppCapturesPromptRunTranscript(t *testing.T) {
 		"Memax Code",
 		"00000000-0000-7000-8000-000000000123",
 		"working on it",
-		"done",
-		"bye",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("interactive app stdout missing %q:\n%s", want, out)

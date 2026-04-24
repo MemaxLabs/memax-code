@@ -6,18 +6,17 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
 const (
-	appProgramMinComposer = 3
-	appProgramMaxBody     = 24
+	appProgramMinComposer = 1
 )
 
 var (
@@ -36,22 +35,18 @@ var (
 type appProgramKeyMap struct {
 	Send    key.Binding
 	Newline key.Binding
-	Scroll  key.Binding
-	Page    key.Binding
-	Jump    key.Binding
 	Help    key.Binding
 	Clear   key.Binding
 	Quit    key.Binding
 }
 
 func (m appProgramKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{m.Send, m.Newline, m.Page, m.Help, m.Quit}
+	return []key.Binding{m.Send, m.Newline, m.Help, m.Quit}
 }
 
 func (m appProgramKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{m.Send, m.Newline, m.Clear},
-		{m.Scroll, m.Page, m.Jump},
 		{m.Help, m.Quit},
 	}
 }
@@ -62,20 +57,8 @@ var appProgramKeys = appProgramKeyMap{
 		key.WithHelp("Enter/Ctrl+S", "send"),
 	),
 	Newline: key.NewBinding(
-		key.WithKeys("ctrl+j"),
-		key.WithHelp("Ctrl+J", "newline"),
-	),
-	Scroll: key.NewBinding(
-		key.WithKeys("up", "down"),
-		key.WithHelp("↑/↓", "scroll"),
-	),
-	Page: key.NewBinding(
-		key.WithKeys("pgup", "pgdown"),
-		key.WithHelp("PgUp/PgDn", "page"),
-	),
-	Jump: key.NewBinding(
-		key.WithKeys("home", "end"),
-		key.WithHelp("Home/End", "jump"),
+		key.WithKeys("shift+enter", "alt+enter"),
+		key.WithHelp("Shift/Alt+Enter", "newline"),
 	),
 	Help: key.NewBinding(
 		key.WithKeys("f1"),
@@ -105,6 +88,8 @@ type appProgramExternalStatusMsg struct {
 	text string
 }
 
+type appProgramTickMsg time.Time
+
 type appProgramModel struct {
 	ctx        context.Context
 	opts       options
@@ -112,7 +97,6 @@ type appProgramModel struct {
 	program    *tea.Program
 	history    persistentPromptHistory
 	composer   interactiveComposer
-	viewport   viewport.Model
 	input      textarea.Model
 	help       help.Model
 	keys       appProgramKeyMap
@@ -126,6 +110,8 @@ type appProgramModel struct {
 	showHelp   bool
 	firstErr   error
 	compactor  appProgramTranscriptCompactor
+	pending    []string
+	spinner    int
 }
 
 func newAppProgramModel(ctx context.Context, opts options, runPrompt interactivePromptRunner) *appProgramModel {
@@ -148,11 +134,6 @@ func newAppProgramModel(ctx context.Context, opts options, runPrompt interactive
 	})
 	input.Focus()
 
-	vp := viewport.New(0, 0)
-	vp.KeyMap = viewport.KeyMap{}
-	vp.MouseWheelEnabled = true
-	vp.MouseWheelDelta = 2
-
 	helpModel := help.New()
 	helpModel.ShowAll = false
 
@@ -161,7 +142,6 @@ func newAppProgramModel(ctx context.Context, opts options, runPrompt interactive
 		opts:       opts,
 		runPrompt:  runPrompt,
 		history:    newPersistentPromptHistory(opts.HistoryFile),
-		viewport:   vp,
 		input:      input,
 		help:       helpModel,
 		keys:       appProgramKeys,
@@ -182,7 +162,7 @@ func newAppProgramModel(ctx context.Context, opts options, runPrompt interactive
 }
 
 func (m *appProgramModel) Init() tea.Cmd {
-	return textarea.Blink
+	return tea.Sequence(m.flushPrints(), textarea.Blink)
 }
 
 func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -193,22 +173,30 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 	case tea.KeyMsg:
 		if cmd, handled := m.updateKey(msg); handled {
-			return m, cmd
+			return m, tea.Batch(cmd, m.flushPrints())
 		}
 	case appProgramTranscriptMsg:
 		m.appendTranscript(msg.text)
+		return m, m.flushPrints()
 	case appProgramPromptDoneMsg:
 		m.finishPrompt(msg)
+		return m, m.flushPrints()
 	case appProgramExternalStatusMsg:
 		if strings.TrimSpace(msg.text) != "" {
 			m.statusLine = strings.TrimSpace(msg.text)
 		}
+	case appProgramTickMsg:
+		if !m.running {
+			return m, nil
+		}
+		m.spinner++
+		return m, m.tick()
 	}
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	m.syncComposerDraftFromInput()
-	return m, cmd
+	return m, tea.Batch(cmd, m.flushPrints())
 }
 
 func (m *appProgramModel) updateKey(msg tea.KeyMsg) (tea.Cmd, bool) {
@@ -225,35 +213,11 @@ func (m *appProgramModel) updateKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			m.syncComposerDraftFromInput()
 			return nil, true
 		}
-	case "pgup":
-		m.viewport.PageUp()
+	case "alt+enter", "shift+enter":
+		m.insertInputNewline()
 		return nil, true
-	case "pgdown":
-		m.viewport.PageDown()
-		return nil, true
-	case "home":
-		m.viewport.GotoTop()
-		return nil, true
-	case "end":
-		m.viewport.GotoBottom()
-		return nil, true
-	case "up":
-		m.viewport.LineUp(1)
-		return nil, true
-	case "down":
-		m.viewport.LineDown(1)
-		return nil, true
-	case "ctrl+j":
-		if m.composer.draftActive {
-			m.input.InsertRune('\n')
-			m.syncComposerDraftFromInput()
-			return nil, true
-		}
-		return m.submitCurrentInput(), true
-	case "enter":
-		if m.composer.draftActive {
-			m.input, _ = m.input.Update(msg)
-			m.syncComposerDraftFromInput()
+	case "enter", "ctrl+m", "ctrl+j":
+		if m.consumeTrailingBackslashForNewline() {
 			return nil, true
 		}
 		return m.submitCurrentInput(), true
@@ -263,16 +227,33 @@ func (m *appProgramModel) updateKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	return nil, false
 }
 
-func (m *appProgramModel) submitCurrentInput() tea.Cmd {
-	if m.running {
-		return nil
+func (m *appProgramModel) insertInputNewline() {
+	m.input.InsertRune('\n')
+	m.syncComposerDraftFromInput()
+	m.resize()
+}
+
+func (m *appProgramModel) consumeTrailingBackslashForNewline() bool {
+	value := m.input.Value()
+	if !strings.HasSuffix(value, "\\") {
+		return false
 	}
+	m.input.SetValue(strings.TrimSuffix(value, "\\") + "\n")
+	m.syncComposerDraftFromInput()
+	m.resize()
+	return true
+}
+
+func (m *appProgramModel) submitCurrentInput() tea.Cmd {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
 		return nil
 	}
 	if isInteractiveCommandLine(text) {
 		return m.handleCommand(text)
+	}
+	if m.running {
+		return nil
 	}
 	return m.startPrompt(text)
 }
@@ -287,7 +268,7 @@ func (m *appProgramModel) handleCommand(text string) tea.Cmd {
 		m.appendTranscript(out.String())
 	}
 	if result.Done {
-		return tea.Quit
+		return tea.Sequence(m.flushPrints(), tea.Quit)
 	}
 	if result.SubmitPrompt != "" {
 		return m.startPrompt(result.SubmitPrompt)
@@ -315,7 +296,7 @@ func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
 	opts.ResumeSessionID = m.sessionID
 	opts.UI = renderModeTUI
 
-	return func() tea.Msg {
+	runCmd := func() tea.Msg {
 		writer := &appProgramTranscriptWriter{send: send}
 		sessionID, err := runPrompt(m.ctx, writer, opts)
 		return appProgramPromptDoneMsg{
@@ -324,6 +305,7 @@ func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
 			prompt:    prompt,
 		}
 	}
+	return tea.Batch(runCmd, m.tick())
 }
 
 func (m *appProgramModel) finishPrompt(msg appProgramPromptDoneMsg) {
@@ -349,6 +331,7 @@ func (m *appProgramModel) finishPrompt(msg appProgramPromptDoneMsg) {
 		}
 	}
 	m.statusLine = "idle"
+	m.flushTranscriptPartial()
 }
 
 func (m *appProgramModel) syncComposerDraftFromInput() {
@@ -370,10 +353,8 @@ func (m *appProgramModel) appendTranscript(text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	atBottom := m.viewport.AtBottom()
-	m.transcript.append(m.compactor.compact(text))
+	m.queuePrints(m.transcript.append(m.compactor.compact(text)))
 	m.resize()
-	m.refreshViewport(atBottom)
 }
 
 func (m *appProgramModel) appendTranscriptLine(text string) {
@@ -389,18 +370,38 @@ func (m *appProgramModel) appendLocalTranscriptLine(kind, text string) {
 	if kind == "" || text == "" {
 		return
 	}
-	atBottom := m.viewport.AtBottom()
-	m.transcript.appendStandaloneLine(compactAppProgramLocalLine(kind, text))
+	m.queuePrints(m.transcript.appendStandaloneLine(compactAppProgramLocalLine(kind, text)))
 	m.resize()
-	m.refreshViewport(atBottom)
 }
 
-func (m *appProgramModel) refreshViewport(stickBottom bool) {
-	lines := m.transcript.lines(maxAppTranscriptLines)
-	m.viewport.SetContent(strings.Join(lines, "\n"))
-	if stickBottom {
-		m.viewport.GotoBottom()
+func (m *appProgramModel) flushTranscriptPartial() {
+	m.queuePrints(m.transcript.flushPartial())
+}
+
+func (m *appProgramModel) queuePrints(lines []string) {
+	if len(lines) == 0 {
+		return
 	}
+	m.pending = append(m.pending, lines...)
+}
+
+func (m *appProgramModel) flushPrints() tea.Cmd {
+	if len(m.pending) == 0 {
+		return nil
+	}
+	lines := append([]string(nil), m.pending...)
+	m.pending = nil
+	cmds := make([]tea.Cmd, 0, len(lines))
+	for _, line := range lines {
+		cmds = append(cmds, tea.Println(line))
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *appProgramModel) tick() tea.Cmd {
+	return tea.Tick(appShellTickInterval, func(t time.Time) tea.Msg {
+		return appProgramTickMsg(t)
+	})
 }
 
 func (m *appProgramModel) resize() {
@@ -408,37 +409,12 @@ func (m *appProgramModel) resize() {
 	if width <= 0 {
 		width = defaultAppShellWidth
 	}
-	height := m.height
-	if height <= 0 {
-		height = defaultAppShellHeight
-	}
-	composerHeight := max(appProgramMinComposer, min(8, max(3, strings.Count(m.input.Value(), "\n")+2)))
+	composerHeight := max(appProgramMinComposer, min(8, strings.Count(m.input.Value(), "\n")+1))
 	if m.showHelp {
-		composerHeight = max(composerHeight, 5)
-	}
-	statusLines := 1
-	if m.showHelp {
-		statusLines = 2
-	}
-	fixedRows := 1 + statusLines + 1 + 1 // header, status, composer, footer.
-	availableBodyHeight := min(appProgramMaxBody, max(1, height-composerHeight-fixedRows))
-	transcriptLines := m.transcript.lines(maxAppTranscriptLines)
-	contentHeight := appTranscriptVisualLineCount(transcriptLines, width)
-	if contentHeight <= 0 {
-		contentHeight = 1
-	}
-	bodyHeight := min(availableBodyHeight, contentHeight)
-	m.viewport.Width = width
-	m.viewport.Height = bodyHeight
-	if m.viewport.Width < 1 {
-		m.viewport.Width = 1
-	}
-	if m.viewport.Height < 1 {
-		m.viewport.Height = 1
+		composerHeight = max(composerHeight, 4)
 	}
 	m.input.SetWidth(max(12, width-2))
 	m.input.SetHeight(composerHeight)
-	m.refreshViewport(false)
 }
 
 func (m *appProgramModel) View() string {
@@ -447,29 +423,10 @@ func (m *appProgramModel) View() string {
 		width = defaultAppShellWidth
 	}
 
-	header := appProgramBrandStyle.Render("Memax Code") + appProgramDimStyle.Render("  ") + m.headerStatus()
-	body := m.bodyView()
 	status := m.statusView()
 	composer := m.composerView(width)
 	footer := appProgramDimStyle.Render(m.help.View(m.keys))
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, status, composer, footer)
-}
-
-func (m *appProgramModel) headerStatus() string {
-	parts := []string{m.phaseLabel()}
-	if m.sessionID != "" {
-		parts = append(parts, "session "+shortSessionID(m.sessionID))
-	}
-	if m.opts.Model != "" {
-		parts = append(parts, m.opts.Model)
-	}
-	if m.opts.Effort != "" && m.opts.Effort != "auto" {
-		parts = append(parts, "effort "+m.opts.Effort)
-	}
-	if base := filepath.Base(m.opts.CWD); base != "" && base != "." && base != string(filepath.Separator) {
-		parts = append(parts, base)
-	}
-	return appProgramMutedStyle.Render(strings.Join(parts, appProgramDimStyle.Render("  ·  ")))
+	return lipgloss.JoinVertical(lipgloss.Left, status, composer, footer)
 }
 
 func (m *appProgramModel) phaseLabel() string {
@@ -482,18 +439,24 @@ func (m *appProgramModel) phaseLabel() string {
 	return appProgramSuccessStyle.Render(m.statusLine)
 }
 
-func (m *appProgramModel) bodyView() string {
-	return m.viewport.View()
-}
-
 func (m *appProgramModel) statusView() string {
 	parts := []string{
+		appProgramBrandStyle.Render("Memax Code"),
+		m.phaseLabel(),
 		appProgramTitleStyle.Render("session") + " " + nonEmptyOr(shortSessionID(m.sessionID), "none"),
 		appProgramTitleStyle.Render("workspace") + " " + filepath.Base(m.opts.CWD),
-		appProgramTitleStyle.Render("composer") + " " + m.composer.statusLine(),
 	}
-	if m.hasHiddenNewerLines() {
-		parts = append(parts, appProgramMutedStyle.Render("↓ more below"))
+	if m.opts.Model != "" {
+		parts = append(parts, m.opts.Model)
+	}
+	if m.opts.Effort != "" && m.opts.Effort != "auto" {
+		parts = append(parts, "effort "+m.opts.Effort)
+	}
+	if m.running {
+		frame := liveStatusFrames[m.spinner%len(liveStatusFrames)]
+		parts = append(parts, appProgramAccentStyle.Render(frame+" thinking"))
+	} else {
+		parts = append(parts, appProgramTitleStyle.Render("input")+" "+m.composer.statusLine())
 	}
 	if m.lastError != "" {
 		parts = append(parts, appProgramErrorStyle.Render("error "+m.lastError))
@@ -509,21 +472,14 @@ func (m *appProgramModel) composerView(width int) string {
 	return appProgramComposerStyle.Width(width).Render(m.input.View())
 }
 
-func (m *appProgramModel) hasHiddenNewerLines() bool {
-	if m.viewport.AtBottom() {
-		return false
-	}
-	lines := m.transcript.lines(maxAppTranscriptLines)
-	return len(lines) > m.viewport.YOffset+m.viewport.Height
-}
-
 func compactAppProgramTranscriptText(text string) string {
 	var compactor appProgramTranscriptCompactor
 	return compactor.compact(text)
 }
 
 type appProgramTranscriptCompactor struct {
-	section string
+	section            string
+	skipActivityDetail bool
 }
 
 func (c *appProgramTranscriptCompactor) compact(text string) string {
@@ -553,15 +509,14 @@ func (c *appProgramTranscriptCompactor) compactLine(line string) string {
 	}
 	if section, label, ok := compactAppProgramSectionLabel(trimmed); ok {
 		c.section = section
+		c.skipActivityDetail = false
 		return label
 	}
 	switch c.section {
 	case "activity":
-		return compactAppProgramActivityLine(trimmed)
-	case "session":
-		return compactAppProgramSessionLine(trimmed)
-	case "usage", "status":
-		return compactAppProgramStatusLine(trimmed)
+		return c.compactActivityLine(trimmed)
+	case "result", "session", "usage", "status":
+		return ""
 	case "error":
 		return compactAppProgramErrorLine(trimmed)
 	default:
@@ -601,54 +556,66 @@ func compactAppProgramSectionLabel(trimmed string) (section, label string, ok bo
 	}
 }
 
-func compactAppProgramActivityLine(trimmed string) string {
+func (c *appProgramTranscriptCompactor) compactActivityLine(trimmed string) string {
 	if strings.HasPrefix(trimmed, "memax> ") {
+		c.skipActivityDetail = false
 		return appProgramUserStyle.Render("› " + strings.TrimSpace(strings.TrimPrefix(trimmed, "memax> ")))
 	}
 	if strings.HasPrefix(trimmed, "> tool ") {
+		c.skipActivityDetail = false
 		return appProgramToolStyle.Render("• " + strings.TrimSpace(strings.TrimPrefix(trimmed, "> ")))
 	}
 	if strings.HasPrefix(trimmed, "< tool ") {
+		c.skipActivityDetail = false
 		return appProgramDimStyle.Render("  " + strings.TrimSpace(strings.TrimPrefix(trimmed, "< ")))
 	}
 	if strings.HasPrefix(trimmed, "! tool ") {
+		c.skipActivityDetail = false
 		return appProgramErrorStyle.Render("! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))
 	}
 	if strings.HasPrefix(trimmed, "$ command ") {
+		c.skipActivityDetail = false
 		return appProgramToolStyle.Render("• " + strings.TrimSpace(strings.TrimPrefix(trimmed, "$ ")))
 	}
 	if strings.HasPrefix(trimmed, "+ command ") {
+		c.skipActivityDetail = false
 		return appProgramSuccessStyle.Render("✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ ")))
 	}
 	if strings.HasPrefix(trimmed, "! command ") {
+		c.skipActivityDetail = false
 		return appProgramErrorStyle.Render("! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))
 	}
 	if strings.HasPrefix(trimmed, "+ check ") {
+		c.skipActivityDetail = false
 		return appProgramSuccessStyle.Render("✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ ")))
 	}
 	if strings.HasPrefix(trimmed, "! check ") {
+		c.skipActivityDetail = false
 		return appProgramErrorStyle.Render("! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))
 	}
 	if strings.HasPrefix(trimmed, "? approval ") {
+		c.skipActivityDetail = false
 		return appProgramAccentStyle.Render("? " + strings.TrimSpace(strings.TrimPrefix(trimmed, "? ")))
 	}
 	if strings.HasPrefix(trimmed, "+ approval ") {
+		c.skipActivityDetail = false
 		return appProgramSuccessStyle.Render("✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ ")))
 	}
 	if strings.HasPrefix(trimmed, "! approval ") {
+		c.skipActivityDetail = false
 		return appProgramErrorStyle.Render("! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))
 	}
-	return appProgramDimStyle.Render(trimmed)
-}
-
-func compactAppProgramSessionLine(trimmed string) string {
-	if strings.HasPrefix(trimmed, "id: ") {
-		return appProgramDimStyle.Render("session " + strings.TrimSpace(strings.TrimPrefix(trimmed, "id: ")))
+	if strings.HasPrefix(trimmed, "result:") {
+		c.skipActivityDetail = true
+		return ""
 	}
-	return appProgramDimStyle.Render(trimmed)
-}
-
-func compactAppProgramStatusLine(trimmed string) string {
+	if strings.HasPrefix(trimmed, "error:") {
+		c.skipActivityDetail = true
+		return appProgramErrorStyle.Render("! " + trimmed)
+	}
+	if c.skipActivityDetail {
+		return ""
+	}
 	return appProgramDimStyle.Render(trimmed)
 }
 
