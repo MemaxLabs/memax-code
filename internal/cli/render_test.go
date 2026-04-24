@@ -198,14 +198,17 @@ func TestRenderTUIEventsPrintsStructuredSectionsAndStatus(t *testing.T) {
 	}
 }
 
-func TestAppRenderEventsDrawsDashboardPanels(t *testing.T) {
+func TestAppRenderEventsPrintInlineTranscript(t *testing.T) {
 	events := make(chan memaxagent.Event, 8)
 	events <- memaxagent.Event{Kind: memaxagent.EventSessionStarted, SessionID: "00000000-0000-7000-8000-000000000001"}
 	events <- memaxagent.Event{
 		Kind:    memaxagent.EventAssistant,
 		Message: &model.Message{Content: []model.ContentBlock{{Type: model.ContentText, Text: "I will inspect the failure."}}},
 	}
-	events <- memaxagent.Event{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{Name: "start_command"}}
+	events <- memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		Name:  "start_command",
+		Input: []byte(`{"command":"npm test -- --watch"}`),
+	}}
 	events <- memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
 		CommandID: "cmd-1",
 		Command:   "npm test -- --watch",
@@ -218,283 +221,59 @@ func TestAppRenderEventsDrawsDashboardPanels(t *testing.T) {
 	close(events)
 
 	var out bytes.Buffer
-	renderer := &appRenderState{
-		width:     90,
-		height:    18,
-		startedAt: time.Date(2026, 4, 22, 19, 0, 0, 0, time.UTC),
-		now:       func() time.Time { return time.Date(2026, 4, 22, 19, 0, 3, 0, time.UTC) },
-	}
+	renderer := &appRenderState{}
 	if err := renderWith(&out, events, renderer); err != nil {
 		t.Fatalf("renderWith(app) error = %v", err)
 	}
 	got := out.String()
 	for _, want := range []string{
-		appClearScreen,
-		"\rMemax Code | phase=running | elapsed=3s | tools=1 commands=1 checks=1",
-		"Memax Code | phase=running | elapsed=3s | tools=1 commands=1 checks=1",
-		"[active]",
-		"tool: start_command",
-		"command: id=cmd-1 ",
-		"[recent]",
-		"command_status: id=cmd-1 ",
-		"verification: npm test",
-		"[transcript] live tail",
 		"I will inspect the failure.",
-		"↑/↓ scroll | PgUp/PgDn page | Home/End jump | ? help | Ctrl+C cancel",
+		"• Bash(npm test -- --watch)",
+		"• Bash(npm test -- --watch) started id=cmd-1 pid=123",
+		"✓ check npm test passed=true",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("app output missing %q:\n%s", want, got)
 		}
 	}
-}
-
-func TestAppRenderRedrawPrefixesLinesWithCarriageReturn(t *testing.T) {
-	var out bytes.Buffer
-	renderer := &appRenderState{width: 40, height: 10}
-
-	renderer.redraw(&out)
-
-	got := out.String()
-	if !strings.HasPrefix(got, appClearScreen+"\r") {
-		t.Fatalf("redraw output = %q, want appClearScreen followed by carriage return", got)
+	for _, unwanted := range []string{"[active]", "[transcript]", "Memax Code | phase=", "\x1b[H\x1b[2J"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("app output leaked %q:\n%s", unwanted, got)
+		}
 	}
 }
 
-func TestAppRenderRedrawsErrorBeforeReturning(t *testing.T) {
+func TestAppRenderPrintsErrorBeforeReturning(t *testing.T) {
 	wantErr := errors.New("boom")
 	var out bytes.Buffer
-	renderer := &appRenderState{width: 80, height: 16}
+	renderer := &appRenderState{}
 
 	err := renderer.Render(&out, memaxagent.Event{Kind: memaxagent.EventError, Err: wantErr})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Render() error = %v, want %v", err, wantErr)
 	}
 	got := out.String()
-	for _, want := range []string{
-		appClearScreen,
-		"Memax Code | phase=error",
-		"[attention]",
-		"terminal error",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("app output missing %q:\n%s", want, got)
-		}
+	if !strings.Contains(got, "! error: boom") {
+		t.Fatalf("app output missing error:\n%s", got)
 	}
 }
 
-func TestAppRenderSuppressesStructuredTranscriptHeader(t *testing.T) {
+func TestAppRenderDoesNotPrintStructuredTranscriptHeader(t *testing.T) {
 	var out bytes.Buffer
-	renderer := &appRenderState{width: 80, height: 14}
+	renderer := &appRenderState{}
 
 	if err := renderer.Render(&out, memaxagent.Event{Kind: memaxagent.EventSessionStarted, SessionID: "00000000-0000-7000-8000-000000000001"}); err != nil {
 		t.Fatalf("Render(session) error = %v", err)
 	}
 	got := out.String()
-	if strings.Contains(got, "[transcript]\nMemax Code") {
-		t.Fatalf("app output includes duplicate transcript header:\n%s", got)
-	}
-	if !strings.Contains(got, "id: 00000000-0000-7000-8000-000000000001") {
-		t.Fatalf("app output missing transcript body:\n%s", got)
-	}
-}
-
-func TestAppRenderFrameHonorsConfiguredHeight(t *testing.T) {
-	renderer := &appRenderState{width: 100, height: 10}
-	renderer.transcriptTail.append("line one\nline two\nline three\nline four\n")
-	activity := activitySnapshot{
-		Phase:      "running",
-		ActiveTool: "run_command",
-		ActiveCommands: []commandActivity{
-			{ID: "cmd-1", Command: "go test ./...", Status: "running", Seen: 1},
-			{ID: "cmd-2", Command: "go vet ./...", Status: "running", Seen: 2},
-			{ID: "cmd-3", Command: "go test ./internal/cli", Status: "running", Seen: 3},
-			{ID: "cmd-4", Command: "go test ./internal/cli/ui", Status: "running", Seen: 4},
-		},
-		LastCommandState: "id=cmd-4 status=running command=go test ./internal/cli/ui",
-		LastVerification: "go test ./...",
-	}
-
-	lines := renderer.frameLines(activity, renderer.panelWidth(), renderer.panelHeight())
-	if len(lines) > renderer.height {
-		t.Fatalf("frame height = %d, want <= %d:\n%s", len(lines), renderer.height, strings.Join(lines, "\n"))
-	}
-	if !strings.Contains(lines[len(lines)-1], "↑/↓ scroll | PgUp/PgDn page | Home/End jump | ? help | Ctrl+C cancel") {
-		t.Fatalf("last line = %q, want footer", lines[len(lines)-1])
-	}
-	if !strings.Contains(strings.Join(lines, "\n"), "... 1 more active commands") {
-		t.Fatalf("frame missing active command overflow marker:\n%s", strings.Join(lines, "\n"))
-	}
-}
-
-func TestAppRenderFrameUsesTranscriptOffset(t *testing.T) {
-	renderer := &appRenderState{width: 60, height: 14}
-	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\n")
-	renderer.scrollTranscript(2)
-
-	got := strings.Join(renderer.frameLines(activitySnapshot{Phase: "running"}, renderer.panelWidth(), renderer.panelHeight()), "\n")
-	for _, want := range []string{"[transcript] manual scroll", "↑", "↓"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("frame output missing %q:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "\nfive\n") {
-		t.Fatalf("frame output ignored transcript offset:\n%s", got)
-	}
-}
-
-func TestAppRenderPreservesScrollAnchorWhenTranscriptAppends(t *testing.T) {
-	renderer := &appRenderState{width: 60, height: 14}
-	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\n")
-	renderer.scrollTranscript(2)
-	renderer.appendTranscriptChunk("seven\neight\n")
-
-	if got, want := renderer.transcriptOffset, 4; got != want {
-		t.Fatalf("transcriptOffset = %d, want %d", got, want)
-	}
-	got := strings.Join(renderer.frameLines(activitySnapshot{Phase: "running"}, renderer.panelWidth(), renderer.panelHeight()), "\n")
-	for _, want := range []string{"[transcript] manual scroll", "↑", "↓"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("frame output missing %q:\n%s", want, got)
-		}
-	}
-}
-
-func TestAppRenderPreservesScrollAnchorAcrossPartialTranscriptAppend(t *testing.T) {
-	renderer := &appRenderState{width: 60, height: 14}
-	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\n")
-	renderer.scrollTranscript(2)
-	renderer.appendTranscriptChunk("seve")
-
-	if got, want := renderer.transcriptOffset, 3; got != want {
-		t.Fatalf("partial transcriptOffset = %d, want %d", got, want)
-	}
-	got := strings.Join(renderer.frameLines(activitySnapshot{Phase: "running"}, renderer.panelWidth(), renderer.panelHeight()), "\n")
-	for _, want := range []string{"[transcript] manual scroll", "↑", "↓"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("partial frame output missing %q:\n%s", want, got)
-		}
-	}
-
-	renderer.appendTranscriptChunk("n\neight\n")
-	if got, want := renderer.transcriptOffset, 4; got != want {
-		t.Fatalf("completed transcriptOffset = %d, want %d", got, want)
-	}
-	got = strings.Join(renderer.frameLines(activitySnapshot{Phase: "running"}, renderer.panelWidth(), renderer.panelHeight()), "\n")
-	for _, want := range []string{"[transcript] manual scroll", "↑", "↓"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("completed frame output missing %q:\n%s", want, got)
-		}
-	}
-}
-
-func TestAppRenderScrollTranscriptClampsAtBottom(t *testing.T) {
-	renderer := &appRenderState{transcriptOffset: 3}
-	renderer.scrollTranscript(-99)
-
-	if renderer.transcriptOffset != 0 {
-		t.Fatalf("transcriptOffset = %d, want 0", renderer.transcriptOffset)
-	}
-}
-
-func TestAppRenderScrollTranscriptClampsAtOldestVisible(t *testing.T) {
-	renderer := &appRenderState{width: 60, height: 14}
-	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\n")
-	renderer.scrollTranscript(999)
-
-	frame := newAppShellFrame(activitySnapshot{Phase: "running"}, renderer.transcriptTail.lines(maxAppTranscriptLines), renderer.panelWidth(), renderer.panelHeight(), "")
-	want := len(renderer.transcriptTail.lines(maxAppTranscriptLines)) - frame.transcriptBudget()
-	if want < 0 {
-		want = 0
-	}
-	if got := renderer.transcriptOffset; got != want {
-		t.Fatalf("transcriptOffset = %d, want %d", got, want)
-	}
-}
-
-func TestAppRenderHandleKeyScrollsTranscript(t *testing.T) {
-	var out bytes.Buffer
-	renderer := &appRenderState{width: 60, height: 14}
-	renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\n")
-
-	if err := renderer.HandleKey(&out, rawKey{kind: rawKeyPageUp}); err != nil {
-		t.Fatalf("HandleKey(PageUp) error = %v", err)
-	}
-	if got := renderer.transcriptOffset; got == 0 {
-		t.Fatalf("after PageUp transcriptOffset = %d, want > 0", got)
-	}
-	if got := out.String(); !strings.Contains(got, "[transcript] manual scroll") || !strings.Contains(got, "↑") || !strings.Contains(got, "↓") {
-		t.Fatalf("PageUp output missing scroll markers:\n%s", got)
-	}
-
-	if err := renderer.HandleKey(&out, rawKey{kind: rawKeyHistoryNext}); err != nil {
-		t.Fatalf("HandleKey(Down) error = %v", err)
-	}
-	if got := renderer.transcriptOffset; got < 0 {
-		t.Fatalf("after Down transcriptOffset = %d, want >= 0", got)
-	}
-	if got := out.String(); !strings.Contains(got, "↑") || !strings.Contains(got, "↓") {
-		t.Fatalf("Down output missing scroll markers:\n%s", got)
-	}
-	if err := renderer.HandleKey(&out, rawKey{kind: rawKeyEnd}); err != nil {
-		t.Fatalf("HandleKey(End) error = %v", err)
-	}
-	if got := renderer.transcriptOffset; got != 0 {
-		t.Fatalf("after End transcriptOffset = %d, want 0", got)
-	}
-}
-
-func TestAppRenderHandleKeyTogglesHelpAndHidesOnScroll(t *testing.T) {
-	rendererWithHelp := func() *appRenderState {
-		renderer := &appRenderState{width: 60, height: 14}
-		renderer.transcriptTail.append("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\n")
-		renderer.helpVisible = true
-		return renderer
-	}
-
-	var out bytes.Buffer
-	renderer := rendererWithHelp()
-	if err := renderer.HandleKey(&out, rawKey{kind: rawKeyRune, char: '?'}); err != nil {
-		t.Fatalf("HandleKey(?) error = %v", err)
-	}
-	if renderer.helpVisible {
-		t.Fatal("helpVisible = true after toggle, want false")
-	}
-	if got := out.String(); !strings.Contains(got, "[transcript] live tail") {
-		t.Fatalf("toggle output missing transcript view status:\n%s", got)
-	}
-
-	tests := []struct {
-		name string
-		key  rawKey
-		want string
-	}{
-		{name: "Up", key: rawKey{kind: rawKeyHistoryPrev}, want: "[transcript] manual scroll"},
-		{name: "Down", key: rawKey{kind: rawKeyHistoryNext}, want: "[transcript] live tail"},
-		{name: "PageUp", key: rawKey{kind: rawKeyPageUp}, want: "[transcript] manual scroll"},
-		{name: "PageDown", key: rawKey{kind: rawKeyPageDown}, want: "[transcript] live tail"},
-		{name: "Home", key: rawKey{kind: rawKeyHome}, want: "[transcript] manual scroll"},
-		{name: "End", key: rawKey{kind: rawKeyEnd}, want: "[transcript] live tail"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var out bytes.Buffer
-			renderer := rendererWithHelp()
-			if err := renderer.HandleKey(&out, tt.key); err != nil {
-				t.Fatalf("HandleKey(%s) with help error = %v", tt.name, err)
-			}
-			if renderer.helpVisible {
-				t.Fatalf("helpVisible = true after %s, want false", tt.name)
-			}
-			if got := out.String(); !strings.Contains(got, tt.want) {
-				t.Fatalf("%s output missing %q:\n%s", tt.name, tt.want, got)
-			}
-		})
+	if strings.TrimSpace(got) != "" {
+		t.Fatalf("app output for session start = %q, want no transcript chrome", got)
 	}
 }
 
 func TestAppRenderHandleKeyCtrlCCancels(t *testing.T) {
 	var out bytes.Buffer
-	renderer := &appRenderState{width: 60, height: 14}
+	renderer := &appRenderState{}
 	err := renderer.HandleKey(&out, rawKey{kind: rawKeyCtrlC})
 	if !errors.Is(err, contextCanceled) {
 		t.Fatalf("HandleKey(CtrlC) error = %v, want contextCanceled", err)
@@ -533,12 +312,11 @@ func TestAppTranscriptTailStandaloneLineFlushesPartial(t *testing.T) {
 }
 
 func TestAppRenderNormalizesCarriageReturnTranscriptChunks(t *testing.T) {
-	renderer := &appRenderState{}
-	renderer.transcriptHeaderStripped = true
+	var tail appTranscriptTail
 
-	renderer.appendTranscriptChunk("[assistant]\rhello\rworld\n")
+	tail.append(normalizeAppTranscriptText("[assistant]\rhello\rworld\n"))
 
-	got := renderer.transcriptTail.lines(10)
+	got := tail.lines(10)
 	want := []string{"[assistant]", "hello", "world"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("transcript lines = %#v, want %#v", got, want)
@@ -546,12 +324,11 @@ func TestAppRenderNormalizesCarriageReturnTranscriptChunks(t *testing.T) {
 }
 
 func TestAppRenderNormalizesCRLFTranscriptChunks(t *testing.T) {
-	renderer := &appRenderState{}
-	renderer.transcriptHeaderStripped = true
+	var tail appTranscriptTail
 
-	renderer.appendTranscriptChunk("[assistant]\r\nhello\r\nworld\r\n")
+	tail.append(normalizeAppTranscriptText("[assistant]\r\nhello\r\nworld\r\n"))
 
-	got := renderer.transcriptTail.lines(10)
+	got := tail.lines(10)
 	want := []string{"[assistant]", "hello", "world"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("transcript lines = %#v, want %#v", got, want)

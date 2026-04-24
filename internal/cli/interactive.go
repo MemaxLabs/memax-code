@@ -315,8 +315,8 @@ func showInteractiveSession(ctx context.Context, w io.Writer, opts options, curr
 		return err
 	}
 	// Interactive shell commands follow the active shell surface: app mode uses
-	// stdout so the prompt loop and dashboard share one terminal stream, while
-	// the other interactive UIs keep shell commands on stderr. The standalone
+	// stdout so transcript output and bottom controls share one terminal stream,
+	// while the other interactive UIs keep shell commands on stderr. The standalone
 	// --show-session command still writes to stdout for scriptability.
 	showOpts := opts
 	showOpts.ShowSessionID = id

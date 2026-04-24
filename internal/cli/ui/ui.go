@@ -20,8 +20,9 @@ const (
 	// ModeAuto selects the app renderer for terminals and the plain transcript
 	// renderer for non-terminal writers.
 	ModeAuto Mode = "auto"
-	// ModeApp renders an app-shell terminal dashboard with transcript, active
-	// work, recent activity, and footer panels.
+	// ModeApp renders the terminal-native app surface: transcript rows flow
+	// through normal scrollback while status and composer controls stay live at
+	// the bottom in interactive sessions.
 	ModeApp Mode = "app"
 	// ModeLive renders an interactive transcript with a live status line.
 	ModeLive Mode = "live"

@@ -23,8 +23,8 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
 - an interactive shell with slash commands, prompt history recall, and a
   dedicated terminal app surface for transcript, status, and composer state
 - event-stream rendering for assistant text, tool calls, command lifecycle,
-  workspace edits, verification, usage, and final results, with `auto`, `live`,
-  `app`, `tui`, and `plain` renderer modes
+  workspace edits, verification, usage, and final results, with `auto` plus
+  explicit compatibility modes for live status, structured text, and plain logs
 - a machine-readable event stream with `--event-stream json` for wrappers,
   editors, and future GUI clients
 
@@ -36,8 +36,8 @@ Bubble Tea program that prints transcript rows into normal terminal scrollback
 and keeps only the status strip, thinking indicator, and composer interactive at
 the bottom. It starts with a one-line composer, grows for multiline prompts, and
 compacts successful tool output while preserving error tails.
-`--ui live` keeps a lighter live status line while preserving the sectioned
-transcript underneath.
+`--ui live`, `--ui tui`, and `--ui plain` remain available for wrappers,
+debugging, and log-oriented workflows.
 The interactive shell keeps `/help`, `/session`, `/pick`, `/sessions`,
 `/resume`, `/draft`, `/append`, `/show-draft`, `/submit`, `/cancel`,
 `/history`, `/recall`, `/new`, and `/quit`. Submitted prompts are stored as
@@ -122,7 +122,6 @@ Start an interactive shell:
 ```sh
 memax-code
 memax-code --interactive
-memax-code --interactive --ui live
 ```
 
 On a real terminal, running `memax-code` with no prompt opens the interactive
@@ -207,7 +206,7 @@ memax-code --session-dir .memax-code/sessions --list-sessions
 memax-code --history-file .memax-code/history.jsonl --interactive
 ```
 
-Choose the event renderer explicitly when needed:
+Choose an alternate event renderer explicitly when needed:
 
 ```sh
 memax-code --ui app "repair the failing test"
@@ -233,16 +232,15 @@ remain stable.
 
 `--ui app` is the default terminal mode while the terminal UX continues to
 mature. When output is redirected, it falls back to the plain renderer so
-scripts never receive terminal control sequences. The non-interactive app
-renderer keeps the bounded dashboard-style status for single prompts. The
-interactive app shell runs as a Bubble Tea program that preserves terminal
-scrollback, prints assistant markdown-like rows directly into the transcript,
-and compacts structured renderer section labels so app mode does not leak
-internal `[assistant]` and `[result]` headings into the main conversation.
-Successful tool results are collapsed by default; tool errors keep a short tail
-for diagnosis. This is still Foundation terminal UX, not yet the full
-coding-agent timeline/composer product surface. Use `--ui tui` when full raw
-session scrollback matters.
+scripts never receive terminal control sequences. Both single-prompt app mode
+and the interactive app shell print compact transcript rows into normal
+terminal scrollback instead of drawing a transcript window. The interactive
+shell uses Bubble Tea only for the live bottom surface: status, thinking
+indicator, help, and composer. Assistant text is printed once, structured
+section labels are compacted away, successful tool results collapse by default,
+and tool errors keep a short tail for diagnosis. This is still Foundation
+terminal UX, not yet the full coding-agent timeline/composer product surface.
+Use `--ui tui` when full raw sectioned event output matters.
 `--ui live` is the lighter-weight status line mode; it reports phase, elapsed
 time, tool errors, active tool, command, approval, compact activity counts, and
 usage while preserving the sectioned transcript underneath.

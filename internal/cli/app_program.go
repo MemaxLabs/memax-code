@@ -134,6 +134,35 @@ func newAppProgramModel(ctx context.Context, opts options, runPrompt interactive
 }
 
 func newAppProgramModelWithEvents(ctx context.Context, opts options, runPrompt interactivePromptRunner, runEvents interactiveEventPromptRunner) *appProgramModel {
+	helpModel := help.New()
+	helpModel.ShowAll = false
+
+	model := &appProgramModel{
+		ctx:        ctx,
+		opts:       opts,
+		runPrompt:  runPrompt,
+		runEvents:  runEvents,
+		history:    newPersistentPromptHistory(opts.HistoryFile),
+		input:      newAppProgramTextarea(),
+		help:       helpModel,
+		keys:       appProgramKeys,
+		statusLine: "idle",
+	}
+	model.appendLocalTranscriptLine("dim", "Welcome. Type a task or /help.")
+	if opts.ResumeSessionID != "" {
+		model.sessionID = opts.ResumeSessionID
+		model.appendLocalTranscriptLine("dim", "resumed session: "+opts.ResumeSessionID)
+	}
+	if entries, err := model.history.Load(); err != nil {
+		model.appendLocalTranscriptLine("dim", "warning: "+err.Error())
+	} else {
+		model.composer.loadHistory(entries)
+	}
+	model.syncComposerView()
+	return model
+}
+
+func newAppProgramTextarea() textarea.Model {
 	input := textarea.New()
 	input.Prompt = "› "
 	input.Placeholder = "Ask Memax Code to inspect, change, or verify the repo"
@@ -152,33 +181,7 @@ func newAppProgramModelWithEvents(ctx context.Context, opts options, runPrompt i
 		return "· "
 	})
 	input.Focus()
-
-	helpModel := help.New()
-	helpModel.ShowAll = false
-
-	model := &appProgramModel{
-		ctx:        ctx,
-		opts:       opts,
-		runPrompt:  runPrompt,
-		runEvents:  runEvents,
-		history:    newPersistentPromptHistory(opts.HistoryFile),
-		input:      input,
-		help:       helpModel,
-		keys:       appProgramKeys,
-		statusLine: "idle",
-	}
-	model.appendLocalTranscriptLine("dim", "Welcome. Type a task or /help.")
-	if opts.ResumeSessionID != "" {
-		model.sessionID = opts.ResumeSessionID
-		model.appendLocalTranscriptLine("dim", "resumed session: "+opts.ResumeSessionID)
-	}
-	if entries, err := model.history.Load(); err != nil {
-		model.appendLocalTranscriptLine("dim", "warning: "+err.Error())
-	} else {
-		model.composer.loadHistory(entries)
-	}
-	model.syncComposerView()
-	return model
+	return input
 }
 
 func (m *appProgramModel) Init() tea.Cmd {

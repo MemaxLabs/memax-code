@@ -34,11 +34,11 @@ func renderEventsWithMode(w io.Writer, events <-chan memaxagent.Event, mode rend
 }
 
 func renderEventsWithModeObserved(w io.Writer, events <-chan memaxagent.Event, mode renderMode, observe func(memaxagent.Event)) error {
-	terminal, width, height := terminalWriterInfo(w)
+	terminal, width, _ := terminalWriterInfo(w)
 	mode = ui.ResolveMode(mode, terminal)
 	renderer, err := ui.SelectRenderer(mode, ui.Renderers{
 		Plain:      &renderState{},
-		App:        &appRenderState{width: width, height: height},
+		App:        &appRenderState{},
 		Live:       &liveRenderState{statusWidth: width},
 		Structured: &tuiRenderState{},
 	})
