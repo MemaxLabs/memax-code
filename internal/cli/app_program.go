@@ -569,8 +569,7 @@ func (c *appProgramTranscriptCompactor) compactLine(line string) string {
 }
 
 func compactAppProgramLocalLine(kind, text string) string {
-	text = strings.TrimSpace(text)
-	switch strings.TrimSpace(kind) {
+	switch kind {
 	case "user":
 		return appProgramUserStyle.Render(text)
 	case "error":

@@ -119,6 +119,19 @@ func TestTailBytesCapsOutput(t *testing.T) {
 	}
 }
 
+func TestSanitizeTranscriptTextStripsANSISequences(t *testing.T) {
+	got := sanitizeTranscriptText("hello \x1b[31mred\x1b[0m\tok\r\n\x00done")
+	want := "hello red\tok\ndone"
+	if got != want {
+		t.Fatalf("sanitizeTranscriptText() = %q, want %q", got, want)
+	}
+	for _, fragment := range []string{"[31m", "[0m"} {
+		if strings.Contains(got, fragment) {
+			t.Fatalf("sanitizeTranscriptText() leaked ANSI fragment %q in %q", fragment, got)
+		}
+	}
+}
+
 func TestBuildStackEnablesCustomVerificationOutsideGoModule(t *testing.T) {
 	stack, err := buildStack(options{
 		CWD:            t.TempDir(),

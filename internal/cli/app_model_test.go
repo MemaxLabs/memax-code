@@ -72,11 +72,13 @@ func TestAppProgramLocalLinesAreStyledAfterSanitize(t *testing.T) {
 
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.appendLocalTranscriptLine("user", "› make a plan")
+	model.appendLocalTranscriptLine("user", "› \x1b[31mred\x1b[0m text")
 	got := strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n")
 
 	for _, want := range []string{
 		"Welcome. Type a task or /help.",
 		"› make a plan",
+		"› red text",
 	} {
 		if !strings.Contains(ansi.Strip(got), want) {
 			t.Fatalf("local transcript missing %q:\nraw=%q\nstripped=%q", want, got, ansi.Strip(got))

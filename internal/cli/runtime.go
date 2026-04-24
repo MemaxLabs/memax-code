@@ -22,6 +22,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/workspace"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -245,6 +246,7 @@ func compactJSON(raw json.RawMessage) string {
 }
 
 func sanitizeTranscriptText(text string) string {
+	text = ansi.Strip(text)
 	return strings.Map(func(r rune) rune {
 		switch r {
 		case '\n', '\t':
@@ -487,6 +489,7 @@ func sessionTitle(messages []model.Message) string {
 }
 
 func sanitizeTitleText(text string) string {
+	text = ansi.Strip(text)
 	return strings.Map(func(r rune) rune {
 		switch r {
 		case '\t', '\n', '\r':

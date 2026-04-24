@@ -688,7 +688,10 @@ func TestListSessionsStripsTitleControlBytes(t *testing.T) {
 	if strings.Contains(out, "\x1b") || strings.Contains(out, "\x07") {
 		t.Fatalf("list output contains terminal control bytes:\n%q", out)
 	}
-	if !strings.Contains(out, "hello [31mred world") {
+	if strings.Contains(out, "[31m") {
+		t.Fatalf("list output contains ANSI fragment:\n%q", out)
+	}
+	if !strings.Contains(out, "hello red world") {
 		t.Fatalf("list output missing sanitized title:\n%s", out)
 	}
 }
