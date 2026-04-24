@@ -599,12 +599,15 @@ func (c *appProgramTranscriptCompactor) compact(text string) string {
 	c.assistantAtLineBoundary = c.section == "assistant" && trailingNewline && len(out) > 0
 	text = strings.Join(out, "\n")
 	if text == "" && leadingAssistantBoundary && trailingNewline {
+		c.outputHasOpenLine = false
 		return "\n"
 	}
 	if text != "" && trailingNewline {
 		text += "\n"
 	}
-	c.outputHasOpenLine = text != "" && !strings.HasSuffix(text, "\n")
+	if text != "" {
+		c.outputHasOpenLine = !strings.HasSuffix(text, "\n")
+	}
 	return text
 }
 

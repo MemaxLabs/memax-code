@@ -533,6 +533,37 @@ func TestCompactAppProgramTranscriptTextFlushDoesNotMergeOpenLine(t *testing.T) 
 	}
 }
 
+func TestAppProgramTranscriptCompactorPreservesOpenLineAcrossBufferedDetail(t *testing.T) {
+	var compactor appProgramTranscriptCompactor
+	got := ansi.Strip(compactor.compact(strings.Join([]string{
+		"[activity]",
+		"> tool wait_command_output call",
+		"< tool wait_command_output ok",
+	}, "\n")))
+	got += ansi.Strip(compactor.compact("  result: command output for cmd-1\n  next_seq: 5\n"))
+	got += ansi.Strip(compactor.flush())
+
+	if !strings.Contains(got, "  Wait for command output ok\n  output: next_seq: 5") {
+		t.Fatalf("buffered detail flush merged open line:\n%s", got)
+	}
+}
+
+func TestAppProgramTranscriptCompactorPreservesOpenLineAcrossWhitespaceChunk(t *testing.T) {
+	var compactor appProgramTranscriptCompactor
+	got := ansi.Strip(compactor.compact(strings.Join([]string{
+		"[activity]",
+		"> tool wait_command_output call",
+		"< tool wait_command_output ok",
+	}, "\n")))
+	got += ansi.Strip(compactor.compact("   "))
+	got += ansi.Strip(compactor.compact("  result: command output for cmd-1\n  next_seq: 5\n"))
+	got += ansi.Strip(compactor.flush())
+
+	if !strings.Contains(got, "  Wait for command output ok\n  output: next_seq: 5") {
+		t.Fatalf("whitespace chunk before detail flush merged open line:\n%s", got)
+	}
+}
+
 func TestAppProgramTranscriptCompactorStreamsToolErrorTail(t *testing.T) {
 	var compactor appProgramTranscriptCompactor
 	var out strings.Builder
