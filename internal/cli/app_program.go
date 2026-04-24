@@ -25,7 +25,6 @@ const (
 
 var (
 	appProgramBrandStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
-	appProgramTitleStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
 	appProgramMutedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	appProgramDimStyle        = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("240"))
 	appProgramErrorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
@@ -39,7 +38,8 @@ var (
 	appProgramCodeStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("188")).Background(lipgloss.Color("236")).Padding(0, 1)
 	appProgramInlineCodeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("188"))
 	appProgramQuoteStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Italic(true)
-	appProgramComposerStyle   = lipgloss.NewStyle().Background(lipgloss.Color("235")).Padding(0, 1)
+	appProgramComposerStyle   = lipgloss.NewStyle().Background(lipgloss.Color("235")).Padding(1, 1)
+	appProgramStatusMetaStyle = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("242"))
 )
 
 type appProgramTranscriptMsg struct {
@@ -470,18 +470,22 @@ func (m *appProgramModel) bottomStatusView() string {
 	parts := []string{
 		appProgramBrandStyle.Render("Memax Code"),
 		m.phaseLabel(),
-		appProgramTitleStyle.Render("session") + " " + nonEmptyOr(shortSessionID(m.sessionID), "none"),
-		appProgramTitleStyle.Render("workspace") + " " + filepath.Base(m.opts.CWD),
+		appProgramStatusPart("session", nonEmptyOr(shortSessionID(m.sessionID), "none")),
+		appProgramStatusPart("workspace", filepath.Base(m.opts.CWD)),
 	}
 	if m.opts.Model != "" {
-		parts = append(parts, m.opts.Model)
+		parts = append(parts, appProgramStatusMetaStyle.Render(m.opts.Model))
 	}
 	if m.opts.Effort != "" && m.opts.Effort != "auto" {
-		parts = append(parts, "effort "+m.opts.Effort)
+		parts = append(parts, appProgramStatusPart("effort", m.opts.Effort))
 	}
-	parts = append(parts, appProgramTitleStyle.Render("input")+" "+m.composer.statusLine())
-	parts = append(parts, appProgramMutedStyle.Render("F1 help"))
+	parts = append(parts, appProgramStatusPart("input", m.composer.statusLine()))
+	parts = append(parts, appProgramStatusMetaStyle.Render("F1 help"))
 	return strings.Join(parts, appProgramDimStyle.Render("  ·  "))
+}
+
+func appProgramStatusPart(label, value string) string {
+	return appProgramStatusMetaStyle.Render(label + " " + value)
 }
 
 func (m *appProgramModel) phaseLabel() string {
@@ -734,26 +738,49 @@ func (c *appProgramTranscriptCompactor) compactAssistantLine(line string) string
 	if trimmed == "" {
 		return appTranscriptBlankLine
 	}
+	prefix := c.assistantLinePrefix()
 	if strings.HasPrefix(trimmed, "```") {
 		c.assistantInCodeBlock = !c.assistantInCodeBlock
-		return appProgramCodeStyle.Render(trimmed)
+		return prefix + appProgramCodeStyle.Render(trimmed)
 	}
 	if c.assistantInCodeBlock {
-		return appProgramCodeStyle.Render(strings.TrimRight(trimmedRight, "\t "))
+		return prefix + appProgramCodeStyle.Render(strings.TrimRight(trimmedRight, "\t "))
 	}
 	if heading, ok := appMarkdownHeading(trimmed); ok {
-		return appProgramHeadingStyle.Render(appStripMarkdownDelimiters(heading))
+		return prefix + appProgramHeadingStyle.Render(appStripMarkdownDelimiters(heading))
 	}
 	if strings.HasPrefix(trimmed, ">") && !strings.HasPrefix(trimmed, "> tool ") {
-		return appProgramQuoteStyle.Render("│ " + appStripMarkdownDelimiters(strings.TrimSpace(strings.TrimPrefix(trimmed, ">"))))
+		return prefix + appProgramQuoteStyle.Render("│ "+appStripMarkdownDelimiters(strings.TrimSpace(strings.TrimPrefix(trimmed, ">"))))
 	}
 	if indent, bullet, rest, ok := appMarkdownBulletLine(trimmedRight); ok {
-		return appProgramMarkdownStyle.Render(indent+bullet+" ") + appRenderInlineMarkdown(rest)
+		if !c.assistantHasContent && indent == "" && bullet == "•" {
+			return prefix + appRenderInlineMarkdown(rest)
+		}
+		return prefix + appProgramMarkdownStyle.Render(indent+bullet+" ") + appRenderInlineMarkdown(rest)
 	}
 	if strings.HasPrefix(trimmedRight, "    ") || strings.HasPrefix(trimmedRight, "\t") {
-		return appProgramCodeStyle.Render(strings.TrimRight(trimmedRight, "\t "))
+		return prefix + appProgramCodeStyle.Render(strings.TrimRight(trimmedRight, "\t "))
 	}
-	return appRenderInlineMarkdown(trimmedRight)
+	return prefix + appRenderInlineMarkdown(trimmedRight)
+}
+
+func (c *appProgramTranscriptCompactor) assistantLinePrefix() string {
+	if c.assistantHasContent {
+		return "  "
+	}
+	return appProgramMarkdownStyle.Render("• ")
+}
+
+func (c *appProgramTranscriptCompactor) resetSection() {
+	c.section = ""
+	c.skipActivityDetail = false
+	c.assistantInCodeBlock = false
+	c.assistantHasContent = false
+	c.assistantAtLineBoundary = false
+	c.assistantLineBuffer = ""
+	c.outputHasOpenLine = false
+	c.lastActivityTool = ""
+	c.activityDetail = nil
 }
 
 func appRenderInlineMarkdown(text string) string {

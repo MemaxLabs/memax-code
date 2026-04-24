@@ -160,6 +160,42 @@ func TestAppProgramStructuredEventsRenderWithoutTranscriptParsing(t *testing.T) 
 	}
 }
 
+func TestAppProgramStructuredEventsStartNewAssistantBlocksAfterActivity(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{
+		Kind: memaxagent.EventAssistant,
+		Message: &model.Message{Role: model.RoleAssistant, Content: []model.ContentBlock{
+			{Type: model.ContentText, Text: "first reply\n"},
+		}},
+	})
+	m.appendEvent(memaxagent.Event{
+		Kind:    memaxagent.EventToolUse,
+		ToolUse: &model.ToolUse{Name: "workspace_list_files"},
+	})
+	m.appendEvent(memaxagent.Event{
+		Kind: memaxagent.EventAssistant,
+		Message: &model.Message{Role: model.RoleAssistant, Content: []model.ContentBlock{
+			{Type: model.ContentText, Text: "second reply\n"},
+		}},
+	})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"• first reply",
+		"• workspace_list_files call",
+		"• second reply",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("structured transcript missing fresh assistant block %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "\n  second reply") {
+		t.Fatalf("second assistant reply was rendered as continuation:\n%s", got)
+	}
+}
+
 func TestAppProgramStructuredCommandAuxRowsKeepIdentity(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
@@ -504,6 +540,42 @@ func TestAppProgramViewUsesQuietIdleStatus(t *testing.T) {
 	}
 }
 
+func TestAppProgramComposerViewUsesVerticalPadding(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	got := ansi.Strip(model.composerView(80))
+	lines := strings.Split(got, "\n")
+	if len(lines) < 3 {
+		t.Fatalf("composer view lines = %d, want vertical padding around input:\n%q", len(lines), got)
+	}
+	if strings.TrimSpace(lines[0]) != "" {
+		t.Fatalf("composer top padding = %q, want blank padding line:\n%q", lines[0], got)
+	}
+	if strings.TrimSpace(lines[len(lines)-1]) != "" {
+		t.Fatalf("composer bottom padding = %q, want blank padding line:\n%q", lines[len(lines)-1], got)
+	}
+	if !strings.Contains(got, "›") {
+		t.Fatalf("composer prompt missing:\n%q", got)
+	}
+}
+
+func TestAppProgramBottomStatusDimsMetadata(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(previousProfile)
+
+	model := newAppProgramModel(context.Background(), options{CWD: ".", Model: "gpt-5.4"}, nil)
+	raw := model.bottomStatusView()
+	if !strings.Contains(raw, "\x1b[2;") && !strings.Contains(raw, "\x1b[2m") {
+		t.Fatalf("bottom status metadata did not use faint styling:\n%q", raw)
+	}
+	stripped := ansi.Strip(raw)
+	for _, want := range []string{"Memax Code", "session none", "workspace .", "gpt-5.4", "input draft: inactive"} {
+		if !strings.Contains(stripped, want) {
+			t.Fatalf("bottom status missing %q:\n%s", want, stripped)
+		}
+	}
+}
+
 func TestAppProgramViewShowsActivityOnlyWhileRunning(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.width = 100
@@ -754,6 +826,22 @@ func TestAppProgramTranscriptPreservesWhitespaceOnlyAssistantEvents(t *testing.T
 	}
 }
 
+func TestAppProgramTranscriptAvoidsDoubleDotForLeadingAssistantBullet(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{}
+
+	model.appendTranscript("[assistant]\n- first action\n- second action\n")
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(got, "• first action\n  • second action") {
+		t.Fatalf("assistant leading bullet was not rendered with message dot plus nested continuation:\n%s", got)
+	}
+	if strings.Contains(got, "• • first action") {
+		t.Fatalf("assistant leading bullet rendered a double dot:\n%s", got)
+	}
+}
+
 func TestAppProgramTranscriptSeparatesCompleteLineBeforePartial(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.transcript = appTranscriptTail{}
@@ -767,7 +855,7 @@ func TestAppProgramTranscriptSeparatesCompleteLineBeforePartial(t *testing.T) {
 	}
 
 	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
-	if !strings.Contains(got, "first sentence.\nThis is Memax Code.") {
+	if !strings.Contains(got, "• first sentence.\n  This is Memax Code.") {
 		t.Fatalf("complete line glued to following partial:\n%s", got)
 	}
 	if strings.Contains(got, "sentence.This") || strings.Contains(got, "**Memax") {
@@ -785,7 +873,7 @@ func TestAppProgramTranscriptPreservesStreamedAssistantBlankLines(t *testing.T) 
 	model.appendTranscript("paragraph two\n")
 
 	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
-	if !strings.Contains(got, "paragraph one\n\nparagraph two") {
+	if !strings.Contains(got, "• paragraph one\n\n  paragraph two") {
 		t.Fatalf("assistant paragraph break was not preserved:\n%q", got)
 	}
 }
@@ -824,7 +912,7 @@ func TestAppProgramTranscriptPreservesSplitAssistantBlankLines(t *testing.T) {
 			}
 
 			got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
-			if !strings.Contains(got, "paragraph one\n\nparagraph two") {
+			if !strings.Contains(got, "• paragraph one\n\n  paragraph two") {
 				t.Fatalf("assistant split paragraph break was not preserved:\n%q", got)
 			}
 		})
@@ -865,8 +953,8 @@ func TestAppProgramTranscriptDropsLeadingAssistantBlankLines(t *testing.T) {
 			if strings.HasPrefix(got, "\n") {
 				t.Fatalf("assistant transcript gained leading blank:\n%q", got)
 			}
-			if got != "foo" {
-				t.Fatalf("assistant transcript = %q, want %q", got, "foo")
+			if got != "• foo" {
+				t.Fatalf("assistant transcript = %q, want %q", got, "• foo")
 			}
 		})
 	}
@@ -889,7 +977,7 @@ func TestCompactAppProgramTranscriptTextKeepsDeepIndentedDashAsCode(t *testing.T
 
 func TestCompactAppProgramTranscriptTextDoesNotDuplicateTrailingNewline(t *testing.T) {
 	var compactor appProgramTranscriptCompactor
-	if got, want := compactor.compact("[assistant]\nhello\n"), "hello\n"; ansi.Strip(got) != want {
+	if got, want := compactor.compact("[assistant]\nhello\n"), "• hello\n"; ansi.Strip(got) != want {
 		t.Fatalf("compact trailing newline = %q, want %q", ansi.Strip(got), want)
 	}
 }

@@ -93,6 +93,7 @@ func (f *appTranscriptFormatter) appendActivityLine(line string) {
 		return
 	}
 	f.flushTranscriptPartial()
+	f.compactor.resetSection()
 	f.queuePrints(f.transcript.appendStandaloneLine(line))
 }
 
@@ -175,6 +176,7 @@ func (f *appTranscriptFormatter) appendLocalTranscriptLine(kind, text string) {
 		return
 	}
 	f.queuePrints(f.transcript.append(f.compactor.flush()))
+	f.compactor.resetSection()
 	f.queuePrints(f.transcript.appendStandaloneLine(compactAppProgramLocalLine(kind, text)))
 }
 
