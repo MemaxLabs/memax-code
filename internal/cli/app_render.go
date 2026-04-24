@@ -8,7 +8,6 @@ import (
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
-	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -303,25 +302,6 @@ func (t *appTranscriptTail) effectiveLimit() int {
 		return t.limit
 	}
 	return maxAppTranscriptLines
-}
-
-func appTranscriptVisualLineCount(lines []string, width int) int {
-	if width < 1 {
-		width = 1
-	}
-	// Bubble's viewport scrolls logical lines, while the terminal wraps visual
-	// rows. Use display width here only to reserve enough vertical space for
-	// short transcripts before they reach the scrollable viewport path.
-	count := 0
-	for _, line := range lines {
-		lineWidth := ansi.StringWidth(line)
-		if lineWidth <= 0 {
-			count++
-			continue
-		}
-		count += (lineWidth + width - 1) / width
-	}
-	return count
 }
 
 func fitFrameHeight(lines []string, height int) []string {

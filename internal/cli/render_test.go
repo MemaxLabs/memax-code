@@ -532,18 +532,6 @@ func TestAppTranscriptTailStandaloneLineFlushesPartial(t *testing.T) {
 	}
 }
 
-func TestAppTranscriptVisualLineCountUsesDisplayWidth(t *testing.T) {
-	got := appTranscriptVisualLineCount([]string{
-		"1234567890",
-		"\x1b[31m123456\x1b[0m",
-		"",
-	}, 4)
-	want := 6
-	if got != want {
-		t.Fatalf("visual line count = %d, want %d", got, want)
-	}
-}
-
 func TestAppRenderNormalizesCarriageReturnTranscriptChunks(t *testing.T) {
 	renderer := &appRenderState{}
 	renderer.transcriptHeaderStripped = true

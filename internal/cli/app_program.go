@@ -58,7 +58,7 @@ var appProgramKeys = appProgramKeyMap{
 	),
 	Newline: key.NewBinding(
 		key.WithKeys("shift+enter", "alt+enter"),
-		key.WithHelp("Shift/Alt+Enter", "newline"),
+		key.WithHelp("\\+Enter or Shift/Alt+Enter", "newline"),
 	),
 	Help: key.NewBinding(
 		key.WithKeys("f1"),
@@ -112,6 +112,7 @@ type appProgramModel struct {
 	compactor  appProgramTranscriptCompactor
 	pending    []string
 	spinner    int
+	tickArmed  bool
 }
 
 func newAppProgramModel(ctx context.Context, opts options, runPrompt interactivePromptRunner) *appProgramModel {
@@ -173,7 +174,7 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 	case tea.KeyMsg:
 		if cmd, handled := m.updateKey(msg); handled {
-			return m, tea.Batch(cmd, m.flushPrints())
+			return m, m.withFlush(cmd)
 		}
 	case appProgramTranscriptMsg:
 		m.appendTranscript(msg.text)
@@ -186,6 +187,7 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusLine = strings.TrimSpace(msg.text)
 		}
 	case appProgramTickMsg:
+		m.tickArmed = false
 		if !m.running {
 			return m, nil
 		}
@@ -196,7 +198,7 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	m.syncComposerDraftFromInput()
-	return m, tea.Batch(cmd, m.flushPrints())
+	return m, m.withFlush(cmd)
 }
 
 func (m *appProgramModel) updateKey(msg tea.KeyMsg) (tea.Cmd, bool) {
@@ -218,6 +220,10 @@ func (m *appProgramModel) updateKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return nil, true
 	case "enter", "ctrl+m", "ctrl+j":
 		if m.consumeTrailingBackslashForNewline() {
+			return nil, true
+		}
+		if m.composer.draftActive {
+			m.insertInputNewline()
 			return nil, true
 		}
 		return m.submitCurrentInput(), true
@@ -391,14 +397,25 @@ func (m *appProgramModel) flushPrints() tea.Cmd {
 	}
 	lines := append([]string(nil), m.pending...)
 	m.pending = nil
-	cmds := make([]tea.Cmd, 0, len(lines))
-	for _, line := range lines {
-		cmds = append(cmds, tea.Println(line))
+	return tea.Println(strings.Join(lines, "\n"))
+}
+
+func (m *appProgramModel) withFlush(cmd tea.Cmd) tea.Cmd {
+	flush := m.flushPrints()
+	if flush == nil {
+		return cmd
 	}
-	return tea.Batch(cmds...)
+	if cmd == nil {
+		return flush
+	}
+	return tea.Sequence(flush, cmd)
 }
 
 func (m *appProgramModel) tick() tea.Cmd {
+	if m.tickArmed {
+		return nil
+	}
+	m.tickArmed = true
 	return tea.Tick(appShellTickInterval, func(t time.Time) tea.Msg {
 		return appProgramTickMsg(t)
 	})

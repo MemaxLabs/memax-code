@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
@@ -89,6 +90,27 @@ func TestAppProgramBackslashEnterInsertsNewline(t *testing.T) {
 	}
 	if got, want := model.input.Height(), 2; got != want {
 		t.Fatalf("input height = %d, want %d", got, want)
+	}
+}
+
+func TestAppProgramEnterAddsDraftLineUntilSubmit(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.composer.start("")
+	model.syncComposerView()
+	model.input.SetValue("line one")
+
+	cmd, handled := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if !handled {
+		t.Fatal("Enter was not handled")
+	}
+	if cmd != nil {
+		t.Fatalf("Enter in draft returned command, want nil")
+	}
+	if got, want := model.input.Value(), "line one\n"; got != want {
+		t.Fatalf("input value = %q, want %q", got, want)
+	}
+	if !model.composer.draftActive {
+		t.Fatal("draft became inactive after Enter")
 	}
 }
 
