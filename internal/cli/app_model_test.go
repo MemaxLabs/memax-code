@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -79,6 +80,26 @@ func TestAppProgramComposerDefaultsToOneLineAndExpandsForMultiline(t *testing.T)
 	model.resize()
 	if got, want := model.input.Height(), 3; got != want {
 		t.Fatalf("multiline input height = %d, want %d", got, want)
+	}
+}
+
+func TestAppProgramComposerShrinksAfterDeletion(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.width = 80
+	model.height = 24
+	model.input.SetValue("line one\nline two\nline three")
+	model.input.CursorEnd()
+	model.resize()
+
+	if got, want := model.input.Height(), 3; got != want {
+		t.Fatalf("expanded input height = %d, want %d", got, want)
+	}
+	for strings.Contains(model.input.Value(), "\n") {
+		updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		model = updated.(*appProgramModel)
+	}
+	if got, want := model.input.Height(), 1; got != want {
+		t.Fatalf("shrunk input height = %d, want %d", got, want)
 	}
 }
 
@@ -297,6 +318,146 @@ func TestAppProgramCtrlCFlushesToolErrorTail(t *testing.T) {
 	}
 }
 
+func TestAppProgramCtrlCCancelsRunningPrompt(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	canceled := false
+	model.running = true
+	model.runCancel = func() { canceled = true }
+
+	cmd, handled := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if !handled {
+		t.Fatal("ctrl+c was not handled")
+	}
+	if cmd != nil {
+		t.Fatal("ctrl+c while running returned a quit command")
+	}
+	if !canceled {
+		t.Fatal("ctrl+c did not cancel the active run")
+	}
+	if model.statusLine != "canceling" {
+		t.Fatalf("statusLine = %q, want canceling", model.statusLine)
+	}
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(got, "canceling current run") {
+		t.Fatalf("cancel transcript missing:\n%s", got)
+	}
+	if strings.Contains(got, "bye") {
+		t.Fatalf("running ctrl+c should not quit:\n%s", got)
+	}
+}
+
+func TestAppProgramSecondCtrlCWhileCancelingQuits(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	cancelCount := 0
+	model.running = true
+	model.canceling = true
+	model.statusLine = "canceling"
+	model.runCancel = func() { cancelCount++ }
+
+	cmd, handled := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if !handled {
+		t.Fatal("ctrl+c was not handled")
+	}
+	if cmd == nil {
+		t.Fatal("second ctrl+c while canceling did not return a quit command")
+	}
+	if cancelCount != 1 {
+		t.Fatalf("cancel count = %d, want 1", cancelCount)
+	}
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(got, "force quit") {
+		t.Fatalf("force quit transcript missing:\n%s", got)
+	}
+}
+
+func TestAppProgramFinishPromptCanceledDoesNotRecordError(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	canceled := false
+	model.running = true
+	model.canceling = true
+	model.statusLine = "canceling"
+	model.runCancel = func() { canceled = true }
+
+	model.finishPrompt(appProgramPromptDoneMsg{err: context.Canceled})
+
+	if !canceled {
+		t.Fatal("finishPrompt did not release the run cancel function")
+	}
+	if model.running {
+		t.Fatal("model still running after cancellation")
+	}
+	if model.canceling {
+		t.Fatal("model still canceling after cancellation")
+	}
+	if model.firstErr != nil {
+		t.Fatalf("firstErr = %v, want nil", model.firstErr)
+	}
+	if model.lastError != "" {
+		t.Fatalf("lastError = %q, want empty", model.lastError)
+	}
+	if model.statusLine != "idle" {
+		t.Fatalf("statusLine = %q, want idle", model.statusLine)
+	}
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(got, "canceled") {
+		t.Fatalf("cancel transcript missing:\n%s", got)
+	}
+}
+
+func TestAppProgramStartPromptRejectsReentry(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	oldCancel := func() {}
+	model.running = true
+	model.runCancel = oldCancel
+
+	cmd := model.startPrompt("second prompt")
+
+	if cmd != nil {
+		t.Fatal("startPrompt returned a command while already running")
+	}
+	if model.runCancel == nil {
+		t.Fatal("startPrompt cleared existing run cancel")
+	}
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(got, "run already active") {
+		t.Fatalf("reentry warning missing:\n%s", got)
+	}
+}
+
+func TestAppProgramViewUsesQuietIdleStatus(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: ".", Model: "gpt-5.4"}, nil)
+	model.width = 100
+	view := ansi.Strip(model.View())
+
+	if strings.Contains(view, "Ctrl+C") || strings.Contains(view, "Enter/Ctrl+S") {
+		t.Fatalf("idle view leaked verbose key help:\n%s", view)
+	}
+	if !strings.Contains(view, "Memax Code") || !strings.Contains(view, "input draft: inactive") {
+		t.Fatalf("idle status missing expected compact status:\n%s", view)
+	}
+	if !strings.Contains(view, "F1 help") {
+		t.Fatalf("idle status missing compact help affordance:\n%s", view)
+	}
+	if strings.Contains(view, "thinking") {
+		t.Fatalf("idle view should not show activity line:\n%s", view)
+	}
+}
+
+func TestAppProgramViewShowsActivityOnlyWhileRunning(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.width = 100
+	model.running = true
+	view := ansi.Strip(model.View())
+
+	if !strings.Contains(view, "thinking") {
+		t.Fatalf("running view missing thinking activity:\n%s", view)
+	}
+}
+
 var bareANSIFragmentRE = regexp.MustCompile(`(^|[^\x1b])\[[0-9;]*m`)
 
 func TestCompactAppProgramTranscriptTextDoesNotRewriteAssistantContent(t *testing.T) {
@@ -337,11 +498,12 @@ func TestCompactAppProgramTranscriptTextFormatsAssistantMarkdown(t *testing.T) {
 	got := ansi.Strip(compactAppProgramTranscriptText(strings.Join([]string{
 		"[assistant]",
 		"# Plan",
-		"paragraph one",
+		"paragraph **one** with `code`",
+		"paragraph **strong `code` rest** done",
 		"",
 		"paragraph two",
 		"#123 is not a heading",
-		"- inspect the repo",
+		"- inspect the **repo**",
 		"    - nested item",
 		"  2. nested ordered",
 		"1. run focused tests",
@@ -353,7 +515,9 @@ func TestCompactAppProgramTranscriptTextFormatsAssistantMarkdown(t *testing.T) {
 
 	for _, want := range []string{
 		"Plan",
-		"paragraph one\n\nparagraph two",
+		"paragraph one with code",
+		"paragraph strong code rest done",
+		"paragraph two",
 		"#123 is not a heading",
 		"• inspect the repo",
 		"    • nested item",
@@ -366,6 +530,39 @@ func TestCompactAppProgramTranscriptTextFormatsAssistantMarkdown(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("markdown transcript missing %q:\n%s", want, got)
 		}
+	}
+	for _, unwanted := range []string{"###", "**", "with `code`"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("markdown transcript leaked marker %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestAppProgramInlineMarkdownHandlesUnclosedMarkers(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{in: "**unclosed", want: "**unclosed"},
+		{in: "foo `", want: "foo `"},
+		{in: "**a** **b", want: "a **b"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			done := make(chan string, 1)
+			go func() {
+				done <- ansi.Strip(appRenderInlineMarkdown(tt.in))
+			}()
+			select {
+			case got := <-done:
+				if got != tt.want {
+					t.Fatalf("rendered = %q, want %q", got, tt.want)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("appRenderInlineMarkdown did not return for %q", tt.in)
+			}
+		})
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -13,8 +14,6 @@ import (
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -25,63 +24,23 @@ const (
 )
 
 var (
-	appProgramBrandStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
-	appProgramTitleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
-	appProgramMutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	appProgramDimStyle      = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("240"))
-	appProgramErrorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	appProgramAccentStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
-	appProgramSuccessStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
-	appProgramUserStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236")).Padding(0, 1)
-	appProgramToolStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
-	appProgramMarkdownStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	appProgramHeadingStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
-	appProgramCodeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("188")).Background(lipgloss.Color("236")).Padding(0, 1)
-	appProgramQuoteStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Italic(true)
-	appProgramComposerStyle = lipgloss.NewStyle().Background(lipgloss.Color("235")).Padding(0, 1)
+	appProgramBrandStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
+	appProgramTitleStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	appProgramMutedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	appProgramDimStyle        = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("240"))
+	appProgramErrorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	appProgramAccentStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
+	appProgramSuccessStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
+	appProgramUserStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236")).Padding(0, 1)
+	appProgramToolStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
+	appProgramMarkdownStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	appProgramStrongStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	appProgramHeadingStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
+	appProgramCodeStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("188")).Background(lipgloss.Color("236")).Padding(0, 1)
+	appProgramInlineCodeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("188"))
+	appProgramQuoteStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Italic(true)
+	appProgramComposerStyle   = lipgloss.NewStyle().Background(lipgloss.Color("235")).Padding(0, 1)
 )
-
-type appProgramKeyMap struct {
-	Send    key.Binding
-	Newline key.Binding
-	Help    key.Binding
-	Clear   key.Binding
-	Quit    key.Binding
-}
-
-func (m appProgramKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{m.Send, m.Newline, m.Help, m.Quit}
-}
-
-func (m appProgramKeyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{
-		{m.Send, m.Newline, m.Clear},
-		{m.Help, m.Quit},
-	}
-}
-
-var appProgramKeys = appProgramKeyMap{
-	Send: key.NewBinding(
-		key.WithKeys("enter", "ctrl+s"),
-		key.WithHelp("Enter/Ctrl+S", "send"),
-	),
-	Newline: key.NewBinding(
-		key.WithKeys("shift+enter", "alt+enter"),
-		key.WithHelp("\\+Enter or Shift/Alt+Enter", "newline"),
-	),
-	Help: key.NewBinding(
-		key.WithKeys("f1"),
-		key.WithHelp("F1", "help"),
-	),
-	Clear: key.NewBinding(
-		key.WithKeys("esc"),
-		key.WithHelp("Esc", "clear"),
-	),
-	Quit: key.NewBinding(
-		key.WithKeys("ctrl+c"),
-		key.WithHelp("Ctrl+C", "quit"),
-	),
-}
 
 type appProgramTranscriptMsg struct {
 	text string
@@ -112,8 +71,7 @@ type appProgramModel struct {
 	history   persistentPromptHistory
 	composer  interactiveComposer
 	input     textarea.Model
-	help      help.Model
-	keys      appProgramKeyMap
+	runCancel context.CancelFunc
 	appTranscriptFormatter
 	width      int
 	height     int
@@ -121,6 +79,7 @@ type appProgramModel struct {
 	statusLine string
 	lastError  string
 	running    bool
+	canceling  bool
 	showHelp   bool
 	firstErr   error
 	spinner    int
@@ -132,9 +91,6 @@ func newAppProgramModel(ctx context.Context, opts options, runPrompt interactive
 }
 
 func newAppProgramModelWithEvents(ctx context.Context, opts options, runPrompt interactivePromptRunner, runEvents interactiveEventPromptRunner) *appProgramModel {
-	helpModel := help.New()
-	helpModel.ShowAll = false
-
 	model := &appProgramModel{
 		ctx:        ctx,
 		opts:       opts,
@@ -142,8 +98,6 @@ func newAppProgramModelWithEvents(ctx context.Context, opts options, runPrompt i
 		runEvents:  runEvents,
 		history:    newPersistentPromptHistory(opts.HistoryFile),
 		input:      newAppProgramTextarea(),
-		help:       helpModel,
-		keys:       appProgramKeys,
 		statusLine: "idle",
 	}
 	model.appendLocalTranscriptLine("dim", "Welcome. Type a task or /help.")
@@ -218,15 +172,37 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.tick()
 	}
 
+	beforeInput := m.input.Value()
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	m.syncComposerDraftFromInput()
+	if m.input.Value() != beforeInput {
+		m.resize()
+	}
 	return m, m.withFlush(cmd)
 }
 
 func (m *appProgramModel) updateKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	switch msg.String() {
 	case "ctrl+c":
+		if m.running {
+			if m.canceling {
+				if m.runCancel != nil {
+					m.runCancel()
+				}
+				m.flushTranscriptPartial()
+				m.appendLocalTranscriptLine("dim", "force quit")
+				return tea.Quit, true
+			}
+			if m.runCancel != nil {
+				m.runCancel()
+			}
+			m.lastError = ""
+			m.canceling = true
+			m.statusLine = "canceling"
+			m.appendLocalTranscriptLine("dim", "canceling current run")
+			return nil, true
+		}
 		m.flushTranscriptPartial()
 		m.appendLocalTranscriptLine("dim", "bye")
 		return tea.Quit, true
@@ -308,10 +284,17 @@ func (m *appProgramModel) handleCommand(text string) tea.Cmd {
 }
 
 func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
+	if m.running {
+		m.appendLocalTranscriptLine("dim", "run already active; press Ctrl+C to cancel")
+		return nil
+	}
 	if (m.runPrompt == nil && m.runEvents == nil) || m.program == nil {
 		return nil
 	}
+	runCtx, cancel := context.WithCancel(m.ctx)
 	m.running = true
+	m.canceling = false
+	m.runCancel = cancel
 	m.lastError = ""
 	m.statusLine = "running"
 	m.appendLocalTranscriptLine("user", "› "+strings.ReplaceAll(strings.TrimSpace(prompt), "\n", " "))
@@ -330,12 +313,12 @@ func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
 		var sessionID string
 		var err error
 		if m.runEvents != nil {
-			sessionID, err = m.runEvents(m.ctx, opts, func(event memaxagent.Event) {
+			sessionID, err = m.runEvents(runCtx, opts, func(event memaxagent.Event) {
 				send(appProgramEventMsg{event: event})
 			})
 		} else {
 			writer := &appProgramTranscriptWriter{send: send}
-			sessionID, err = runPrompt(m.ctx, writer, opts)
+			sessionID, err = runPrompt(runCtx, writer, opts)
 		}
 		return appProgramPromptDoneMsg{
 			sessionID: sessionID,
@@ -348,6 +331,11 @@ func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
 
 func (m *appProgramModel) finishPrompt(msg appProgramPromptDoneMsg) {
 	m.running = false
+	m.canceling = false
+	if m.runCancel != nil {
+		m.runCancel()
+		m.runCancel = nil
+	}
 	if strings.TrimSpace(msg.sessionID) != "" {
 		if m.sessionID != msg.sessionID {
 			m.appendLocalTranscriptLine("dim", "session: "+msg.sessionID)
@@ -355,6 +343,13 @@ func (m *appProgramModel) finishPrompt(msg appProgramPromptDoneMsg) {
 		m.sessionID = msg.sessionID
 	}
 	if msg.err != nil {
+		if errors.Is(msg.err, context.Canceled) || errors.Is(msg.err, contextCanceled) {
+			m.lastError = ""
+			m.statusLine = "idle"
+			m.flushTranscriptPartial()
+			m.appendLocalTranscriptLine("dim", "canceled")
+			return
+		}
 		m.lastError = msg.err.Error()
 		m.statusLine = "error"
 		m.flushTranscriptPartial()
@@ -434,9 +429,6 @@ func (m *appProgramModel) resize() {
 		width = defaultAppShellWidth
 	}
 	composerHeight := max(appProgramMinComposer, min(8, strings.Count(m.input.Value(), "\n")+1))
-	if m.showHelp {
-		composerHeight = max(composerHeight, 4)
-	}
 	m.input.SetWidth(max(12, width-2))
 	m.input.SetHeight(composerHeight)
 }
@@ -447,23 +439,34 @@ func (m *appProgramModel) View() string {
 		width = defaultAppShellWidth
 	}
 
-	status := m.statusView()
-	composer := m.composerView(width)
-	footer := appProgramDimStyle.Render(m.help.View(m.keys))
-	return lipgloss.JoinVertical(lipgloss.Left, status, composer, footer)
+	rows := make([]string, 0, 4)
+	if status := m.activityStatusView(); status != "" {
+		rows = append(rows, status)
+	}
+	rows = append(rows, m.composerView(width))
+	rows = append(rows, m.bottomStatusView())
+	if m.showHelp {
+		rows = append(rows, m.helpView())
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
-func (m *appProgramModel) phaseLabel() string {
-	if m.lastError != "" {
-		return appProgramErrorStyle.Render("error")
-	}
+func (m *appProgramModel) activityStatusView() string {
 	if m.running {
-		return appProgramAccentStyle.Render("working")
+		label := "thinking"
+		if m.canceling {
+			label = "canceling"
+		}
+		frame := liveStatusFrames[m.spinner%len(liveStatusFrames)]
+		return appProgramAccentStyle.Render(frame + " " + label)
 	}
-	return appProgramSuccessStyle.Render(m.statusLine)
+	if m.lastError != "" {
+		return appProgramErrorStyle.Render("! " + m.lastError)
+	}
+	return ""
 }
 
-func (m *appProgramModel) statusView() string {
+func (m *appProgramModel) bottomStatusView() string {
 	parts := []string{
 		appProgramBrandStyle.Render("Memax Code"),
 		m.phaseLabel(),
@@ -476,20 +479,26 @@ func (m *appProgramModel) statusView() string {
 	if m.opts.Effort != "" && m.opts.Effort != "auto" {
 		parts = append(parts, "effort "+m.opts.Effort)
 	}
-	if m.running {
-		frame := liveStatusFrames[m.spinner%len(liveStatusFrames)]
-		parts = append(parts, appProgramAccentStyle.Render(frame+" thinking"))
-	} else {
-		parts = append(parts, appProgramTitleStyle.Render("input")+" "+m.composer.statusLine())
-	}
+	parts = append(parts, appProgramTitleStyle.Render("input")+" "+m.composer.statusLine())
+	parts = append(parts, appProgramMutedStyle.Render("F1 help"))
+	return strings.Join(parts, appProgramDimStyle.Render("  ·  "))
+}
+
+func (m *appProgramModel) phaseLabel() string {
 	if m.lastError != "" {
-		parts = append(parts, appProgramErrorStyle.Render("error "+m.lastError))
+		return appProgramErrorStyle.Render("error")
 	}
-	lines := []string{strings.Join(parts, appProgramDimStyle.Render("  ·  "))}
-	if m.showHelp {
-		lines = append(lines, appProgramMutedStyle.Render("/help /status /session /pick /show /sessions /resume /new /draft /submit /cancel /quit"))
+	if m.running {
+		if m.canceling {
+			return appProgramAccentStyle.Render("canceling")
+		}
+		return appProgramAccentStyle.Render("working")
 	}
-	return strings.Join(lines, "\n")
+	return appProgramSuccessStyle.Render(m.statusLine)
+}
+
+func (m *appProgramModel) helpView() string {
+	return appProgramMutedStyle.Render("/help /status /session /pick /show /sessions /resume /new /draft /submit /cancel /quit")
 }
 
 func (m *appProgramModel) composerView(width int) string {
@@ -708,18 +717,90 @@ func (c *appProgramTranscriptCompactor) compactAssistantLine(line string) string
 		return appProgramCodeStyle.Render(strings.TrimRight(trimmedRight, "\t "))
 	}
 	if heading, ok := appMarkdownHeading(trimmed); ok {
-		return appProgramHeadingStyle.Render(heading)
+		return appProgramHeadingStyle.Render(appStripMarkdownDelimiters(heading))
 	}
 	if strings.HasPrefix(trimmed, ">") && !strings.HasPrefix(trimmed, "> tool ") {
-		return appProgramQuoteStyle.Render("│ " + strings.TrimSpace(strings.TrimPrefix(trimmed, ">")))
+		return appProgramQuoteStyle.Render("│ " + appStripMarkdownDelimiters(strings.TrimSpace(strings.TrimPrefix(trimmed, ">"))))
 	}
 	if indent, bullet, rest, ok := appMarkdownBulletLine(trimmedRight); ok {
-		return appProgramMarkdownStyle.Render(indent + bullet + " " + rest)
+		return appProgramMarkdownStyle.Render(indent+bullet+" ") + appRenderInlineMarkdown(rest)
 	}
 	if strings.HasPrefix(trimmedRight, "    ") || strings.HasPrefix(trimmedRight, "\t") {
 		return appProgramCodeStyle.Render(strings.TrimRight(trimmedRight, "\t "))
 	}
-	return appProgramMarkdownStyle.Render(trimmedRight)
+	return appRenderInlineMarkdown(trimmedRight)
+}
+
+func appRenderInlineMarkdown(text string) string {
+	return appRenderInlineMarkdownWithBase(text, appProgramMarkdownStyle)
+}
+
+func appRenderInlineMarkdownWithBase(text string, base lipgloss.Style) string {
+	var out strings.Builder
+	for text != "" {
+		if strings.HasPrefix(text, "**") {
+			if end := strings.Index(text[2:], "**"); end >= 0 {
+				inner := text[2 : 2+end]
+				if strings.TrimSpace(inner) == "" {
+					out.WriteString(base.Render("**" + inner + "**"))
+				} else {
+					out.WriteString(appRenderInlineMarkdownWithBase(inner, appProgramStrongStyle))
+				}
+				text = text[2+end+2:]
+				continue
+			}
+		}
+		if strings.HasPrefix(text, "`") {
+			if end := strings.Index(text[1:], "`"); end >= 0 {
+				inner := text[1 : 1+end]
+				if strings.TrimSpace(inner) == "" {
+					out.WriteString(base.Render("`" + inner + "`"))
+				} else {
+					out.WriteString(appProgramInlineCodeStyle.Render(inner))
+				}
+				text = text[1+end+1:]
+				continue
+			}
+		}
+		next := appNextInlineMarkdownMarker(text)
+		if next < 0 {
+			out.WriteString(base.Render(text))
+			break
+		}
+		if next == 0 {
+			if strings.HasPrefix(text, "**") {
+				out.WriteString(base.Render("**"))
+				text = text[2:]
+			} else {
+				out.WriteString(base.Render(text[:1]))
+				text = text[1:]
+			}
+			continue
+		}
+		out.WriteString(base.Render(text[:next]))
+		text = text[next:]
+	}
+	return out.String()
+}
+
+func appNextInlineMarkdownMarker(text string) int {
+	code := strings.Index(text, "`")
+	strong := strings.Index(text, "**")
+	switch {
+	case code < 0:
+		return strong
+	case strong < 0:
+		return code
+	case code < strong:
+		return code
+	default:
+		return strong
+	}
+}
+
+func appStripMarkdownDelimiters(text string) string {
+	text = strings.ReplaceAll(text, "**", "")
+	return strings.ReplaceAll(text, "`", "")
 }
 
 func appMarkdownHeading(line string) (heading string, ok bool) {
