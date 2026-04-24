@@ -226,6 +226,8 @@ type appTranscriptTail struct {
 	limit   int
 }
 
+const appTranscriptBlankLine = "\x00memax-transcript-blank-line\x00"
+
 func (t *appTranscriptTail) append(text string) []string {
 	if text == "" {
 		return nil
@@ -241,7 +243,7 @@ func (t *appTranscriptTail) append(text string) []string {
 	appended := make([]string, 0, len(parts))
 	for _, line := range parts {
 		if t.appendLine(line) {
-			appended = append(appended, line)
+			appended = append(appended, displayTranscriptLine(line))
 		}
 	}
 	return appended
@@ -252,7 +254,7 @@ func (t *appTranscriptTail) appendStandaloneLine(line string) []string {
 	// stream. Flush first so local UI rows never glue onto streamed text.
 	appended := t.flushPartial()
 	if t.appendLine(line) {
-		appended = append(appended, line)
+		appended = append(appended, displayTranscriptLine(line))
 	}
 	return appended
 }
@@ -271,6 +273,14 @@ func (t *appTranscriptTail) flushPartial() []string {
 }
 
 func (t *appTranscriptTail) appendLine(line string) bool {
+	if line == appTranscriptBlankLine {
+		t.entries = append(t.entries, "")
+		limit := t.effectiveLimit()
+		if len(t.entries) > limit {
+			t.entries = append([]string(nil), t.entries[len(t.entries)-limit:]...)
+		}
+		return true
+	}
 	if strings.TrimSpace(line) == "" {
 		return false
 	}
@@ -280,6 +290,13 @@ func (t *appTranscriptTail) appendLine(line string) bool {
 		t.entries = append([]string(nil), t.entries[len(t.entries)-limit:]...)
 	}
 	return true
+}
+
+func displayTranscriptLine(line string) string {
+	if line == appTranscriptBlankLine {
+		return ""
+	}
+	return line
 }
 
 func (t *appTranscriptTail) lines(limit int) []string {

@@ -266,9 +266,13 @@ func TestCompactAppProgramTranscriptTextFormatsAssistantMarkdown(t *testing.T) {
 	got := ansi.Strip(compactAppProgramTranscriptText(strings.Join([]string{
 		"[assistant]",
 		"# Plan",
+		"paragraph one",
+		"",
+		"paragraph two",
 		"#123 is not a heading",
 		"- inspect the repo",
 		"    - nested item",
+		"  2. nested ordered",
 		"1. run focused tests",
 		"> note from context",
 		"```go",
@@ -278,9 +282,11 @@ func TestCompactAppProgramTranscriptTextFormatsAssistantMarkdown(t *testing.T) {
 
 	for _, want := range []string{
 		"Plan",
+		"paragraph one\n\nparagraph two",
 		"#123 is not a heading",
 		"• inspect the repo",
-		"• nested item",
+		"    • nested item",
+		"  2. nested ordered",
 		"1. run focused tests",
 		"│ note from context",
 		"```go",
@@ -289,6 +295,21 @@ func TestCompactAppProgramTranscriptTextFormatsAssistantMarkdown(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("markdown transcript missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestAppProgramTranscriptPreservesStreamedAssistantBlankLines(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{}
+
+	model.appendTranscript("[assistant]\nparagraph one")
+	model.appendTranscript("\n\n")
+	model.appendTranscript("paragraph two\n")
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(got, "paragraph one\n\nparagraph two") {
+		t.Fatalf("assistant paragraph break was not preserved:\n%q", got)
 	}
 }
 

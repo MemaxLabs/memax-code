@@ -363,10 +363,11 @@ func (m *appProgramModel) syncComposerView() {
 }
 
 func (m *appProgramModel) appendTranscript(text string) {
-	if strings.TrimSpace(text) == "" {
+	compacted := m.compactor.compact(text)
+	if compacted == "" {
 		return
 	}
-	m.queuePrints(m.transcript.append(m.compactor.compact(text)))
+	m.queuePrints(m.transcript.append(compacted))
 	m.resize()
 }
 
@@ -507,7 +508,7 @@ func (m *appProgramModel) composerView(width int) string {
 
 func compactAppProgramTranscriptText(text string) string {
 	var compactor appProgramTranscriptCompactor
-	return compactor.compact(text) + compactor.flush()
+	return strings.ReplaceAll(compactor.compact(text)+compactor.flush(), appTranscriptBlankLine, "")
 }
 
 type appProgramTranscriptCompactor struct {
@@ -551,7 +552,7 @@ func (d *appProgramActivityDetail) render() []string {
 
 func (c *appProgramTranscriptCompactor) compact(text string) string {
 	text = normalizeAppTranscriptText(text)
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(text) == "" && (c.section != "assistant" || !strings.Contains(text, "\n")) {
 		return ""
 	}
 	trailingNewline := strings.HasSuffix(text, "\n")
@@ -560,14 +561,22 @@ func (c *appProgramTranscriptCompactor) compact(text string) string {
 		lines = lines[:len(lines)-1]
 	}
 	out := make([]string, 0, len(lines))
-	for _, line := range lines {
+	leadingAssistantBoundary := c.section == "assistant" && strings.HasPrefix(text, "\n")
+	for i, line := range lines {
 		for _, compacted := range c.compactLine(line) {
+			if leadingAssistantBoundary && i == 0 && compacted == appTranscriptBlankLine {
+				out = append(out, "")
+				continue
+			}
 			if compacted != "" {
 				out = append(out, compacted)
 			}
 		}
 	}
 	text = strings.Join(out, "\n")
+	if text == "" && leadingAssistantBoundary && trailingNewline {
+		return "\n"
+	}
 	if text != "" && trailingNewline {
 		text += "\n"
 	}
@@ -580,6 +589,9 @@ func (c *appProgramTranscriptCompactor) compactLine(line string) []string {
 		if c.activityDetail != nil {
 			c.activityDetail.append("")
 			return nil
+		}
+		if c.section == "assistant" {
+			return []string{appTranscriptBlankLine}
 		}
 		return []string{line}
 	}
@@ -643,7 +655,7 @@ func (c *appProgramTranscriptCompactor) compactAssistantLine(line string) string
 	trimmedRight := strings.TrimRight(line, "\r\n")
 	trimmed := strings.TrimSpace(trimmedRight)
 	if trimmed == "" {
-		return ""
+		return appTranscriptBlankLine
 	}
 	if strings.HasPrefix(trimmed, "```") {
 		c.assistantInCodeBlock = !c.assistantInCodeBlock
@@ -658,8 +670,8 @@ func (c *appProgramTranscriptCompactor) compactAssistantLine(line string) string
 	if strings.HasPrefix(trimmed, ">") && !strings.HasPrefix(trimmed, "> tool ") {
 		return appProgramQuoteStyle.Render("│ " + strings.TrimSpace(strings.TrimPrefix(trimmed, ">")))
 	}
-	if bullet, rest, ok := appMarkdownBullet(trimmed); ok {
-		return appProgramMarkdownStyle.Render(bullet + " " + rest)
+	if indent, bullet, rest, ok := appMarkdownBulletLine(trimmedRight); ok {
+		return appProgramMarkdownStyle.Render(indent + bullet + " " + rest)
 	}
 	if strings.HasPrefix(trimmedRight, "    ") || strings.HasPrefix(trimmedRight, "\t") {
 		return appProgramCodeStyle.Render(strings.TrimRight(trimmedRight, "\t "))
@@ -686,6 +698,39 @@ func appMarkdownHeading(line string) (heading string, ok bool) {
 		return "", false
 	}
 	return heading, true
+}
+
+func appMarkdownBulletLine(line string) (indent, bullet, rest string, ok bool) {
+	indent, content := appMarkdownIndentPrefix(line)
+	bullet, rest, ok = appMarkdownBullet(content)
+	if !ok {
+		return "", "", "", false
+	}
+	return indent, bullet, rest, true
+}
+
+func appMarkdownIndentPrefix(line string) (indent, content string) {
+	width := 0
+	i := 0
+	for i < len(line) {
+		switch line[i] {
+		case ' ':
+			width++
+			i++
+		case '\t':
+			width += 2
+			i++
+		default:
+			if width > 6 {
+				width = 6
+			}
+			return strings.Repeat(" ", width), line[i:]
+		}
+	}
+	if width > 6 {
+		width = 6
+	}
+	return strings.Repeat(" ", width), ""
 }
 
 func appMarkdownBullet(line string) (bullet, rest string, ok bool) {
