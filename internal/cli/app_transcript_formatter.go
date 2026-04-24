@@ -9,6 +9,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+const maxAppCommandGroupChildren = 6
+
 type appTranscriptFormatter struct {
 	transcript             appTranscriptTail
 	compactor              appProgramTranscriptCompactor
@@ -26,6 +28,7 @@ type appTranscriptFormatter struct {
 	lastActivityCommandKey string
 	lastActivityToolKey    string
 	flushedAnonymous       bool
+	liveCommandGroups      bool
 	nextCommandGroup       int
 }
 
@@ -233,6 +236,10 @@ func (f *appTranscriptFormatter) appendImmediateCommandToolUse(toolUse *model.To
 	if group.printed {
 		return true
 	}
+	if f.liveCommandGroups {
+		f.markCommandGroupRendered(group)
+		return true
+	}
 	f.appendCommandBlock(key, group.renderHeader()...)
 	f.markCommandGroupRendered(group)
 	group.printed = true
@@ -274,7 +281,7 @@ func (f *appTranscriptFormatter) appendLocalTranscriptLine(kind, text string) {
 	if kind == "" || text == "" {
 		return
 	}
-	f.flushUnprintedCommandGroups()
+	f.flushPendingCommandGroups()
 	f.queuePrints(f.transcript.append(f.compactor.flush()))
 	f.compactor.resetSection()
 	f.lastActivityCommandKey = ""
@@ -557,7 +564,7 @@ func (f *appTranscriptFormatter) appendGroupedCommandEvent(event memaxagent.Even
 		key := f.startCommandGroupKey(command)
 		f.ensurePendingCommands()
 		group := f.pendingCommandGroup(key, command)
-		if strings.TrimSpace(command.CommandID) != "" && !group.printed {
+		if strings.TrimSpace(command.CommandID) != "" && !group.printed && !f.liveCommandGroups {
 			f.appendCommandBlock(key, group.renderHeader()...)
 			f.markCommandGroupRendered(group)
 			group.printed = true
@@ -565,6 +572,9 @@ func (f *appTranscriptFormatter) appendGroupedCommandEvent(event memaxagent.Even
 		return
 	case memaxagent.EventCommandOutput, memaxagent.EventCommandInput, memaxagent.EventCommandResized:
 		key := f.commandGroupKey(command)
+		if key == "" {
+			return
+		}
 		if f.commandGroupWasFlushed(key) {
 			return
 		}
@@ -574,12 +584,15 @@ func (f *appTranscriptFormatter) appendGroupedCommandEvent(event memaxagent.Even
 			if group.printed {
 				f.appendPrintedCommandChild(key, group, child)
 			} else {
-				group.children = append(group.children, child)
+				group.appendChild(child)
 			}
 		}
 		return
 	case memaxagent.EventCommandFinished, memaxagent.EventCommandStopped:
 		key := f.commandGroupKey(command)
+		if key == "" {
+			return
+		}
 		if f.commandGroupWasFlushed(key) {
 			return
 		}
@@ -590,7 +603,7 @@ func (f *appTranscriptFormatter) appendGroupedCommandEvent(event memaxagent.Even
 			if group.printed {
 				f.appendPrintedCommandChild(key, group, child)
 			} else {
-				group.children = append(group.children, child)
+				group.appendChild(child)
 			}
 		}
 		if !group.printed {
@@ -629,10 +642,11 @@ func (f *appTranscriptFormatter) pendingCommandGroup(key string, command *memaxa
 }
 
 type appProgramCommandGroup struct {
-	display     string
-	fallbackKey string
-	children    []string
-	printed     bool
+	display         string
+	fallbackKey     string
+	children        []string
+	droppedChildren int
+	printed         bool
 }
 
 func newAppProgramCommandGroup(command *memaxagent.CommandEvent) *appProgramCommandGroup {
@@ -656,6 +670,9 @@ func (g *appProgramCommandGroup) merge(command *memaxagent.CommandEvent) {
 
 func (g *appProgramCommandGroup) render() []string {
 	lines := g.renderHeader()
+	if g.droppedChildren > 0 {
+		lines = append(lines, appProgramDimStyle.Render(appActivityChildLine(fmt.Sprintf("%d earlier updates hidden", g.droppedChildren))))
+	}
 	lines = append(lines, g.children...)
 	return lines
 }
@@ -674,6 +691,19 @@ func (g *appProgramCommandGroup) renderContinuationHeader() []string {
 		return []string{appProgramToolStyle.Render("• Command continued")}
 	}
 	return []string{appProgramToolStyle.Render("• " + appCommandDisplay(display) + " continued")}
+}
+
+func (g *appProgramCommandGroup) appendChild(child string) {
+	if strings.TrimSpace(child) == "" {
+		return
+	}
+	g.children = append(g.children, child)
+	if len(g.children) <= maxAppCommandGroupChildren {
+		return
+	}
+	drop := len(g.children) - maxAppCommandGroupChildren
+	g.children = append([]string(nil), g.children[drop:]...)
+	g.droppedChildren += drop
 }
 
 func (f *appTranscriptFormatter) flushPendingCommandGroups() {
@@ -697,6 +727,9 @@ func (f *appTranscriptFormatter) flushPendingCommandGroups() {
 }
 
 func (f *appTranscriptFormatter) flushUnprintedCommandGroups() {
+	if f.liveCommandGroups {
+		return
+	}
 	if len(f.pendingCommands) == 0 {
 		return
 	}
@@ -718,6 +751,9 @@ func (f *appTranscriptFormatter) flushUnprintedCommandGroups() {
 }
 
 func (f *appTranscriptFormatter) printUnprintedCommandGroups() {
+	if f.liveCommandGroups {
+		return
+	}
 	if len(f.pendingCommands) == 0 {
 		return
 	}
@@ -736,10 +772,31 @@ func (f *appTranscriptFormatter) appendPrintedCommandChild(key string, group *ap
 	if strings.TrimSpace(child) == "" {
 		return
 	}
-	if group != nil && f.lastActivityCommandKey != key {
+	if group != nil && f.lastActivityCommandKey != key && !f.liveCommandGroups {
 		f.appendCommandBlock(key, group.renderContinuationHeader()...)
 	}
 	f.appendCommandActivityGroup(key, child)
+}
+
+func (f *appTranscriptFormatter) activeCommandLines() []string {
+	if !f.liveCommandGroups || len(f.pendingCommands) == 0 {
+		return nil
+	}
+	// Live command groups are intentionally mutable UI state. Their finalized
+	// transcript block is committed on command finish, so scrollback stays
+	// grouped even when unrelated assistant/tool rows arrived while it ran.
+	var lines []string
+	for _, key := range f.pendingCommandOrder {
+		group := f.pendingCommands[key]
+		if group == nil || group.printed {
+			continue
+		}
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, group.render()...)
+	}
+	return lines
 }
 
 func (f *appTranscriptFormatter) markCommandGroupRendered(group *appProgramCommandGroup) {
@@ -860,12 +917,30 @@ func (f *appTranscriptFormatter) commandGroupKey(command *memaxagent.CommandEven
 	// Without a command ID, simultaneous identical commands cannot be
 	// disambiguated. The fallback queue preserves serialized command pairs.
 	fallback := appCommandFallbackKey(command)
+	if fallback == "operation:" {
+		if f.liveCommandGroups {
+			return f.onlyPendingCommandGroupKey()
+		}
+		return fallback
+	}
 	if len(f.pendingCommandFallback) > 0 {
 		if queue := f.pendingCommandFallback[fallback]; len(queue) > 0 {
 			return queue[0]
 		}
 	}
 	return fallback
+}
+
+func (f *appTranscriptFormatter) onlyPendingCommandGroupKey() string {
+	if len(f.pendingCommands) != 1 {
+		return ""
+	}
+	for _, key := range f.pendingCommandOrder {
+		if f.pendingCommands[key] != nil {
+			return key
+		}
+	}
+	return ""
 }
 
 func (f *appTranscriptFormatter) finishCommandGroupKey(command *memaxagent.CommandEvent, key string, group *appProgramCommandGroup) {

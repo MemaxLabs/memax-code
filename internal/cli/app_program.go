@@ -103,6 +103,7 @@ func newAppProgramModelWithEvents(ctx context.Context, opts options, runPrompt i
 		input:      newAppProgramTextarea(),
 		statusLine: "idle",
 	}
+	model.appTranscriptFormatter.liveCommandGroups = true
 	model.appendLocalTranscriptLine("dim", "Welcome. Type a task or /help.")
 	if opts.ResumeSessionID != "" {
 		model.sessionID = opts.ResumeSessionID
@@ -353,6 +354,7 @@ func (m *appProgramModel) finishPrompt(msg appProgramPromptDoneMsg) {
 		}
 		m.sessionID = msg.sessionID
 	}
+	m.flushPendingCommandGroups()
 	if msg.err != nil {
 		if errors.Is(msg.err, context.Canceled) || errors.Is(msg.err, contextCanceled) {
 			m.lastError = ""
@@ -451,6 +453,10 @@ func (m *appProgramModel) View() string {
 	}
 
 	rows := make([]string, 0, 6)
+	if active := m.activeCommandActivityView(); active != "" {
+		rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
+		rows = append(rows, active)
+	}
 	if activity := m.activityStatusView(); activity != "" {
 		rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 		rows = append(rows, activity)
@@ -484,6 +490,14 @@ func (m *appProgramModel) activityStatusView() string {
 		return appProgramErrorStyle.Render("! " + m.lastError)
 	}
 	return ""
+}
+
+func (m *appProgramModel) activeCommandActivityView() string {
+	lines := m.activeCommandLines()
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *appProgramModel) bottomStatusView() string {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -413,9 +414,9 @@ func TestAppProgramStructuredRunCommandRendersBeforeResult(t *testing.T) {
 		Input: json.RawMessage(`{"command":"sleep 10 && curl -sS https://api.memax.app/health"}`),
 	}})
 
-	before := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	before := ansi.Strip(m.View())
 	if !strings.Contains(before, "• Bash(sleep 10 && curl -sS https://api.memax.app/health)") {
-		t.Fatalf("run_command did not render before result:\n%s", before)
+		t.Fatalf("run_command did not render live before result:\n%s", before)
 	}
 	if strings.Contains(before, "done exit=0") {
 		t.Fatalf("run_command completion rendered before result:\n%s", before)
@@ -569,6 +570,108 @@ func TestAppProgramStructuredSequentialIdenticalRunCommandsWithoutStartedUseSepa
 	}
 }
 
+func TestAppProgramStructuredParallelRunCommandsRenderLiveThenFinalizeGrouped(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	commands := []string{
+		`bash -lc 's=$((RANDOM % 9 + 2)); echo "agent1_sleep=${s}s"; sleep "$s"; curl -sS -i https://api.memax.app/health'`,
+		`bash -lc 's=$((RANDOM % 9 + 2)); echo "agent2_sleep=${s}s"; sleep "$s"; curl -sS -i https://api.memax.app/health'`,
+		`bash -lc 's=$((RANDOM % 9 + 2)); echo "agent3_sleep=${s}s"; sleep "$s"; curl -sS -i https://api.memax.app/health'`,
+	}
+	for i, command := range commands {
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+			ID:    "tool-run-" + string(rune('1'+i)),
+			Name:  "run_command",
+			Input: json.RawMessage(`{"command":` + strconv.Quote(command) + `}`),
+		}})
+	}
+
+	live := ansi.Strip(m.View())
+	for _, command := range commands {
+		if !strings.Contains(live, "• Bash("+command+")") {
+			t.Fatalf("live command missing %q:\n%s", command, live)
+		}
+	}
+	if got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n")); strings.Contains(got, "Bash(") {
+		t.Fatalf("active commands printed to scrollback before completion:\n%s", got)
+	}
+
+	for i, command := range commands {
+		toolID := "tool-run-" + string(rune('1'+i))
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+			ToolUseID: toolID,
+			Name:      "run_command",
+			Content:   "ok",
+			Metadata: map[string]any{
+				model.MetadataCommandOperation: "run",
+				model.MetadataCommandString:    command,
+				model.MetadataCommandExitCode:  0,
+			},
+		}})
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
+			Operation: "run",
+			Command:   command,
+			ExitCode:  0,
+		}})
+	}
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, command := range commands {
+		want := "• Bash(" + command + ")\n  └ done exit=0"
+		if !strings.Contains(got, want) {
+			t.Fatalf("finished command did not finalize as one grouped block %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "continued") {
+		t.Fatalf("parallel command transcript rendered continuation rows:\n%s", got)
+	}
+}
+
+func TestAppProgramStructuredLiveCommandChildrenAreTailed(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Command:   "npm test -- --watch",
+	}})
+	for i := 1; i <= 8; i++ {
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandOutput, Command: &memaxagent.CommandEvent{
+			CommandID:    "cmd-1",
+			OutputChunks: i,
+			NextSeq:      i + 1,
+		}})
+	}
+
+	live := ansi.Strip(m.View())
+	if !strings.Contains(live, "  └ 2 earlier updates hidden") {
+		t.Fatalf("live command did not collapse earlier updates:\n%s", live)
+	}
+	if strings.Contains(live, "chunks=1") || strings.Contains(live, "chunks=2") {
+		t.Fatalf("live command kept dropped output rows:\n%s", live)
+	}
+	if !strings.Contains(live, "chunks=8 next_seq=9") {
+		t.Fatalf("live command lost latest output row:\n%s", live)
+	}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		ExitCode:  0,
+	}})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(got, "  └ 3 earlier updates hidden") {
+		t.Fatalf("final command block did not collapse earlier updates:\n%s", got)
+	}
+	if strings.Contains(got, "chunks=1") || strings.Contains(got, "chunks=2") || strings.Contains(got, "chunks=3") {
+		t.Fatalf("final command block kept dropped output rows:\n%s", got)
+	}
+	if !strings.Contains(got, "  └ done id=cmd-1 exit=0") {
+		t.Fatalf("final command block lost terminal row:\n%s", got)
+	}
+}
+
 func TestAppProgramStructuredCommandToolWithoutMetadataDoesNotDuplicateRenderedCommand(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
@@ -620,9 +723,9 @@ func TestAppProgramStructuredCommandToolWithoutLifecycleMetadataStaysVisible(t *
 		Content:   "ok",
 	}})
 
-	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
-	if count := countTranscriptLine(got, "• Bash(go test ./...)"); count != 1 {
-		t.Fatalf("command fallback header count = %d, want 1:\n%s", count, got)
+	got := ansi.Strip(m.View())
+	if !strings.Contains(got, "• Bash(go test ./...)") {
+		t.Fatalf("command fallback header missing:\n%s", got)
 	}
 	if strings.Contains(got, "  └ ok") {
 		t.Fatalf("redundant command tool result rendered noisy ok row:\n%s", got)
@@ -666,8 +769,8 @@ func TestAppProgramStructuredRepeatedCommandToolWithoutLifecycleMetadataStaysVis
 		m.appendEvent(event)
 	}
 
-	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
-	if count := countTranscriptLine(got, "• Bash(go test ./...)"); count != 2 {
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n") + "\n" + m.View())
+	if count := strings.Count(got, "• Bash(go test ./...)"); count != 2 {
 		t.Fatalf("command header count = %d, want lifecycle block plus visible fallback:\n%s", count, got)
 	}
 	if strings.Contains(got, "  └ ok") {
@@ -675,7 +778,7 @@ func TestAppProgramStructuredRepeatedCommandToolWithoutLifecycleMetadataStaysVis
 	}
 }
 
-func TestAppProgramStructuredToolResultPrintsEarlierUnprintedCommandFirst(t *testing.T) {
+func TestAppProgramStructuredLiveCommandStaysGroupedAcrossToolResult(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
 
@@ -705,17 +808,16 @@ func TestAppProgramStructuredToolResultPrintsEarlierUnprintedCommandFirst(t *tes
 	}
 
 	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
-	commandIndex := strings.Index(got, "• Bash(go test ./...)")
 	toolIndex := strings.Index(got, "• read_file call")
-	if commandIndex < 0 || toolIndex < 0 || commandIndex > toolIndex {
-		t.Fatalf("tool result rendered before earlier command block:\n%s", got)
+	commandIndex := strings.Index(got, "• Bash(go test ./...)")
+	if commandIndex < 0 || toolIndex < 0 {
+		t.Fatalf("command/tool transcript missing block:\n%s", got)
 	}
 	for _, want := range []string{
 		"• Bash(go test ./...)",
 		"  └ output chunks=1 next_seq=2",
 		"• read_file call",
 		"  └ ok",
-		"• Bash(go test ./...) continued",
 		"  └ done exit=0",
 	} {
 		if !strings.Contains(got, want) {
@@ -725,8 +827,8 @@ func TestAppProgramStructuredToolResultPrintsEarlierUnprintedCommandFirst(t *tes
 	if count := countTranscriptLine(got, "• Bash(go test ./...)"); count != 1 {
 		t.Fatalf("command initial header count = %d, want 1:\n%s", count, got)
 	}
-	if count := countTranscriptLine(got, "• Bash(go test ./...) continued"); count != 1 {
-		t.Fatalf("command continuation header count = %d, want 1:\n%s", count, got)
+	if strings.Contains(got, "continued") {
+		t.Fatalf("command rendered continuation header:\n%s", got)
 	}
 }
 
@@ -756,8 +858,8 @@ func TestAppProgramStructuredLateFinishAfterFlushDoesNotRenderEmptyCommand(t *te
 	if count := countTranscriptLine(got, "• Bash(go build ./...)"); count != 1 {
 		t.Fatalf("flushed command header count = %d, want 1:\n%s", count, got)
 	}
-	if count := countTranscriptLine(got, "• Bash(go build ./...) continued"); count != 1 {
-		t.Fatalf("flushed command continuation count = %d, want 1:\n%s", count, got)
+	if strings.Contains(got, "continued") {
+		t.Fatalf("flushed command rendered continuation:\n%s", got)
 	}
 }
 
@@ -783,8 +885,8 @@ func TestAppProgramStructuredNoIDLateFinishAfterFlushDoesNotDuplicateHeader(t *t
 	if count := countTranscriptLine(got, "• Bash(go build ./...)"); count != 1 {
 		t.Fatalf("flushed no-ID command header count = %d, want 1:\n%s", count, got)
 	}
-	if strings.Contains(got, "  └ done exit=0") {
-		t.Fatalf("late no-ID finish rendered after flushed command:\n%s", got)
+	if strings.Contains(got, "continued") {
+		t.Fatalf("late no-ID finish rendered continuation:\n%s", got)
 	}
 }
 
@@ -819,9 +921,9 @@ func TestAppProgramStructuredStartCommandResultBeforeFinishDoesNotDuplicateHeade
 		Input: json.RawMessage(`{"command":"npm test -- --watch"}`),
 	}})
 
-	before := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	before := ansi.Strip(m.View())
 	if !strings.Contains(before, "• Bash(npm test -- --watch)") {
-		t.Fatalf("start_command did not render before result:\n%s", before)
+		t.Fatalf("start_command did not render live before result:\n%s", before)
 	}
 
 	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
@@ -896,7 +998,6 @@ func TestAppProgramStructuredVisibleCommandSurvivesAssistantBoundary(t *testing.
 		"• Bash(npm test -- --watch)",
 		"  └ output id=cmd-1 chunks=1 next_seq=2",
 		"• still inspecting",
-		"• Bash(npm test -- --watch) continued",
 		"  └ output id=cmd-1 chunks=2 next_seq=3",
 		"  └ done id=cmd-1 exit=0",
 	} {
@@ -907,8 +1008,8 @@ func TestAppProgramStructuredVisibleCommandSurvivesAssistantBoundary(t *testing.
 	if count := countTranscriptLine(got, "• Bash(npm test -- --watch)"); count != 1 {
 		t.Fatalf("visible command header count = %d, want 1:\n%s", count, got)
 	}
-	if count := countTranscriptLine(got, "• Bash(npm test -- --watch) continued"); count != 1 {
-		t.Fatalf("visible command continuation count = %d, want 1:\n%s", count, got)
+	if strings.Contains(got, "continued") {
+		t.Fatalf("visible command rendered continuation:\n%s", got)
 	}
 }
 
@@ -940,8 +1041,8 @@ func TestAppProgramStructuredNoIDCommandAfterFlushWithLiveIDCommand(t *testing.T
 	}
 
 	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
-	if count := countTranscriptLine(got, "• Bash(ls -la)"); count != 2 {
-		t.Fatalf("no-id command header count = %d, want 2:\n%s", count, got)
+	if count := countTranscriptLine(got, "• Bash(ls -la)"); count != 1 {
+		t.Fatalf("no-id command header count = %d, want 1:\n%s", count, got)
 	}
 	for _, want := range []string{
 		"• Bash(npm test -- --watch)",
@@ -1227,14 +1328,15 @@ func TestAppProgramStructuredUnprintedCommandFlushesBeforeActivity(t *testing.T)
 		Passed: true,
 	}})
 
-	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
-	want := strings.Join([]string{
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n") + "\n" + m.View())
+	for _, want := range []string{
 		"• Bash(go test ./...)",
 		"  └ output chunks=1 next_seq=2",
 		"✓ check go test ./... passed=true",
-	}, "\n")
-	if !strings.Contains(got, want) {
-		t.Fatalf("unprinted command did not flush before activity:\n%s", got)
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("unprinted command/activity missing %q:\n%s", want, got)
+		}
 	}
 }
 
