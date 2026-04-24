@@ -197,7 +197,9 @@ func TestCompactAppProgramTranscriptTextFormatsAssistantMarkdown(t *testing.T) {
 	got := ansi.Strip(compactAppProgramTranscriptText(strings.Join([]string{
 		"[assistant]",
 		"# Plan",
+		"#123 is not a heading",
 		"- inspect the repo",
+		"    - nested item",
 		"1. run focused tests",
 		"> note from context",
 		"```go",
@@ -207,7 +209,9 @@ func TestCompactAppProgramTranscriptTextFormatsAssistantMarkdown(t *testing.T) {
 
 	for _, want := range []string{
 		"Plan",
+		"#123 is not a heading",
 		"• inspect the repo",
+		"• nested item",
 		"1. run focused tests",
 		"│ note from context",
 		"```go",
@@ -216,6 +220,13 @@ func TestCompactAppProgramTranscriptTextFormatsAssistantMarkdown(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("markdown transcript missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestCompactAppProgramTranscriptTextDoesNotDuplicateTrailingNewline(t *testing.T) {
+	var compactor appProgramTranscriptCompactor
+	if got, want := compactor.compact("[assistant]\nhello\n"), "hello\n"; ansi.Strip(got) != want {
+		t.Fatalf("compact trailing newline = %q, want %q", ansi.Strip(got), want)
 	}
 }
 
@@ -250,6 +261,36 @@ func TestCompactAppProgramTranscriptTextTailsToolErrors(t *testing.T) {
 	for _, unwanted := range []string{"line one", "line two"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("error tail leaked old line %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestAppProgramTranscriptCompactorStreamsToolErrorTail(t *testing.T) {
+	var compactor appProgramTranscriptCompactor
+	var out strings.Builder
+	for _, chunk := range []string{
+		"[activity]\n",
+		"! tool run_command error\n",
+		"  error: line one\n",
+		"  line two\n",
+		"  line three\n",
+		"> tool read_file call\n",
+	} {
+		out.WriteString(compactor.compact(chunk))
+	}
+	out.WriteString(compactor.flush())
+	got := ansi.Strip(out.String())
+
+	for _, want := range []string{
+		"! tool run_command error",
+		"error tail:",
+		"line one",
+		"line two",
+		"line three",
+		"• tool read_file call",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("streamed error tail missing %q:\n%s", want, got)
 		}
 	}
 }

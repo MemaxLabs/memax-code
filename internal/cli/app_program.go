@@ -386,6 +386,7 @@ func (m *appProgramModel) appendLocalTranscriptLine(kind, text string) {
 }
 
 func (m *appProgramModel) flushTranscriptPartial() {
+	m.queuePrints(m.transcript.append(m.compactor.flush()))
 	m.queuePrints(m.transcript.flushPartial())
 }
 
@@ -504,7 +505,7 @@ func (m *appProgramModel) composerView(width int) string {
 
 func compactAppProgramTranscriptText(text string) string {
 	var compactor appProgramTranscriptCompactor
-	return compactor.compact(text)
+	return compactor.compact(text) + compactor.flush()
 }
 
 type appProgramTranscriptCompactor struct {
@@ -553,15 +554,19 @@ func (c *appProgramTranscriptCompactor) compact(text string) string {
 	}
 	trailingNewline := strings.HasSuffix(text, "\n")
 	lines := strings.Split(text, "\n")
+	if trailingNewline && len(lines) > 0 {
+		lines = lines[:len(lines)-1]
+	}
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
-		out = append(out, c.compactLine(line)...)
-	}
-	if trailingNewline {
-		out = append(out, c.flushActivityDetail()...)
+		for _, compacted := range c.compactLine(line) {
+			if compacted != "" {
+				out = append(out, compacted)
+			}
+		}
 	}
 	text = strings.Join(out, "\n")
-	if trailingNewline {
+	if text != "" && trailingNewline {
 		text += "\n"
 	}
 	return text
@@ -642,14 +647,11 @@ func (c *appProgramTranscriptCompactor) compactAssistantLine(line string) string
 		c.assistantInCodeBlock = !c.assistantInCodeBlock
 		return appProgramCodeStyle.Render(trimmed)
 	}
-	if c.assistantInCodeBlock || strings.HasPrefix(trimmedRight, "    ") || strings.HasPrefix(trimmedRight, "\t") {
+	if c.assistantInCodeBlock {
 		return appProgramCodeStyle.Render(strings.TrimRight(trimmedRight, "\t "))
 	}
-	if strings.HasPrefix(trimmed, "#") {
-		heading := strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
-		if heading != "" {
-			return appProgramHeadingStyle.Render(heading)
-		}
+	if heading, ok := appMarkdownHeading(trimmed); ok {
+		return appProgramHeadingStyle.Render(heading)
 	}
 	if strings.HasPrefix(trimmed, ">") && !strings.HasPrefix(trimmed, "> tool ") {
 		return appProgramQuoteStyle.Render("│ " + strings.TrimSpace(strings.TrimPrefix(trimmed, ">")))
@@ -657,7 +659,31 @@ func (c *appProgramTranscriptCompactor) compactAssistantLine(line string) string
 	if bullet, rest, ok := appMarkdownBullet(trimmed); ok {
 		return appProgramMarkdownStyle.Render(bullet + " " + rest)
 	}
+	if strings.HasPrefix(trimmedRight, "    ") || strings.HasPrefix(trimmedRight, "\t") {
+		return appProgramCodeStyle.Render(strings.TrimRight(trimmedRight, "\t "))
+	}
 	return appProgramMarkdownStyle.Render(trimmedRight)
+}
+
+func appMarkdownHeading(line string) (heading string, ok bool) {
+	if !strings.HasPrefix(line, "#") {
+		return "", false
+	}
+	hashes := 0
+	for hashes < len(line) && line[hashes] == '#' {
+		hashes++
+	}
+	if hashes == len(line) || line[hashes] != ' ' {
+		return "", false
+	}
+	if hashes > 6 {
+		return "", false
+	}
+	heading = strings.TrimSpace(line[hashes+1:])
+	if heading == "" {
+		return "", false
+	}
+	return heading, true
 }
 
 func appMarkdownBullet(line string) (bullet, rest string, ok bool) {
@@ -770,6 +796,14 @@ func (c *appProgramTranscriptCompactor) flushActivityDetail() []string {
 	out := c.activityDetail.render()
 	c.activityDetail = nil
 	return out
+}
+
+func (c *appProgramTranscriptCompactor) flush() string {
+	out := c.flushActivityDetail()
+	if len(out) == 0 {
+		return ""
+	}
+	return strings.Join(out, "\n") + "\n"
 }
 
 func compactAppProgramErrorLine(trimmed string) string {
