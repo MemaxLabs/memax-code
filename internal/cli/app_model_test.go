@@ -193,6 +193,67 @@ func TestCompactAppProgramTranscriptTextDoesNotRewriteAssistantContent(t *testin
 	}
 }
 
+func TestCompactAppProgramTranscriptTextFormatsAssistantMarkdown(t *testing.T) {
+	got := ansi.Strip(compactAppProgramTranscriptText(strings.Join([]string{
+		"[assistant]",
+		"# Plan",
+		"- inspect the repo",
+		"1. run focused tests",
+		"> note from context",
+		"```go",
+		"fmt.Println(\"ok\")",
+		"```",
+	}, "\n")))
+
+	for _, want := range []string{
+		"Plan",
+		"• inspect the repo",
+		"1. run focused tests",
+		"│ note from context",
+		"```go",
+		"fmt.Println(\"ok\")",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("markdown transcript missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestCompactAppProgramTranscriptTextTailsToolErrors(t *testing.T) {
+	got := ansi.Strip(compactAppProgramTranscriptText(strings.Join([]string{
+		"[activity]",
+		"! tool run_command error",
+		"  error: line one",
+		"  line two",
+		"  line three",
+		"  line four",
+		"  line five",
+		"  line six",
+		"  line seven",
+		"> tool read_file call",
+	}, "\n")))
+
+	for _, want := range []string{
+		"! tool run_command error",
+		"error tail:",
+		"line three",
+		"line four",
+		"line five",
+		"line six",
+		"line seven",
+		"• tool read_file call",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error tail missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"line one", "line two"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("error tail leaked old line %q:\n%s", unwanted, got)
+		}
+	}
+}
+
 func TestAppShellFrameRendersDeterministicPanels(t *testing.T) {
 	activity := activitySnapshot{
 		Phase:      "running",

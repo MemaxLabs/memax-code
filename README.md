@@ -31,11 +31,11 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
 The CLI now has the first real terminal UI foundation: `auto` chooses app mode
 for interactive terminals and plain rendering for logs, tests, and pipes.
 `--ui app` is still available when you want to be explicit, but it is now the
-default human-facing terminal surface. The interactive app shell is a dedicated
-inline terminal program with a compact transcript viewport, status strip, and a
-persistent composer instead of a prompt loop painted over ad hoc redraws. It
-runs inline instead of taking over the alternate screen, so terminal scrollback
-remains available while the shell is active.
+default human-facing terminal surface. The interactive app shell is an inline
+Bubble Tea program that prints transcript rows into normal terminal scrollback
+and keeps only the status strip, thinking indicator, and composer interactive at
+the bottom. It starts with a one-line composer, grows for multiline prompts, and
+compacts successful tool output while preserving error tails.
 `--ui live` keeps a lighter live status line while preserving the sectioned
 transcript underneath.
 The interactive shell keeps `/help`, `/session`, `/pick`, `/sessions`,
@@ -129,11 +129,11 @@ On a real terminal, running `memax-code` with no prompt opens the interactive
 shell automatically. `--interactive` remains useful when you want that behavior
 to be explicit in scripts, wrappers, or docs.
 
-`--interactive --ui app` now runs as a dedicated terminal program. Transcript,
-session state, slash-command output, and composer state all live on one surface.
-The shell redraws inline rather than switching to an alternate screen buffer,
-and it keeps the transcript height bounded so normal terminal history remains
-useful during long sessions.
+`--interactive --ui app` now runs as an inline terminal program. Transcript
+rows, slash-command output, assistant text, and compact tool activity are printed
+into normal terminal scrollback. The shell redraws only the bottom status strip,
+thinking indicator, and composer instead of switching to an alternate screen
+buffer or putting the transcript in a scroll window.
 
 Inside the shell, type normal prompts to continue the current session. Slash
 commands control local session state without calling a model:
@@ -174,9 +174,11 @@ oversized, and very large new prompts are skipped for recall. Custom history
 paths create a sibling `.lock` file; ignore both files when the path is inside
 a project checkout.
 In the terminal app shell, `Enter` sends the current prompt, `Ctrl+S` also
-sends, `Ctrl+J` inserts a newline inside `/draft` mode, `PgUp/PgDn` and
-`Home/End` scroll the transcript viewport, `F1` toggles help, and `Ctrl+C`
-quits. The older line-oriented shell behavior remains on the non-app renderers.
+sends, `\` followed by `Enter` inserts a newline, and Shift/Alt+Enter insert a
+newline when the terminal reports those key sequences. Inside `/draft` mode,
+plain `Enter` keeps adding lines until `/submit`. `F1` toggles help and
+`Ctrl+C` quits. The older line-oriented shell behavior remains on the non-app
+renderers.
 
 Resume an earlier conversation:
 
@@ -232,14 +234,15 @@ remain stable.
 `--ui app` is the default terminal mode while the terminal UX continues to
 mature. When output is redirected, it falls back to the plain renderer so
 scripts never receive terminal control sequences. The non-interactive app
-renderer keeps the bounded transcript viewport and dashboard-style status for
-single prompts. The interactive app shell runs as a Bubble Tea program with an
-inline transcript, compact status strip, and persistent composer on one surface
-while preserving terminal scrollback. It also compacts structured renderer
-section labels into human transcript rows so app mode does not leak internal
-`[assistant]` and `[result]` headings into the main conversation. This is still
-Foundation terminal UX, not yet the full coding-agent timeline/composer product
-surface. Use `--ui tui` when full raw session scrollback matters.
+renderer keeps the bounded dashboard-style status for single prompts. The
+interactive app shell runs as a Bubble Tea program that preserves terminal
+scrollback, prints assistant markdown-like rows directly into the transcript,
+and compacts structured renderer section labels so app mode does not leak
+internal `[assistant]` and `[result]` headings into the main conversation.
+Successful tool results are collapsed by default; tool errors keep a short tail
+for diagnosis. This is still Foundation terminal UX, not yet the full
+coding-agent timeline/composer product surface. Use `--ui tui` when full raw
+session scrollback matters.
 `--ui live` is the lighter-weight status line mode; it reports phase, elapsed
 time, tool errors, active tool, command, approval, compact activity counts, and
 usage while preserving the sectioned transcript underneath.

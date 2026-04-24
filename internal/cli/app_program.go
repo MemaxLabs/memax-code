@@ -30,6 +30,10 @@ var (
 	appProgramSuccessStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
 	appProgramUserStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236")).Padding(0, 1)
 	appProgramToolStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
+	appProgramMarkdownStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	appProgramHeadingStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
+	appProgramCodeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("188")).Background(lipgloss.Color("236")).Padding(0, 1)
+	appProgramQuoteStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Italic(true)
 	appProgramComposerStyle = lipgloss.NewStyle().Background(lipgloss.Color("235")).Padding(0, 1)
 )
 
@@ -504,8 +508,42 @@ func compactAppProgramTranscriptText(text string) string {
 }
 
 type appProgramTranscriptCompactor struct {
-	section            string
-	skipActivityDetail bool
+	section              string
+	skipActivityDetail   bool
+	assistantInCodeBlock bool
+	activityDetail       *appProgramActivityDetail
+}
+
+type appProgramActivityDetail struct {
+	label string
+	style lipgloss.Style
+	lines []string
+}
+
+func (d *appProgramActivityDetail) append(line string) {
+	line = strings.TrimRight(line, "\r\n")
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	d.lines = append(d.lines, line)
+	const maxActivityDetailTailLines = 5
+	if len(d.lines) > maxActivityDetailTailLines {
+		d.lines = append([]string(nil), d.lines[len(d.lines)-maxActivityDetailTailLines:]...)
+	}
+}
+
+func (d *appProgramActivityDetail) render() []string {
+	if d == nil || len(d.lines) == 0 {
+		return nil
+	}
+	if len(d.lines) == 1 {
+		return []string{d.style.Render("  " + d.label + ": " + d.lines[0])}
+	}
+	out := []string{d.style.Render(fmt.Sprintf("  %s tail:", d.label))}
+	for _, line := range d.lines {
+		out = append(out, d.style.Render("    "+line))
+	}
+	return out
 }
 
 func (c *appProgramTranscriptCompactor) compact(text string) string {
@@ -517,9 +555,10 @@ func (c *appProgramTranscriptCompactor) compact(text string) string {
 	lines := strings.Split(text, "\n")
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
-		if compacted := c.compactLine(line); compacted != "" {
-			out = append(out, compacted)
-		}
+		out = append(out, c.compactLine(line)...)
+	}
+	if trailingNewline {
+		out = append(out, c.flushActivityDetail()...)
 	}
 	text = strings.Join(out, "\n")
 	if trailingNewline {
@@ -528,25 +567,36 @@ func (c *appProgramTranscriptCompactor) compact(text string) string {
 	return text
 }
 
-func (c *appProgramTranscriptCompactor) compactLine(line string) string {
+func (c *appProgramTranscriptCompactor) compactLine(line string) []string {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
-		return line
+		if c.activityDetail != nil {
+			c.activityDetail.append("")
+			return nil
+		}
+		return []string{line}
 	}
 	if section, label, ok := compactAppProgramSectionLabel(trimmed); ok {
+		out := c.flushActivityDetail()
 		c.section = section
 		c.skipActivityDetail = false
-		return label
+		c.assistantInCodeBlock = false
+		if label != "" {
+			out = append(out, label)
+		}
+		return out
 	}
 	switch c.section {
+	case "assistant":
+		return []string{c.compactAssistantLine(line)}
 	case "activity":
 		return c.compactActivityLine(trimmed)
 	case "result", "session", "usage", "status":
-		return ""
+		return nil
 	case "error":
-		return compactAppProgramErrorLine(trimmed)
+		return []string{compactAppProgramErrorLine(trimmed)}
 	default:
-		return line
+		return []string{line}
 	}
 }
 
@@ -582,67 +632,144 @@ func compactAppProgramSectionLabel(trimmed string) (section, label string, ok bo
 	}
 }
 
-func (c *appProgramTranscriptCompactor) compactActivityLine(trimmed string) string {
+func (c *appProgramTranscriptCompactor) compactAssistantLine(line string) string {
+	trimmedRight := strings.TrimRight(line, "\r\n")
+	trimmed := strings.TrimSpace(trimmedRight)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "```") {
+		c.assistantInCodeBlock = !c.assistantInCodeBlock
+		return appProgramCodeStyle.Render(trimmed)
+	}
+	if c.assistantInCodeBlock || strings.HasPrefix(trimmedRight, "    ") || strings.HasPrefix(trimmedRight, "\t") {
+		return appProgramCodeStyle.Render(strings.TrimRight(trimmedRight, "\t "))
+	}
+	if strings.HasPrefix(trimmed, "#") {
+		heading := strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+		if heading != "" {
+			return appProgramHeadingStyle.Render(heading)
+		}
+	}
+	if strings.HasPrefix(trimmed, ">") && !strings.HasPrefix(trimmed, "> tool ") {
+		return appProgramQuoteStyle.Render("│ " + strings.TrimSpace(strings.TrimPrefix(trimmed, ">")))
+	}
+	if bullet, rest, ok := appMarkdownBullet(trimmed); ok {
+		return appProgramMarkdownStyle.Render(bullet + " " + rest)
+	}
+	return appProgramMarkdownStyle.Render(trimmedRight)
+}
+
+func appMarkdownBullet(line string) (bullet, rest string, ok bool) {
+	if len(line) < 3 {
+		return "", "", false
+	}
+	switch {
+	case strings.HasPrefix(line, "- "), strings.HasPrefix(line, "* "):
+		return "•", strings.TrimSpace(line[2:]), true
+	case strings.HasPrefix(line, "+ "):
+		return "+", strings.TrimSpace(line[2:]), true
+	}
+	for i, r := range line {
+		if r < '0' || r > '9' {
+			if r == '.' && i > 0 && i+1 < len(line) && line[i+1] == ' ' {
+				return line[:i+1], strings.TrimSpace(line[i+2:]), true
+			}
+			return "", "", false
+		}
+	}
+	return "", "", false
+}
+
+func (c *appProgramTranscriptCompactor) compactActivityLine(trimmed string) []string {
 	if strings.HasPrefix(trimmed, "memax> ") {
+		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return appProgramUserStyle.Render("› " + strings.TrimSpace(strings.TrimPrefix(trimmed, "memax> ")))
+		return append(out, appProgramUserStyle.Render("› "+strings.TrimSpace(strings.TrimPrefix(trimmed, "memax> "))))
 	}
 	if strings.HasPrefix(trimmed, "> tool ") {
+		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return appProgramToolStyle.Render("• " + strings.TrimSpace(strings.TrimPrefix(trimmed, "> ")))
+		return append(out, appProgramToolStyle.Render("• "+strings.TrimSpace(strings.TrimPrefix(trimmed, "> "))))
 	}
 	if strings.HasPrefix(trimmed, "< tool ") {
+		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return appProgramDimStyle.Render("  " + strings.TrimSpace(strings.TrimPrefix(trimmed, "< ")))
+		return append(out, appProgramDimStyle.Render("  "+strings.TrimSpace(strings.TrimPrefix(trimmed, "< "))))
 	}
 	if strings.HasPrefix(trimmed, "! tool ") {
+		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return appProgramErrorStyle.Render("! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))
+		return append(out, appProgramErrorStyle.Render("! "+strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))))
 	}
 	if strings.HasPrefix(trimmed, "$ command ") {
+		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return appProgramToolStyle.Render("• " + strings.TrimSpace(strings.TrimPrefix(trimmed, "$ ")))
+		return append(out, appProgramToolStyle.Render("• "+strings.TrimSpace(strings.TrimPrefix(trimmed, "$ "))))
 	}
 	if strings.HasPrefix(trimmed, "+ command ") {
+		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return appProgramSuccessStyle.Render("✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ ")))
+		return append(out, appProgramSuccessStyle.Render("✓ "+strings.TrimSpace(strings.TrimPrefix(trimmed, "+ "))))
 	}
 	if strings.HasPrefix(trimmed, "! command ") {
+		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return appProgramErrorStyle.Render("! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))
+		return append(out, appProgramErrorStyle.Render("! "+strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))))
 	}
 	if strings.HasPrefix(trimmed, "+ check ") {
+		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return appProgramSuccessStyle.Render("✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ ")))
+		return append(out, appProgramSuccessStyle.Render("✓ "+strings.TrimSpace(strings.TrimPrefix(trimmed, "+ "))))
 	}
 	if strings.HasPrefix(trimmed, "! check ") {
+		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return appProgramErrorStyle.Render("! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))
+		return append(out, appProgramErrorStyle.Render("! "+strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))))
 	}
 	if strings.HasPrefix(trimmed, "? approval ") {
+		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return appProgramAccentStyle.Render("? " + strings.TrimSpace(strings.TrimPrefix(trimmed, "? ")))
+		return append(out, appProgramAccentStyle.Render("? "+strings.TrimSpace(strings.TrimPrefix(trimmed, "? "))))
 	}
 	if strings.HasPrefix(trimmed, "+ approval ") {
+		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return appProgramSuccessStyle.Render("✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ ")))
+		return append(out, appProgramSuccessStyle.Render("✓ "+strings.TrimSpace(strings.TrimPrefix(trimmed, "+ "))))
 	}
 	if strings.HasPrefix(trimmed, "! approval ") {
+		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
-		return appProgramErrorStyle.Render("! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))
+		return append(out, appProgramErrorStyle.Render("! "+strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))))
 	}
 	if strings.HasPrefix(trimmed, "result:") {
+		c.activityDetail = nil
 		c.skipActivityDetail = true
-		return ""
+		return nil
 	}
 	if strings.HasPrefix(trimmed, "error:") {
 		c.skipActivityDetail = true
-		return appProgramErrorStyle.Render("! " + trimmed)
+		c.activityDetail = &appProgramActivityDetail{label: "error", style: appProgramErrorStyle}
+		c.activityDetail.append(strings.TrimSpace(strings.TrimPrefix(trimmed, "error:")))
+		return nil
+	}
+	if c.activityDetail != nil {
+		c.activityDetail.append(trimmed)
+		return nil
 	}
 	if c.skipActivityDetail {
-		return ""
+		return nil
 	}
-	return appProgramDimStyle.Render(trimmed)
+	return []string{appProgramDimStyle.Render(trimmed)}
+}
+
+func (c *appProgramTranscriptCompactor) flushActivityDetail() []string {
+	if c.activityDetail == nil {
+		return nil
+	}
+	out := c.activityDetail.render()
+	c.activityDetail = nil
+	return out
 }
 
 func compactAppProgramErrorLine(trimmed string) string {
