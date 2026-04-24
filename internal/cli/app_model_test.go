@@ -702,6 +702,58 @@ func TestAppProgramTranscriptRendersAssistantHeadingsAcrossChunks(t *testing.T) 
 	}
 }
 
+func TestAppProgramTranscriptPreservesWhitespaceOnlyAssistantEvents(t *testing.T) {
+	app := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	app.transcript = appTranscriptTail{}
+	app.compactor = appProgramTranscriptCompactor{}
+
+	for _, chunk := range []string{
+		"###",
+		" ",
+		"1. Strong CLI/config hygiene",
+		"\n",
+		"The parser is careful about:",
+		"\n",
+		"- source precedence",
+		"\n",
+		"- conflict validation",
+		"\n",
+		"\n",
+		"So the repo is not just a thin wrapper.",
+		"\n",
+	} {
+		app.appendEvent(memaxagent.Event{
+			Kind: memaxagent.EventAssistant,
+			Message: &model.Message{Role: model.RoleAssistant, Content: []model.ContentBlock{
+				{Type: model.ContentText, Text: chunk},
+			}},
+		})
+	}
+
+	got := ansi.Strip(strings.Join(app.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"1. Strong CLI/config hygiene",
+		"The parser is careful about:",
+		"• source precedence",
+		"• conflict validation",
+		"So the repo is not just a thin wrapper.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("assistant whitespace event transcript missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"###1.",
+		"hygieneThe parser",
+		"precedence- conflict",
+		"validationSo the repo",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("assistant whitespace event transcript glued markdown with %q:\n%s", unwanted, got)
+		}
+	}
+}
+
 func TestAppProgramTranscriptSeparatesCompleteLineBeforePartial(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.transcript = appTranscriptTail{}
