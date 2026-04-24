@@ -20,7 +20,10 @@ type appTranscriptFormatter struct {
 	pendingCommandFallback map[string][]string
 	flushedCommandKeys     map[string]bool
 	renderedCommandToolIDs map[string]bool
+	renderedToolKeys       map[string]bool
+	renderedToolDisplays   map[string]string
 	lastActivityCommandKey string
+	lastActivityToolKey    string
 	flushedAnonymous       bool
 	nextCommandGroup       int
 }
@@ -96,6 +99,7 @@ func (f *appTranscriptFormatter) appendAssistantText(text string) {
 	}
 	f.flushUnprintedCommandGroups()
 	f.lastActivityCommandKey = ""
+	f.lastActivityToolKey = ""
 	if f.compactor.section != "assistant" {
 		f.appendTranscriptSpacer()
 	}
@@ -111,6 +115,7 @@ func (f *appTranscriptFormatter) appendActivityLine(line string) {
 	f.flushTranscriptPartial()
 	f.compactor.resetSection()
 	f.lastActivityCommandKey = ""
+	f.lastActivityToolKey = ""
 	f.queuePrints(f.transcript.appendStandaloneLine(line))
 }
 
@@ -118,7 +123,18 @@ func (f *appTranscriptFormatter) appendToolUse(toolUse *model.ToolUse) {
 	if toolUse == nil {
 		return
 	}
+	alreadyRendered := f.pendingToolIDAlreadyRendered(toolUse.ID)
 	f.storePendingTool(toolUse)
+	if appToolUseDefersToCommandLifecycle(toolUse.Name) {
+		return
+	}
+	if alreadyRendered {
+		return
+	}
+	f.printUnprintedCommandGroups()
+	display := appToolUseDisplay(toolUse)
+	f.appendToolBlock(f.toolUseKey(toolUse), appProgramToolStyle.Render("• "+display))
+	f.markToolUseRendered(toolUse)
 }
 
 func (f *appTranscriptFormatter) appendToolResult(result *model.ToolResult) {
@@ -127,17 +143,22 @@ func (f *appTranscriptFormatter) appendToolResult(result *model.ToolResult) {
 	}
 	f.printUnprintedCommandGroups()
 	toolUse := f.takePendingTool(result.ToolUseID, result.Name)
+	rendered, renderedKey, renderedDisplay := f.consumeRenderedToolUse(toolUse, result.ToolUseID)
 	name := appToolDisplayName(result.Name)
 	if result.IsError {
 		lines := make([]string, 0, 2)
-		if toolUse == nil {
+		if !rendered && toolUse == nil {
 			lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplayOrName(nil, name)))
-		} else {
+		} else if !rendered {
 			lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplay(toolUse)))
 		}
 		lines = append(lines, appProgramErrorStyle.Render("  └ error"))
 		lines = append(lines, appActivityTailLines("error", appProgramErrorStyle, result.Content)...)
-		f.appendActivityGroup(lines...)
+		if rendered {
+			f.appendToolResultLines(renderedKey, renderedDisplay, true, lines...)
+		} else {
+			f.appendActivityGroup(lines...)
+		}
 		return
 	}
 	if appToolResultIsRedundant(result.Name) {
@@ -158,16 +179,20 @@ func (f *appTranscriptFormatter) appendToolResult(result *model.ToolResult) {
 		return
 	}
 	lines := make([]string, 0, 2)
-	if toolUse == nil {
+	if !rendered && toolUse == nil {
 		lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplayOrName(nil, name)))
-	} else {
+	} else if !rendered {
 		lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplay(toolUse)))
 	}
 	lines = append(lines, appProgramDimStyle.Render("  └ ok"))
 	if appToolShowsResultTail(result.Name) {
 		lines = append(lines, appActivityTailLines("output", appProgramDimStyle, result.Content)...)
 	}
-	f.appendActivityGroup(lines...)
+	if rendered {
+		f.appendToolResultLines(renderedKey, renderedDisplay, false, lines...)
+	} else {
+		f.appendActivityGroup(lines...)
+	}
 }
 
 func (f *appTranscriptFormatter) appendCommandEvent(event memaxagent.Event) {
@@ -216,6 +241,7 @@ func (f *appTranscriptFormatter) appendLocalTranscriptLine(kind, text string) {
 	f.queuePrints(f.transcript.append(f.compactor.flush()))
 	f.compactor.resetSection()
 	f.lastActivityCommandKey = ""
+	f.lastActivityToolKey = ""
 	if kind == "user" {
 		f.appendTranscriptSpacer()
 	}
@@ -229,6 +255,7 @@ func (f *appTranscriptFormatter) appendActivityGroup(lines ...string) {
 	f.flushTranscriptPartial()
 	f.compactor.resetSection()
 	f.lastActivityCommandKey = ""
+	f.lastActivityToolKey = ""
 	f.appendTranscriptSpacer()
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
@@ -245,6 +272,7 @@ func (f *appTranscriptFormatter) appendTranscriptSpacer() {
 func (f *appTranscriptFormatter) appendCommandActivityGroup(key string, lines ...string) {
 	f.flushTranscriptPartial()
 	f.compactor.resetSection()
+	f.lastActivityToolKey = ""
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -257,6 +285,37 @@ func (f *appTranscriptFormatter) appendCommandActivityGroup(key string, lines ..
 func (f *appTranscriptFormatter) appendCommandBlock(key string, lines ...string) {
 	f.appendTranscriptSpacer()
 	f.appendCommandActivityGroup(key, lines...)
+}
+
+func (f *appTranscriptFormatter) appendToolBlock(key string, lines ...string) {
+	f.appendTranscriptSpacer()
+	f.appendToolActivityGroup(key, lines...)
+}
+
+func (f *appTranscriptFormatter) appendToolResultLines(key, display string, isError bool, lines ...string) {
+	if len(lines) == 0 {
+		return
+	}
+	if strings.TrimSpace(key) == "" || f.lastActivityToolKey != key {
+		f.appendTranscriptSpacer()
+		if display = strings.TrimSpace(display); display != "" {
+			f.queuePrints(f.transcript.appendStandaloneLine(appProgramToolStyle.Render("• " + appToolContinuationDisplay(display, isError))))
+		}
+	}
+	f.appendToolActivityGroup(key, lines...)
+}
+
+func (f *appTranscriptFormatter) appendToolActivityGroup(key string, lines ...string) {
+	f.flushTranscriptPartial()
+	f.compactor.resetSection()
+	f.lastActivityCommandKey = ""
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		f.queuePrints(f.transcript.appendStandaloneLine(line))
+	}
+	f.lastActivityToolKey = key
 }
 
 func (f *appTranscriptFormatter) storePendingTool(toolUse *model.ToolUse) {
@@ -336,6 +395,71 @@ func (f *appTranscriptFormatter) removePendingTool(target *model.ToolUse) {
 	}
 }
 
+func (f *appTranscriptFormatter) pendingToolIDAlreadyRendered(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" || len(f.pendingToolsByID) == 0 {
+		return false
+	}
+	existing := f.pendingToolsByID[id]
+	if existing == nil {
+		return false
+	}
+	return f.renderedToolKeys[f.toolUseKey(existing)]
+}
+
+func (f *appTranscriptFormatter) markToolUseRendered(toolUse *model.ToolUse) {
+	if toolUse == nil {
+		return
+	}
+	key := f.toolUseKey(toolUse)
+	if key == "" {
+		return
+	}
+	if f.renderedToolKeys == nil {
+		f.renderedToolKeys = make(map[string]bool)
+	}
+	if f.renderedToolDisplays == nil {
+		f.renderedToolDisplays = make(map[string]string)
+	}
+	f.renderedToolKeys[key] = true
+	f.renderedToolDisplays[key] = appToolUseDisplay(toolUse)
+}
+
+func (f *appTranscriptFormatter) consumeRenderedToolUse(toolUse *model.ToolUse, resultID string) (bool, string, string) {
+	if toolUse != nil {
+		key := f.toolUseKey(toolUse)
+		if f.renderedToolKeys[key] {
+			display := f.renderedToolDisplays[key]
+			delete(f.renderedToolKeys, key)
+			delete(f.renderedToolDisplays, key)
+			return true, key, display
+		}
+		return false, key, ""
+	}
+	resultID = strings.TrimSpace(resultID)
+	if resultID == "" {
+		return false, "", ""
+	}
+	key := "tool:id:" + resultID
+	if !f.renderedToolKeys[key] {
+		return false, "", ""
+	}
+	display := f.renderedToolDisplays[key]
+	delete(f.renderedToolKeys, key)
+	delete(f.renderedToolDisplays, key)
+	return true, key, display
+}
+
+func (f *appTranscriptFormatter) toolUseKey(toolUse *model.ToolUse) string {
+	if toolUse == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(toolUse.ID); id != "" {
+		return "tool:id:" + id
+	}
+	return fmt.Sprintf("tool:ptr:%p", toolUse)
+}
+
 func appToolUseDisplayOrName(toolUse *model.ToolUse, fallback string) string {
 	if toolUse != nil {
 		return appToolUseDisplay(toolUse)
@@ -344,6 +468,25 @@ func appToolUseDisplayOrName(toolUse *model.ToolUse, fallback string) string {
 		return "tool"
 	}
 	return fallback + " call"
+}
+
+func appToolContinuationDisplay(display string, isError bool) string {
+	display = strings.TrimSpace(display)
+	suffix := "result"
+	if isError {
+		suffix = "error"
+	}
+	if display == "" {
+		return "tool " + suffix
+	}
+	if base, ok := strings.CutSuffix(display, " call"); ok {
+		base = strings.TrimSpace(base)
+		if base == "" {
+			base = "tool"
+		}
+		return base + " " + suffix
+	}
+	return display + " " + suffix
 }
 
 func appToolResultHasCommandLifecycleMetadata(result *model.ToolResult) bool {
@@ -361,6 +504,10 @@ func appToolResultHasCommandLifecycleMetadata(result *model.ToolResult) bool {
 		}
 	}
 	return false
+}
+
+func appToolUseDefersToCommandLifecycle(name string) bool {
+	return appToolResultIsRedundant(name)
 }
 
 func (f *appTranscriptFormatter) appendGroupedCommandEvent(event memaxagent.Event) {

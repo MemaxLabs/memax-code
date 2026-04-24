@@ -1122,6 +1122,9 @@ func appToolUseDisplay(toolUse *model.ToolUse) string {
 		return ""
 	}
 	name := appToolDisplayName(toolUse.Name)
+	if strings.TrimSpace(name) == "" {
+		name = "tool"
+	}
 	if command := appToolUseCommand(toolUse); command != "" {
 		return name + "(" + command + ")"
 	}

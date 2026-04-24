@@ -838,6 +838,49 @@ func TestAppProgramStructuredReplacingToolUseIDRemovesStaleNameQueueEntry(t *tes
 	if toolUse := m.pendingToolsByID["tool-1"]; toolUse != nil {
 		t.Fatalf("stale ID entry remained: %#v", toolUse)
 	}
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := countTranscriptLine(got, "• read_file call"); count != 1 {
+		t.Fatalf("replacement rendered duplicate pending tool header count = %d, want 1:\n%s", count, got)
+	}
+}
+
+func TestAppProgramStructuredReplacingToolUseIDKeepsOriginalRenderedDisplay(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	for _, event := range []memaxagent.Event{
+		{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+			ID:   "tool-1",
+			Name: "read_file",
+		}},
+		{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+			ID:   "tool-1",
+			Name: "workspace_apply_patch",
+		}},
+		{Kind: memaxagent.EventWorkspaceCheckpoint, Workspace: &memaxagent.WorkspaceEvent{CheckpointID: "checkpoint-1"}},
+		{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+			ToolUseID: "tool-1",
+			Name:      "workspace_apply_patch",
+			Content:   "ok",
+		}},
+	} {
+		m.appendEvent(event)
+	}
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"• read_file call",
+		"~ checkpoint checkpoint-1",
+		"• read_file result",
+		"  └ ok",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("same-ID replacement transcript missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "• Apply patch result") {
+		t.Fatalf("same-ID replacement changed visible tool name:\n%s", got)
+	}
 }
 
 func TestAppProgramStructuredNameOnlyToolResultsUseFIFO(t *testing.T) {
@@ -859,6 +902,113 @@ func TestAppProgramStructuredNameOnlyToolResultsUseFIFO(t *testing.T) {
 	}
 	if count := strings.Count(got, "  └ ok"); count != 2 {
 		t.Fatalf("read_file ok count = %d, want 2:\n%s", count, got)
+	}
+	if count := countTranscriptLine(got, "• read_file result"); count != 2 {
+		t.Fatalf("read_file continuation count = %d, want 2:\n%s", count, got)
+	}
+}
+
+func TestAppProgramStructuredToolUseRendersBeforeResult(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:   "tool-1",
+		Name: "workspace_list_files",
+	}})
+
+	before := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(before, "• workspace_list_files call") {
+		t.Fatalf("tool invocation did not render before result:\n%s", before)
+	}
+	if strings.Contains(before, "  └ ok") {
+		t.Fatalf("tool result rendered before completion:\n%s", before)
+	}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		ToolUseID: "tool-1",
+		Name:      "workspace_list_files",
+		Content:   "ok",
+	}})
+
+	after := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := countTranscriptLine(after, "• workspace_list_files call"); count != 1 {
+		t.Fatalf("tool header count = %d, want 1:\n%s", count, after)
+	}
+	if !strings.Contains(after, "• workspace_list_files call\n  └ ok") {
+		t.Fatalf("tool result did not continue under invocation:\n%s", after)
+	}
+}
+
+func TestAppProgramStructuredToolResultAfterInterveningActivityKeepsContext(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	for _, event := range []memaxagent.Event{
+		{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+			ID:   "tool-1",
+			Name: "workspace_list_files",
+		}},
+		{Kind: memaxagent.EventWorkspaceCheckpoint, Workspace: &memaxagent.WorkspaceEvent{CheckpointID: "checkpoint-1"}},
+		{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+			ToolUseID: "tool-1",
+			Name:      "workspace_list_files",
+			Content:   "ok",
+		}},
+	} {
+		m.appendEvent(event)
+	}
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"• workspace_list_files call",
+		"~ checkpoint checkpoint-1",
+		"• workspace_list_files result",
+		"  └ ok",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("interleaved tool transcript missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "\n\n  └ ok") {
+		t.Fatalf("tool result rendered as orphan child line:\n%s", got)
+	}
+}
+
+func TestAppProgramStructuredToolErrorAfterInterveningActivityKeepsContext(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	for _, event := range []memaxagent.Event{
+		{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+			ID:   "tool-1",
+			Name: "read_file",
+		}},
+		{Kind: memaxagent.EventWorkspaceCheckpoint, Workspace: &memaxagent.WorkspaceEvent{CheckpointID: "checkpoint-1"}},
+		{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+			ToolUseID: "tool-1",
+			Name:      "read_file",
+			IsError:   true,
+			Content:   "permission denied",
+		}},
+	} {
+		m.appendEvent(event)
+	}
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"• read_file call",
+		"~ checkpoint checkpoint-1",
+		"• read_file error",
+		"  └ error",
+		"  └ error: permission denied",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("interleaved tool error transcript missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "• read_file result\n  └ error") {
+		t.Fatalf("tool error continuation used neutral result label:\n%s", got)
 	}
 }
 
