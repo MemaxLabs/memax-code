@@ -33,7 +33,7 @@ func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T)
 		"[status]",
 		"phase: done",
 		"[error]",
-		"! boom",
+		"boom",
 	}, "\n"))
 
 	for _, want := range []string{
@@ -96,6 +96,7 @@ func TestCompactAppProgramTranscriptTextDoesNotRewriteAssistantContent(t *testin
 		"memax> do the thing",
 		"> tool run_command call",
 		"$ command id=cmd-1",
+		"[memax-app:error] should remain assistant text",
 	}, "\n"))
 
 	for _, want := range []string{
@@ -103,6 +104,7 @@ func TestCompactAppProgramTranscriptTextDoesNotRewriteAssistantContent(t *testin
 		"memax> do the thing",
 		"> tool run_command call",
 		"$ command id=cmd-1",
+		"[memax-app:error] should remain assistant text",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("assistant content was rewritten, missing %q:\n%s", want, got)
@@ -113,6 +115,7 @@ func TestCompactAppProgramTranscriptTextDoesNotRewriteAssistantContent(t *testin
 		"› do the thing",
 		"• tool run_command call",
 		"• command id=cmd-1",
+		"! should remain assistant text",
 	} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("assistant content was rewritten with %q:\n%s", unwanted, got)

@@ -5,7 +5,6 @@ import (
 	"context"
 	"io"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -19,8 +18,6 @@ import (
 const (
 	appProgramMinComposer = 3
 	appProgramMaxBody     = 24
-
-	appProgramLocalLinePrefix = "[memax-app:"
 )
 
 var (
@@ -388,11 +385,14 @@ func (m *appProgramModel) appendTranscriptLine(text string) {
 
 func (m *appProgramModel) appendLocalTranscriptLine(kind, text string) {
 	kind = strings.TrimSpace(kind)
-	text = strings.TrimSpace(text)
+	text = strings.TrimSpace(normalizeAppTranscriptText(text))
 	if kind == "" || text == "" {
 		return
 	}
-	m.appendTranscriptLine(appProgramLocalLinePrefix + kind + "] " + text)
+	atBottom := m.viewport.AtBottom()
+	m.transcript.append(compactAppProgramLocalLine(kind, text) + "\n")
+	m.resize()
+	m.refreshViewport(atBottom)
 }
 
 func (m *appProgramModel) refreshViewport(stickBottom bool) {
@@ -447,7 +447,7 @@ func (m *appProgramModel) View() string {
 	}
 
 	header := appProgramBrandStyle.Render("Memax Code") + appProgramDimStyle.Render("  ") + m.headerStatus()
-	body := m.bodyView(width)
+	body := m.bodyView()
 	status := m.statusView()
 	composer := m.composerView(width)
 	footer := appProgramDimStyle.Render(m.help.View(m.keys))
@@ -481,7 +481,7 @@ func (m *appProgramModel) phaseLabel() string {
 	return appProgramSuccessStyle.Render(m.statusLine)
 }
 
-func (m *appProgramModel) bodyView(width int) string {
+func (m *appProgramModel) bodyView() string {
 	return m.viewport.View()
 }
 
@@ -491,8 +491,8 @@ func (m *appProgramModel) statusView() string {
 		appProgramTitleStyle.Render("workspace") + " " + filepath.Base(m.opts.CWD),
 		appProgramTitleStyle.Render("composer") + " " + m.composer.statusLine(),
 	}
-	if newer := m.hiddenNewerLineCount(); newer > 0 {
-		parts = append(parts, appProgramMutedStyle.Render("↓ "+strconv.Itoa(newer)+" newer"))
+	if m.hasHiddenNewerLines() {
+		parts = append(parts, appProgramMutedStyle.Render("↓ more below"))
 	}
 	if m.lastError != "" {
 		parts = append(parts, appProgramErrorStyle.Render("error "+m.lastError))
@@ -508,12 +508,12 @@ func (m *appProgramModel) composerView(width int) string {
 	return appProgramComposerStyle.Width(width).Render(m.input.View())
 }
 
-func (m *appProgramModel) hiddenNewerLineCount() int {
+func (m *appProgramModel) hasHiddenNewerLines() bool {
 	if m.viewport.AtBottom() {
-		return 0
+		return false
 	}
 	lines := m.transcript.lines(maxAppTranscriptLines)
-	return max(0, len(lines)-(m.viewport.YOffset+m.viewport.Height))
+	return len(lines) > m.viewport.YOffset+m.viewport.Height
 }
 
 func compactAppProgramTranscriptText(text string) string {
@@ -554,10 +554,6 @@ func (c *appProgramTranscriptCompactor) compactLine(line string) string {
 		c.section = section
 		return label
 	}
-	if compacted, ok := compactAppProgramLocalLine(trimmed); ok {
-		return compacted
-	}
-
 	switch c.section {
 	case "activity":
 		return compactAppProgramActivityLine(trimmed)
@@ -572,23 +568,15 @@ func (c *appProgramTranscriptCompactor) compactLine(line string) string {
 	}
 }
 
-func compactAppProgramLocalLine(trimmed string) (string, bool) {
-	if !strings.HasPrefix(trimmed, appProgramLocalLinePrefix) {
-		return "", false
-	}
-	rest := strings.TrimPrefix(trimmed, appProgramLocalLinePrefix)
-	kind, text, ok := strings.Cut(rest, "] ")
-	if !ok || strings.TrimSpace(text) == "" {
-		return "", true
-	}
+func compactAppProgramLocalLine(kind, text string) string {
 	text = strings.TrimSpace(text)
 	switch strings.TrimSpace(kind) {
 	case "user":
-		return appProgramUserStyle.Render(text), true
+		return appProgramUserStyle.Render(text)
 	case "error":
-		return appProgramErrorStyle.Render("! " + text), true
+		return appProgramErrorStyle.Render("! " + text)
 	default:
-		return appProgramDimStyle.Render(text), true
+		return appProgramDimStyle.Render(text)
 	}
 }
 
