@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -392,12 +393,20 @@ func (m *appProgramModel) queuePrints(lines []string) {
 }
 
 func (m *appProgramModel) flushPrints() tea.Cmd {
+	lines := m.drainPendingPrints()
+	if len(lines) == 0 {
+		return nil
+	}
+	return tea.Println(strings.Join(lines, "\n"))
+}
+
+func (m *appProgramModel) drainPendingPrints() []string {
 	if len(m.pending) == 0 {
 		return nil
 	}
 	lines := append([]string(nil), m.pending...)
 	m.pending = nil
-	return tea.Println(strings.Join(lines, "\n"))
+	return lines
 }
 
 func (m *appProgramModel) withFlush(cmd tea.Cmd) tea.Cmd {
@@ -671,6 +680,9 @@ func (w *appProgramTranscriptWriter) Write(p []byte) (int, error) {
 
 func runInteractiveApp(ctx context.Context, stdin io.Reader, stdout io.Writer, opts options, runPrompt interactivePromptRunner) error {
 	model := newAppProgramModel(ctx, opts, runPrompt)
+	if lines := model.drainPendingPrints(); len(lines) > 0 {
+		fmt.Fprintln(stdout, strings.Join(lines, "\n"))
+	}
 	programOpts := []tea.ProgramOption{
 		tea.WithInput(stdin),
 		tea.WithOutput(stdout),
