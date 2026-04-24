@@ -5,7 +5,6 @@ import (
 	"context"
 	"io"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -29,7 +28,9 @@ var (
 	appProgramErrorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	appProgramAccentStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
 	appProgramSuccessStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
-	appProgramComposerStyle = lipgloss.NewStyle().Padding(0, 1)
+	appProgramUserStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236")).Padding(0, 1)
+	appProgramToolStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
+	appProgramComposerStyle = lipgloss.NewStyle().Background(lipgloss.Color("235")).Padding(0, 1)
 )
 
 type appProgramKeyMap struct {
@@ -166,7 +167,7 @@ func newAppProgramModel(ctx context.Context, opts options, runPrompt interactive
 		keys:       appProgramKeys,
 		statusLine: "idle",
 	}
-	model.appendTranscriptLine("Welcome. Type a task or /help.")
+	model.appendTranscriptLine(appProgramDimStyle.Render("Welcome. Type a task or /help."))
 	if opts.ResumeSessionID != "" {
 		model.sessionID = opts.ResumeSessionID
 		model.appendTranscriptLine("resumed session: " + opts.ResumeSessionID)
@@ -302,7 +303,7 @@ func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
 	m.running = true
 	m.lastError = ""
 	m.statusLine = "running"
-	m.appendTranscriptLine("› " + strings.ReplaceAll(strings.TrimSpace(prompt), "\n", " "))
+	m.appendTranscriptLine(appProgramUserStyle.Render("› " + strings.ReplaceAll(strings.TrimSpace(prompt), "\n", " ")))
 	m.input.Reset()
 	m.composer.cancel()
 	m.syncComposerView()
@@ -371,6 +372,7 @@ func (m *appProgramModel) appendTranscript(text string) {
 	}
 	atBottom := m.viewport.AtBottom()
 	m.transcript.append(m.compactor.compact(text))
+	m.resize()
 	m.refreshViewport(atBottom)
 }
 
@@ -406,8 +408,13 @@ func (m *appProgramModel) resize() {
 	if m.showHelp {
 		statusLines = 2
 	}
-	fixedRows := 1 + 3 + statusLines + 1 + 1 // header, body chrome, status, composer title, footer.
-	bodyHeight := min(appProgramMaxBody, max(1, height-composerHeight-fixedRows))
+	fixedRows := 1 + statusLines + 1 + 1 // header, status, composer, footer.
+	availableBodyHeight := min(appProgramMaxBody, max(1, height-composerHeight-fixedRows))
+	contentHeight := len(m.transcript.lines(maxAppTranscriptLines))
+	if contentHeight <= 0 {
+		contentHeight = 1
+	}
+	bodyHeight := min(availableBodyHeight, contentHeight)
 	m.viewport.Width = width
 	m.viewport.Height = bodyHeight
 	if m.viewport.Width < 1 {
@@ -463,11 +470,7 @@ func (m *appProgramModel) phaseLabel() string {
 }
 
 func (m *appProgramModel) bodyView(width int) string {
-	return lipgloss.NewStyle().Width(width).Render(
-		appProgramDimStyle.Render(appProgramRuleText(width)) + "\n" +
-			appProgramDimStyle.Render(m.transcriptStatusLine()) + "\n" +
-			m.viewport.View() + "\n" +
-			appProgramDimStyle.Render(appProgramRuleText(width)))
+	return lipgloss.NewStyle().Width(width).Render(m.viewport.View())
 }
 
 func (m *appProgramModel) statusView() string {
@@ -487,26 +490,7 @@ func (m *appProgramModel) statusView() string {
 }
 
 func (m *appProgramModel) composerView(width int) string {
-	title := "Ready"
-	if m.running {
-		title = "Running"
-	}
-	head := appProgramTitleStyle.Render(title)
-	if m.composer.draftActive {
-		head += appProgramDimStyle.Render("  draft mode")
-	}
-	return appProgramComposerStyle.Width(width).Render(head + "\n" + m.input.View())
-}
-
-func (m *appProgramModel) transcriptStatusLine() string {
-	lines := m.transcript.lines(maxAppTranscriptLines)
-	if len(lines) == 0 {
-		return "idle"
-	}
-	if m.viewport.AtBottom() {
-		return "live tail · " + strconv.Itoa(len(lines)) + " lines"
-	}
-	return "scrollback · " + strconv.Itoa(len(lines)) + " lines"
+	return appProgramComposerStyle.Width(width).Render(m.input.View())
 }
 
 func compactAppProgramTranscriptText(text string) string {
@@ -563,19 +547,19 @@ func (c *appProgramTranscriptCompactor) compactLine(line string) string {
 func compactAppProgramSectionLabel(trimmed string) (section, label string, ok bool) {
 	switch trimmed {
 	case "[assistant]":
-		return "assistant", "Assistant", true
+		return "assistant", "", true
 	case "[activity]":
-		return "activity", "Activity", true
+		return "activity", "", true
 	case "[result]":
-		return "result", "Result", true
+		return "result", "", true
 	case "[session]":
 		return "session", "", true
 	case "[usage]":
-		return "usage", "Usage", true
+		return "usage", "", true
 	case "[status]":
-		return "status", "Status", true
+		return "status", "", true
 	case "[error]":
-		return "error", "Error", true
+		return "error", "", true
 	default:
 		return "", "", false
 	}
@@ -583,56 +567,56 @@ func compactAppProgramSectionLabel(trimmed string) (section, label string, ok bo
 
 func compactAppProgramActivityLine(trimmed string) string {
 	if strings.HasPrefix(trimmed, "memax> ") {
-		return "› " + strings.TrimSpace(strings.TrimPrefix(trimmed, "memax> "))
+		return appProgramUserStyle.Render("› " + strings.TrimSpace(strings.TrimPrefix(trimmed, "memax> ")))
 	}
 	if strings.HasPrefix(trimmed, "> tool ") {
-		return "• " + strings.TrimSpace(strings.TrimPrefix(trimmed, "> "))
+		return appProgramToolStyle.Render("• " + strings.TrimSpace(strings.TrimPrefix(trimmed, "> ")))
 	}
 	if strings.HasPrefix(trimmed, "< tool ") {
-		return "  " + strings.TrimSpace(strings.TrimPrefix(trimmed, "< "))
+		return appProgramDimStyle.Render("  " + strings.TrimSpace(strings.TrimPrefix(trimmed, "< ")))
 	}
 	if strings.HasPrefix(trimmed, "! tool ") {
-		return "! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))
+		return appProgramErrorStyle.Render("! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))
 	}
 	if strings.HasPrefix(trimmed, "$ command ") {
-		return "• " + strings.TrimSpace(strings.TrimPrefix(trimmed, "$ "))
+		return appProgramToolStyle.Render("• " + strings.TrimSpace(strings.TrimPrefix(trimmed, "$ ")))
 	}
 	if strings.HasPrefix(trimmed, "+ command ") {
-		return "✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ "))
+		return appProgramSuccessStyle.Render("✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ ")))
 	}
 	if strings.HasPrefix(trimmed, "! command ") {
-		return "! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))
+		return appProgramErrorStyle.Render("! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))
 	}
 	if strings.HasPrefix(trimmed, "+ check ") {
-		return "✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ "))
+		return appProgramSuccessStyle.Render("✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ ")))
 	}
 	if strings.HasPrefix(trimmed, "! check ") {
-		return "! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))
+		return appProgramErrorStyle.Render("! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))
 	}
 	if strings.HasPrefix(trimmed, "? approval ") {
-		return "? " + strings.TrimSpace(strings.TrimPrefix(trimmed, "? "))
+		return appProgramAccentStyle.Render("? " + strings.TrimSpace(strings.TrimPrefix(trimmed, "? ")))
 	}
 	if strings.HasPrefix(trimmed, "+ approval ") {
-		return "✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ "))
+		return appProgramSuccessStyle.Render("✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ ")))
 	}
 	if strings.HasPrefix(trimmed, "! approval ") {
-		return "! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))
+		return appProgramErrorStyle.Render("! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))
 	}
-	return trimmed
+	return appProgramDimStyle.Render(trimmed)
 }
 
 func compactAppProgramSessionLine(trimmed string) string {
 	if strings.HasPrefix(trimmed, "id: ") {
-		return "session " + strings.TrimSpace(strings.TrimPrefix(trimmed, "id: "))
+		return appProgramDimStyle.Render("session " + strings.TrimSpace(strings.TrimPrefix(trimmed, "id: ")))
 	}
-	return trimmed
+	return appProgramDimStyle.Render(trimmed)
 }
 
 func compactAppProgramStatusLine(trimmed string) string {
 	if strings.HasPrefix(trimmed, "input=") || strings.HasPrefix(trimmed, "phase:") {
 		return appProgramDimStyle.Render(trimmed)
 	}
-	return trimmed
+	return appProgramDimStyle.Render(trimmed)
 }
 
 func shortSessionID(id string) string {
@@ -681,11 +665,4 @@ func runInteractiveApp(ctx context.Context, stdin io.Reader, stdout io.Writer, o
 		return result.firstErr
 	}
 	return nil
-}
-
-func appProgramRuleText(width int) string {
-	if width <= 0 {
-		width = defaultAppShellWidth
-	}
-	return strings.Repeat("─", max(8, width))
 }

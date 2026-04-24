@@ -32,9 +32,7 @@ func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T)
 
 	for _, want := range []string{
 		"session 019db69e-3b4f-7d79-a333-34d708f1d4a6",
-		"Assistant",
 		"working on it",
-		"Activity",
 		"• tool run_command call",
 		"  tool run_command ok",
 		"! tool run_command error",
@@ -43,20 +41,16 @@ func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T)
 		"! command cmd-2 stopped status=killed",
 		"✓ check go test ./... passed=true",
 		"? approval Apply patch",
-		"Result",
 		"done",
-		"Usage",
 		"input=10 output=2 total=12",
-		"Status",
 		"phase: done",
-		"Error",
 		"boom",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("compact transcript missing %q:\n%s", want, got)
 		}
 	}
-	for _, unwanted := range []string{"[session]", "[assistant]", "[activity]", "[result]", "[usage]", "[status]", "[error]", "$ command", "+ command"} {
+	for _, unwanted := range []string{"[session]", "[assistant]", "[activity]", "[result]", "[usage]", "[status]", "[error]", "Assistant", "Activity", "Result", "Usage", "Status", "Error", "$ command", "+ command"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("compact transcript leaked %q:\n%s", unwanted, got)
 		}

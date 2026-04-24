@@ -1813,9 +1813,7 @@ func TestRunInteractiveAppCapturesPromptRunTranscript(t *testing.T) {
 	for _, want := range []string{
 		"Memax Code",
 		"00000000-0000-7000-8000-000000000123",
-		"Assistant",
 		"working on it",
-		"Result",
 		"done",
 		"bye",
 	} {
