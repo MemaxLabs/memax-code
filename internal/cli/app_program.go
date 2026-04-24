@@ -18,7 +18,7 @@ import (
 
 const (
 	appProgramMinComposer = 3
-	appProgramMaxBody     = 10
+	appProgramMaxBody     = 24
 )
 
 var (
@@ -124,6 +124,7 @@ type appProgramModel struct {
 	running    bool
 	showHelp   bool
 	firstErr   error
+	compactor  appProgramTranscriptCompactor
 }
 
 func newAppProgramModel(ctx context.Context, opts options, runPrompt interactivePromptRunner) *appProgramModel {
@@ -301,7 +302,7 @@ func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
 	m.running = true
 	m.lastError = ""
 	m.statusLine = "running"
-	m.appendTranscriptLine("memax> " + strings.ReplaceAll(strings.TrimSpace(prompt), "\n", " "))
+	m.appendTranscriptLine("› " + strings.ReplaceAll(strings.TrimSpace(prompt), "\n", " "))
 	m.input.Reset()
 	m.composer.cancel()
 	m.syncComposerView()
@@ -369,7 +370,7 @@ func (m *appProgramModel) appendTranscript(text string) {
 		return
 	}
 	atBottom := m.viewport.AtBottom()
-	m.transcript.append(compactAppProgramTranscriptText(text))
+	m.transcript.append(m.compactor.compact(text))
 	m.refreshViewport(atBottom)
 }
 
@@ -401,7 +402,12 @@ func (m *appProgramModel) resize() {
 	if m.showHelp {
 		composerHeight = max(composerHeight, 5)
 	}
-	bodyHeight := min(appProgramMaxBody, max(8, height-composerHeight-6))
+	statusLines := 1
+	if m.showHelp {
+		statusLines = 2
+	}
+	fixedRows := 1 + 3 + statusLines + 1 + 1 // header, body chrome, status, composer title, footer.
+	bodyHeight := min(appProgramMaxBody, max(1, height-composerHeight-fixedRows))
 	m.viewport.Width = width
 	m.viewport.Height = bodyHeight
 	if m.viewport.Width < 1 {
@@ -504,44 +510,80 @@ func (m *appProgramModel) transcriptStatusLine() string {
 }
 
 func compactAppProgramTranscriptText(text string) string {
+	var compactor appProgramTranscriptCompactor
+	return compactor.compact(text)
+}
+
+type appProgramTranscriptCompactor struct {
+	section string
+}
+
+func (c *appProgramTranscriptCompactor) compact(text string) string {
 	text = normalizeAppTranscriptText(text)
 	if strings.TrimSpace(text) == "" {
 		return ""
 	}
+	trailingNewline := strings.HasSuffix(text, "\n")
 	lines := strings.Split(text, "\n")
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
-		out = append(out, compactAppProgramTranscriptLine(line))
+		if compacted := c.compactLine(line); compacted != "" {
+			out = append(out, compacted)
+		}
 	}
-	return strings.Join(out, "\n")
+	text = strings.Join(out, "\n")
+	if trailingNewline {
+		text += "\n"
+	}
+	return text
 }
 
-func compactAppProgramTranscriptLine(line string) string {
+func (c *appProgramTranscriptCompactor) compactLine(line string) string {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return line
 	}
+	if section, label, ok := compactAppProgramSectionLabel(trimmed); ok {
+		c.section = section
+		return label
+	}
+
+	switch c.section {
+	case "activity":
+		return compactAppProgramActivityLine(trimmed)
+	case "session":
+		return compactAppProgramSessionLine(trimmed)
+	case "usage", "status":
+		return compactAppProgramStatusLine(trimmed)
+	default:
+		return line
+	}
+}
+
+func compactAppProgramSectionLabel(trimmed string) (section, label string, ok bool) {
 	switch trimmed {
 	case "[assistant]":
-		return "Assistant"
+		return "assistant", "Assistant", true
 	case "[activity]":
-		return "Activity"
+		return "activity", "Activity", true
 	case "[result]":
-		return "Result"
+		return "result", "Result", true
 	case "[session]":
-		return "Session"
+		return "session", "", true
 	case "[usage]":
-		return "Usage"
+		return "usage", "Usage", true
 	case "[status]":
-		return "Status"
+		return "status", "Status", true
 	case "[error]":
-		return "Error"
+		return "error", "Error", true
+	default:
+		return "", "", false
 	}
+}
+
+func compactAppProgramActivityLine(trimmed string) string {
 	if strings.HasPrefix(trimmed, "memax> ") {
 		return "› " + strings.TrimSpace(strings.TrimPrefix(trimmed, "memax> "))
-	}
-	if strings.HasPrefix(trimmed, "id: ") {
-		return "session " + strings.TrimSpace(strings.TrimPrefix(trimmed, "id: "))
 	}
 	if strings.HasPrefix(trimmed, "> tool ") {
 		return "• " + strings.TrimSpace(strings.TrimPrefix(trimmed, "> "))
@@ -553,26 +595,52 @@ func compactAppProgramTranscriptLine(line string) string {
 		return "! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))
 	}
 	if strings.HasPrefix(trimmed, "$ command ") {
-		return "• " + strings.TrimSpace(trimmed)
+		return "• " + strings.TrimSpace(strings.TrimPrefix(trimmed, "$ "))
 	}
 	if strings.HasPrefix(trimmed, "+ command ") {
-		return "  " + strings.TrimSpace(trimmed)
+		return "✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ "))
 	}
 	if strings.HasPrefix(trimmed, "! command ") {
 		return "! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))
 	}
+	if strings.HasPrefix(trimmed, "+ check ") {
+		return "✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ "))
+	}
+	if strings.HasPrefix(trimmed, "! check ") {
+		return "! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))
+	}
+	if strings.HasPrefix(trimmed, "? approval ") {
+		return "? " + strings.TrimSpace(strings.TrimPrefix(trimmed, "? "))
+	}
+	if strings.HasPrefix(trimmed, "+ approval ") {
+		return "✓ " + strings.TrimSpace(strings.TrimPrefix(trimmed, "+ "))
+	}
+	if strings.HasPrefix(trimmed, "! approval ") {
+		return "! " + strings.TrimSpace(strings.TrimPrefix(trimmed, "! "))
+	}
+	return trimmed
+}
+
+func compactAppProgramSessionLine(trimmed string) string {
+	if strings.HasPrefix(trimmed, "id: ") {
+		return "session " + strings.TrimSpace(strings.TrimPrefix(trimmed, "id: "))
+	}
+	return trimmed
+}
+
+func compactAppProgramStatusLine(trimmed string) string {
 	if strings.HasPrefix(trimmed, "input=") || strings.HasPrefix(trimmed, "phase:") {
 		return appProgramDimStyle.Render(trimmed)
 	}
-	return line
+	return trimmed
 }
 
 func shortSessionID(id string) string {
 	id = strings.TrimSpace(id)
-	if len(id) <= 8 {
+	if len(id) <= 13 {
 		return id
 	}
-	return id[:8]
+	return id[:8] + "..." + id[len(id)-4:]
 }
 
 func nonEmptyOr(value, fallback string) string {

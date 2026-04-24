@@ -5,33 +5,91 @@ import (
 	"testing"
 )
 
-func TestCompactAppProgramTranscriptTextHidesStructuredSectionMarkers(t *testing.T) {
+func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T) {
 	got := compactAppProgramTranscriptText(strings.Join([]string{
+		"[session]",
+		"id: 019db69e-3b4f-7d79-a333-34d708f1d4a6",
 		"[assistant]",
 		"working on it",
 		"[activity]",
 		"> tool run_command call",
 		"< tool run_command ok",
+		"! tool run_command error",
+		"$ command id=cmd-1 command=\"go test ./...\"",
+		"+ command command=\"go test ./...\" exit=0 timeout=false",
+		"! command cmd-2 stopped status=killed",
+		"+ check go test ./... passed=true",
+		"? approval Apply patch",
 		"[result]",
 		"done",
+		"[usage]",
+		"input=10 output=2 total=12",
+		"[status]",
+		"phase: done",
+		"[error]",
+		"boom",
 	}, "\n"))
 
 	for _, want := range []string{
+		"session 019db69e-3b4f-7d79-a333-34d708f1d4a6",
 		"Assistant",
 		"working on it",
 		"Activity",
-		"tool run_command call",
-		"tool run_command ok",
+		"• tool run_command call",
+		"  tool run_command ok",
+		"! tool run_command error",
+		"• command id=cmd-1 command=\"go test ./...\"",
+		"✓ command command=\"go test ./...\" exit=0 timeout=false",
+		"! command cmd-2 stopped status=killed",
+		"✓ check go test ./... passed=true",
+		"? approval Apply patch",
 		"Result",
 		"done",
+		"Usage",
+		"input=10 output=2 total=12",
+		"Status",
+		"phase: done",
+		"Error",
+		"boom",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("compact transcript missing %q:\n%s", want, got)
 		}
 	}
-	for _, unwanted := range []string{"[assistant]", "[activity]", "[result]"} {
+	for _, unwanted := range []string{"[session]", "[assistant]", "[activity]", "[result]", "[usage]", "[status]", "[error]", "$ command", "+ command"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("compact transcript leaked %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestCompactAppProgramTranscriptTextDoesNotRewriteAssistantContent(t *testing.T) {
+	got := compactAppProgramTranscriptText(strings.Join([]string{
+		"[assistant]",
+		"id: 42",
+		"memax> do the thing",
+		"> tool run_command call",
+		"$ command id=cmd-1",
+	}, "\n"))
+
+	for _, want := range []string{
+		"id: 42",
+		"memax> do the thing",
+		"> tool run_command call",
+		"$ command id=cmd-1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("assistant content was rewritten, missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"session 42",
+		"› do the thing",
+		"• tool run_command call",
+		"• command id=cmd-1",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("assistant content was rewritten with %q:\n%s", unwanted, got)
 		}
 	}
 }
