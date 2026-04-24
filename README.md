@@ -236,11 +236,12 @@ scripts never receive terminal control sequences. Both single-prompt app mode
 and the interactive app shell print compact transcript rows into normal
 terminal scrollback instead of drawing a transcript window. The interactive
 shell uses Bubble Tea only for the live bottom surface: status, thinking
-indicator, help, and composer. Assistant text is printed once, structured
-section labels are compacted away, successful tool results collapse by default,
-and tool errors keep a short tail for diagnosis. This is still Foundation
-terminal UX, not yet the full coding-agent timeline/composer product surface.
-Use `--ui tui` when full raw sectioned event output matters.
+indicator, help, and composer. Single-prompt terminal runs still print a compact
+session line so the run can be resumed later. Assistant text is printed once,
+structured section labels are compacted away, successful tool results collapse
+by default, and tool errors keep a short tail for diagnosis. This is still
+Foundation terminal UX, not yet the full coding-agent timeline/composer product
+surface. Use `--ui tui` when full raw sectioned event output matters.
 `--ui live` is the lighter-weight status line mode; it reports phase, elapsed
 time, tool errors, active tool, command, approval, compact activity counts, and
 usage while preserving the sectioned transcript underneath.

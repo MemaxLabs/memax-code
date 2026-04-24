@@ -40,6 +40,9 @@ func (s *appRenderState) Finish(w io.Writer) error {
 }
 
 func (s *appRenderState) Tick(w io.Writer) error {
+	// The non-interactive app renderer has no animation work. It still exposes
+	// a tick interval so renderWithTicksPollerObserved keeps polling Ctrl+C
+	// while an event stream is quiet.
 	return nil
 }
 
@@ -55,6 +58,9 @@ func (s *appRenderState) HandleKey(w io.Writer, key rawKey) error {
 }
 
 func (s *appRenderState) renderEvent(event memaxagent.Event) ([]string, error) {
+	if event.Kind == memaxagent.EventSessionStarted && event.SessionID != "" {
+		return []string{appProgramDimStyle.Render("session " + event.SessionID)}, nil
+	}
 	var model appProgramModel
 	model.transcript = s.transcriptTail
 	model.compactor = s.compactor

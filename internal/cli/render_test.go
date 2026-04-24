@@ -227,6 +227,7 @@ func TestAppRenderEventsPrintInlineTranscript(t *testing.T) {
 	}
 	got := out.String()
 	for _, want := range []string{
+		"session 00000000-0000-7000-8000-000000000001",
 		"I will inspect the failure.",
 		"• Bash(npm test -- --watch)",
 		"• Bash(npm test -- --watch) started id=cmd-1 pid=123",
@@ -258,7 +259,7 @@ func TestAppRenderPrintsErrorBeforeReturning(t *testing.T) {
 	}
 }
 
-func TestAppRenderDoesNotPrintStructuredTranscriptHeader(t *testing.T) {
+func TestAppRenderPrintsCompactSessionLineWithoutStructuredHeader(t *testing.T) {
 	var out bytes.Buffer
 	renderer := &appRenderState{}
 
@@ -266,8 +267,28 @@ func TestAppRenderDoesNotPrintStructuredTranscriptHeader(t *testing.T) {
 		t.Fatalf("Render(session) error = %v", err)
 	}
 	got := out.String()
-	if strings.TrimSpace(got) != "" {
-		t.Fatalf("app output for session start = %q, want no transcript chrome", got)
+	if !strings.Contains(got, "session 00000000-0000-7000-8000-000000000001") {
+		t.Fatalf("app output missing compact session line:\n%s", got)
+	}
+	for _, unwanted := range []string{"[session]", "id: 00000000-0000-7000-8000-000000000001"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("app output leaked structured session chrome %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestAppRenderDropsResultAndUsageMetadata(t *testing.T) {
+	events := make(chan memaxagent.Event, 3)
+	events <- memaxagent.Event{Kind: memaxagent.EventResult, Result: "final answer duplicate"}
+	events <- memaxagent.Event{Kind: memaxagent.EventUsage, Usage: &model.Usage{}}
+	close(events)
+
+	var out bytes.Buffer
+	if err := renderWith(&out, events, &appRenderState{}); err != nil {
+		t.Fatalf("renderWith(app) error = %v", err)
+	}
+	if got := strings.TrimSpace(out.String()); got != "" {
+		t.Fatalf("app output = %q, want result/usage metadata omitted", got)
 	}
 }
 

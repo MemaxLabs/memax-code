@@ -64,7 +64,8 @@ func ResolveMode(mode Mode, terminal bool) Mode {
 		return ModePlain
 	}
 	// Structured mode is safe for redirected output because it writes plain
-	// sectioned text; app and live modes use terminal control sequences.
+	// sectioned text. App and live stay terminal-only so Ctrl+C polling and
+	// live status behavior remain tied to an interactive terminal.
 	if mode != ModeAuto {
 		return mode
 	}
