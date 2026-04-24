@@ -1,8 +1,14 @@
 package cli
 
 import (
+	"context"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T) {
@@ -27,7 +33,7 @@ func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T)
 		"[status]",
 		"phase: done",
 		"[error]",
-		"boom",
+		"! boom",
 	}, "\n"))
 
 	for _, want := range []string{
@@ -56,6 +62,32 @@ func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T)
 		}
 	}
 }
+
+func TestAppProgramLocalLinesAreStyledAfterSanitize(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(previousProfile)
+	})
+
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.appendLocalTranscriptLine("user", "› make a plan")
+	got := strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n")
+
+	for _, want := range []string{
+		"Welcome. Type a task or /help.",
+		"› make a plan",
+	} {
+		if !strings.Contains(ansi.Strip(got), want) {
+			t.Fatalf("local transcript missing %q:\nraw=%q\nstripped=%q", want, got, ansi.Strip(got))
+		}
+	}
+	if bareANSIFragmentRE.MatchString(got) {
+		t.Fatalf("local transcript contains broken ANSI fragments:\nraw=%q\nstripped=%q", got, ansi.Strip(got))
+	}
+}
+
+var bareANSIFragmentRE = regexp.MustCompile(`(^|[^\x1b])\[[0-9;]*m`)
 
 func TestCompactAppProgramTranscriptTextDoesNotRewriteAssistantContent(t *testing.T) {
 	got := compactAppProgramTranscriptText(strings.Join([]string{

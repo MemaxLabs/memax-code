@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -18,6 +19,8 @@ import (
 const (
 	appProgramMinComposer = 3
 	appProgramMaxBody     = 24
+
+	appProgramLocalLinePrefix = "[memax-app:"
 )
 
 var (
@@ -167,13 +170,13 @@ func newAppProgramModel(ctx context.Context, opts options, runPrompt interactive
 		keys:       appProgramKeys,
 		statusLine: "idle",
 	}
-	model.appendTranscriptLine(appProgramDimStyle.Render("Welcome. Type a task or /help."))
+	model.appendLocalTranscriptLine("dim", "Welcome. Type a task or /help.")
 	if opts.ResumeSessionID != "" {
 		model.sessionID = opts.ResumeSessionID
-		model.appendTranscriptLine("resumed session: " + opts.ResumeSessionID)
+		model.appendLocalTranscriptLine("dim", "resumed session: "+opts.ResumeSessionID)
 	}
 	if entries, err := model.history.Load(); err != nil {
-		model.appendTranscriptLine("warning: " + err.Error())
+		model.appendLocalTranscriptLine("dim", "warning: "+err.Error())
 	} else {
 		model.composer.loadHistory(entries)
 	}
@@ -303,7 +306,7 @@ func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
 	m.running = true
 	m.lastError = ""
 	m.statusLine = "running"
-	m.appendTranscriptLine(appProgramUserStyle.Render("› " + strings.ReplaceAll(strings.TrimSpace(prompt), "\n", " ")))
+	m.appendLocalTranscriptLine("user", "› "+strings.ReplaceAll(strings.TrimSpace(prompt), "\n", " "))
 	m.input.Reset()
 	m.composer.cancel()
 	m.syncComposerView()
@@ -330,14 +333,14 @@ func (m *appProgramModel) finishPrompt(msg appProgramPromptDoneMsg) {
 	m.running = false
 	if strings.TrimSpace(msg.sessionID) != "" {
 		if m.sessionID != msg.sessionID {
-			m.appendTranscriptLine("session: " + msg.sessionID)
+			m.appendLocalTranscriptLine("dim", "session: "+msg.sessionID)
 		}
 		m.sessionID = msg.sessionID
 	}
 	if msg.err != nil {
 		m.lastError = msg.err.Error()
 		m.statusLine = "error"
-		m.appendTranscriptLine("error: " + msg.err.Error())
+		m.appendLocalTranscriptLine("error", "error: "+msg.err.Error())
 		if m.firstErr == nil {
 			m.firstErr = msg.err
 		}
@@ -345,7 +348,7 @@ func (m *appProgramModel) finishPrompt(msg appProgramPromptDoneMsg) {
 	}
 	if m.composer.history.Record(msg.prompt) {
 		if err := m.history.Append(msg.prompt); err != nil {
-			m.appendTranscriptLine("warning: " + err.Error())
+			m.appendLocalTranscriptLine("dim", "warning: "+err.Error())
 		}
 	}
 	m.statusLine = "idle"
@@ -381,6 +384,15 @@ func (m *appProgramModel) appendTranscriptLine(text string) {
 		return
 	}
 	m.appendTranscript(text + "\n")
+}
+
+func (m *appProgramModel) appendLocalTranscriptLine(kind, text string) {
+	kind = strings.TrimSpace(kind)
+	text = strings.TrimSpace(text)
+	if kind == "" || text == "" {
+		return
+	}
+	m.appendTranscriptLine(appProgramLocalLinePrefix + kind + "] " + text)
 }
 
 func (m *appProgramModel) refreshViewport(stickBottom bool) {
@@ -470,7 +482,7 @@ func (m *appProgramModel) phaseLabel() string {
 }
 
 func (m *appProgramModel) bodyView(width int) string {
-	return lipgloss.NewStyle().Width(width).Render(m.viewport.View())
+	return m.viewport.View()
 }
 
 func (m *appProgramModel) statusView() string {
@@ -478,6 +490,9 @@ func (m *appProgramModel) statusView() string {
 		appProgramTitleStyle.Render("session") + " " + nonEmptyOr(shortSessionID(m.sessionID), "none"),
 		appProgramTitleStyle.Render("workspace") + " " + filepath.Base(m.opts.CWD),
 		appProgramTitleStyle.Render("composer") + " " + m.composer.statusLine(),
+	}
+	if newer := m.hiddenNewerLineCount(); newer > 0 {
+		parts = append(parts, appProgramMutedStyle.Render("↓ "+strconv.Itoa(newer)+" newer"))
 	}
 	if m.lastError != "" {
 		parts = append(parts, appProgramErrorStyle.Render("error "+m.lastError))
@@ -491,6 +506,14 @@ func (m *appProgramModel) statusView() string {
 
 func (m *appProgramModel) composerView(width int) string {
 	return appProgramComposerStyle.Width(width).Render(m.input.View())
+}
+
+func (m *appProgramModel) hiddenNewerLineCount() int {
+	if m.viewport.AtBottom() {
+		return 0
+	}
+	lines := m.transcript.lines(maxAppTranscriptLines)
+	return max(0, len(lines)-(m.viewport.YOffset+m.viewport.Height))
 }
 
 func compactAppProgramTranscriptText(text string) string {
@@ -531,6 +554,9 @@ func (c *appProgramTranscriptCompactor) compactLine(line string) string {
 		c.section = section
 		return label
 	}
+	if compacted, ok := compactAppProgramLocalLine(trimmed); ok {
+		return compacted
+	}
 
 	switch c.section {
 	case "activity":
@@ -539,8 +565,30 @@ func (c *appProgramTranscriptCompactor) compactLine(line string) string {
 		return compactAppProgramSessionLine(trimmed)
 	case "usage", "status":
 		return compactAppProgramStatusLine(trimmed)
+	case "error":
+		return compactAppProgramErrorLine(trimmed)
 	default:
 		return line
+	}
+}
+
+func compactAppProgramLocalLine(trimmed string) (string, bool) {
+	if !strings.HasPrefix(trimmed, appProgramLocalLinePrefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(trimmed, appProgramLocalLinePrefix)
+	kind, text, ok := strings.Cut(rest, "] ")
+	if !ok || strings.TrimSpace(text) == "" {
+		return "", true
+	}
+	text = strings.TrimSpace(text)
+	switch strings.TrimSpace(kind) {
+	case "user":
+		return appProgramUserStyle.Render(text), true
+	case "error":
+		return appProgramErrorStyle.Render("! " + text), true
+	default:
+		return appProgramDimStyle.Render(text), true
 	}
 }
 
@@ -613,10 +661,11 @@ func compactAppProgramSessionLine(trimmed string) string {
 }
 
 func compactAppProgramStatusLine(trimmed string) string {
-	if strings.HasPrefix(trimmed, "input=") || strings.HasPrefix(trimmed, "phase:") {
-		return appProgramDimStyle.Render(trimmed)
-	}
 	return appProgramDimStyle.Render(trimmed)
+}
+
+func compactAppProgramErrorLine(trimmed string) string {
+	return appProgramErrorStyle.Render("! " + trimmed)
 }
 
 func shortSessionID(id string) string {
