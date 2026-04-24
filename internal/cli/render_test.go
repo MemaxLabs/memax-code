@@ -517,6 +517,33 @@ func TestAppTranscriptTailBoundsStoredLinesAndKeepsPartial(t *testing.T) {
 	}
 }
 
+func TestAppTranscriptTailStandaloneLineFlushesPartial(t *testing.T) {
+	var tail appTranscriptTail
+	tail.append("streaming partial")
+	tail.appendStandaloneLine("local row")
+
+	got := tail.lines(10)
+	want := []string{"streaming partial", "local row"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("tail lines = %#v, want %#v", got, want)
+	}
+	if tail.partial != "" {
+		t.Fatalf("partial = %q, want empty", tail.partial)
+	}
+}
+
+func TestAppTranscriptVisualLineCountUsesDisplayWidth(t *testing.T) {
+	got := appTranscriptVisualLineCount([]string{
+		"1234567890",
+		"\x1b[31m123456\x1b[0m",
+		"",
+	}, 4)
+	want := 6
+	if got != want {
+		t.Fatalf("visual line count = %d, want %d", got, want)
+	}
+}
+
 func TestAppRenderNormalizesCarriageReturnTranscriptChunks(t *testing.T) {
 	renderer := &appRenderState{}
 	renderer.transcriptHeaderStripped = true

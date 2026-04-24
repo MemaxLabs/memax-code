@@ -89,6 +89,37 @@ func TestAppProgramLocalLinesAreStyledAfterSanitize(t *testing.T) {
 	}
 }
 
+func TestAppProgramLocalLineFlushesStreamingPartial(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{}
+
+	model.appendTranscript("[assistant]\nhello")
+	model.appendLocalTranscriptLine("user", "› next")
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(got, "hello\n") || !strings.Contains(got, "› next") {
+		t.Fatalf("local row was not separated from streaming partial:\n%q", got)
+	}
+	if strings.Contains(strings.ReplaceAll(got, " ", ""), "hello›next") {
+		t.Fatalf("local row glued to streaming partial:\n%q", got)
+	}
+}
+
+func TestAppProgramResizeCountsWrappedTranscriptRows(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.width = 10
+	model.height = 20
+	model.transcript = appTranscriptTail{}
+	model.transcript.append("abcdefghijklmnopqrstuvwxyz\n")
+
+	model.resize()
+
+	if got, want := model.viewport.Height, 3; got != want {
+		t.Fatalf("viewport height = %d, want %d for wrapped transcript line", got, want)
+	}
+}
+
 var bareANSIFragmentRE = regexp.MustCompile(`(^|[^\x1b])\[[0-9;]*m`)
 
 func TestCompactAppProgramTranscriptTextDoesNotRewriteAssistantContent(t *testing.T) {

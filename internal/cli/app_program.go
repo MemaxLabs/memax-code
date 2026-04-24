@@ -390,7 +390,7 @@ func (m *appProgramModel) appendLocalTranscriptLine(kind, text string) {
 		return
 	}
 	atBottom := m.viewport.AtBottom()
-	m.transcript.append(compactAppProgramLocalLine(kind, text) + "\n")
+	m.transcript.appendStandaloneLine(compactAppProgramLocalLine(kind, text))
 	m.resize()
 	m.refreshViewport(atBottom)
 }
@@ -422,7 +422,8 @@ func (m *appProgramModel) resize() {
 	}
 	fixedRows := 1 + statusLines + 1 + 1 // header, status, composer, footer.
 	availableBodyHeight := min(appProgramMaxBody, max(1, height-composerHeight-fixedRows))
-	contentHeight := len(m.transcript.lines(maxAppTranscriptLines))
+	transcriptLines := m.transcript.lines(maxAppTranscriptLines)
+	contentHeight := appTranscriptVisualLineCount(transcriptLines, width)
 	if contentHeight <= 0 {
 		contentHeight = 1
 	}

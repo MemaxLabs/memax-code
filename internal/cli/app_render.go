@@ -8,6 +8,7 @@ import (
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -243,6 +244,21 @@ func (t *appTranscriptTail) append(text string) {
 	}
 }
 
+func (t *appTranscriptTail) appendStandaloneLine(line string) {
+	t.flushPartial()
+	t.appendLine(line)
+}
+
+func (t *appTranscriptTail) flushPartial() {
+	if strings.TrimSpace(t.partial) == "" {
+		t.partial = ""
+		return
+	}
+	partial := t.partial
+	t.partial = ""
+	t.appendLine(partial)
+}
+
 func (t *appTranscriptTail) appendLine(line string) {
 	if strings.TrimSpace(line) == "" {
 		return
@@ -274,6 +290,22 @@ func (t *appTranscriptTail) effectiveLimit() int {
 		return t.limit
 	}
 	return maxAppTranscriptLines
+}
+
+func appTranscriptVisualLineCount(lines []string, width int) int {
+	if width < 1 {
+		width = 1
+	}
+	count := 0
+	for _, line := range lines {
+		lineWidth := ansi.StringWidth(line)
+		if lineWidth <= 0 {
+			count++
+			continue
+		}
+		count += (lineWidth + width - 1) / width
+	}
+	return count
 }
 
 func fitFrameHeight(lines []string, height int) []string {
