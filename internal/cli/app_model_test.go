@@ -27,6 +27,15 @@ func countTranscriptLine(text, line string) int {
 	return count
 }
 
+func strippedViewRows(text string) []string {
+	lines := strings.Split(text, "\n")
+	rows := make([]string, len(lines))
+	for i, line := range lines {
+		rows[i] = strings.TrimSpace(line)
+	}
+	return rows
+}
+
 func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T) {
 	got := compactAppProgramTranscriptText(strings.Join([]string{
 		"[session]",
@@ -1166,6 +1175,17 @@ func TestAppProgramViewUsesQuietIdleStatus(t *testing.T) {
 	if strings.Contains(view, "thinking") {
 		t.Fatalf("idle view should not show activity line:\n%s", view)
 	}
+	rows := strippedViewRows(view)
+	promptAt := -1
+	for i, row := range rows {
+		if strings.HasPrefix(row, "› Ask Memax Code") {
+			promptAt = i
+			break
+		}
+	}
+	if promptAt != 2 || rows[promptAt-1] != "" || rows[promptAt-2] != "" {
+		t.Fatalf("idle view should have exactly one margin row plus composer padding before prompt:\n%s", view)
+	}
 }
 
 func TestAppProgramComposerViewUsesVerticalPadding(t *testing.T) {
@@ -1294,6 +1314,22 @@ func TestAppProgramViewShowsActivityOnlyWhileRunning(t *testing.T) {
 
 	if !strings.Contains(view, "thinking") {
 		t.Fatalf("running view missing thinking activity:\n%s", view)
+	}
+	rows := strippedViewRows(view)
+	statusAt, promptAt := -1, -1
+	for i, row := range rows {
+		if strings.Contains(row, "thinking") {
+			statusAt = i
+		}
+		if strings.HasPrefix(row, "› Ask Memax Code") {
+			promptAt = i
+		}
+	}
+	if statusAt != 1 || rows[statusAt-1] != "" {
+		t.Fatalf("running view should have exactly one top margin row before activity status:\n%s", view)
+	}
+	if promptAt-statusAt != 3 || rows[promptAt-1] != "" || rows[promptAt-2] != "" {
+		t.Fatalf("running view should have exactly one margin row plus composer padding before prompt:\n%s", view)
 	}
 }
 

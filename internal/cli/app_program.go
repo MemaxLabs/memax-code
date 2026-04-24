@@ -22,6 +22,7 @@ import (
 const (
 	appProgramMinComposer = 1
 	appProgramStatusInset = 2
+	appProgramBottomInset = 1
 )
 
 var (
@@ -451,14 +452,23 @@ func (m *appProgramModel) View() string {
 
 	rows := make([]string, 0, 4)
 	if status := m.activityStatusView(); status != "" {
+		rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 		rows = append(rows, status)
 	}
+	rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 	rows = append(rows, m.composerView(width))
 	rows = append(rows, m.bottomStatusView())
 	if m.showHelp {
 		rows = append(rows, m.helpView())
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+func appendAppProgramBlankRows(rows []string, count int) []string {
+	for range count {
+		rows = append(rows, "")
+	}
+	return rows
 }
 
 func (m *appProgramModel) activityStatusView() string {
