@@ -47,10 +47,9 @@ func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T)
 	for _, want := range []string{
 		"working on it",
 		"• Bash call",
-		"  Bash ok",
 		"! Bash error",
 		"• Bash(go test ./...) started id=cmd-1",
-		"✓ Bash(go test ./...) done exit=0",
+		"✓ done exit=0",
 		"! command cmd-2 stopped status=killed",
 		"✓ check go test ./... passed=true",
 		"? approval Apply patch",
@@ -148,7 +147,7 @@ func TestAppProgramStructuredEventsRenderWithoutTranscriptParsing(t *testing.T) 
 	for _, want := range []string{
 		"working",
 		"• Bash(go test ./...)",
-		"✓ Bash(go test ./...) done exit=0",
+		"✓ done exit=0",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("structured transcript missing %q:\n%s", want, got)
@@ -158,6 +157,64 @@ func TestAppProgramStructuredEventsRenderWithoutTranscriptParsing(t *testing.T) 
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("structured transcript leaked parsed renderer text %q:\n%s", unwanted, got)
 		}
+	}
+}
+
+func TestAppProgramStructuredCommandAuxRowsKeepIdentity(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	for _, event := range []memaxagent.Event{
+		{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{CommandID: "cmd-1", Command: "npm test -- --watch", PID: 321}},
+		{Kind: memaxagent.EventCommandOutput, Command: &memaxagent.CommandEvent{CommandID: "cmd-1", OutputChunks: 3, NextSeq: 4}},
+		{Kind: memaxagent.EventCommandInput, Command: &memaxagent.CommandEvent{CommandID: "cmd-1", InputBytes: 7}},
+		{Kind: memaxagent.EventCommandResized, Command: &memaxagent.CommandEvent{CommandID: "cmd-1", Cols: 100, Rows: 30}},
+		{Kind: memaxagent.EventCommandStopped, Command: &memaxagent.CommandEvent{CommandID: "cmd-1", Status: "killed"}},
+		{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{CommandID: "cmd-2", Command: "go test ./...", ExitCode: 1, TimedOut: true}},
+	} {
+		m.appendEvent(event)
+	}
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"• Bash(npm test -- --watch) started id=cmd-1 pid=321",
+		"output id=cmd-1 chunks=3 next_seq=4",
+		"input id=cmd-1 bytes=7",
+		"resize id=cmd-1 cols=100 rows=30",
+		"! stopped id=cmd-1 status=killed",
+		"! failed id=cmd-2 exit=1 timeout=true",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("structured command transcript missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestCompactAppProgramTranscriptTextUsesCompactCommandCompletions(t *testing.T) {
+	got := ansi.Strip(compactAppProgramTranscriptText(strings.Join([]string{
+		"[activity]",
+		"$ command id=cmd-1 command=\"ls -la\"",
+		"$ command id=cmd-2 command=\"find . -maxdepth 2\"",
+		"+ command id=cmd-1 command=\"ls -la\" exit=0 timeout=false",
+		"+ command id=cmd-2 command=\"find . -maxdepth 2\" exit=0 timeout=false",
+		"< tool run_command ok",
+	}, "\n")))
+
+	for _, want := range []string{
+		"• Bash(ls -la) started id=cmd-1",
+		"• Bash(find . -maxdepth 2) started id=cmd-2",
+		"✓ done id=cmd-1 exit=0",
+		"✓ done id=cmd-2 exit=0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("compact command transcript missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "✓ Bash(ls -la) done") || strings.Contains(got, "✓ Bash(find . -maxdepth 2) done") || strings.Contains(got, "Bash ok") {
+		t.Fatalf("compact command transcript repeated command labels or redundant ok:\n%s", got)
+	}
+	if strings.Count(got, "✓ done id=") != 2 {
+		t.Fatalf("compact command completion count = %d, want 2:\n%s", strings.Count(got, "✓ done id="), got)
 	}
 }
 
@@ -847,7 +904,6 @@ func TestCompactAppProgramTranscriptTextTailsCommandOutputResults(t *testing.T) 
 		"[stdout #3]",
 		"PASS widget.test.ts",
 		"• Bash call",
-		"  Bash ok",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("command output transcript missing %q:\n%s", want, got)
@@ -858,6 +914,7 @@ func TestCompactAppProgramTranscriptTextTailsCommandOutputResults(t *testing.T) 
 		"status: running",
 		"command succeeded: go test ./...",
 		"verbose output that should stay collapsed",
+		"  Bash ok",
 	} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("command output transcript leaked %q:\n%s", unwanted, got)

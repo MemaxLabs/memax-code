@@ -113,6 +113,9 @@ func (f *appTranscriptFormatter) appendToolResult(result *model.ToolResult) {
 		f.appendActivityDetail("error", appProgramErrorStyle, result.Content)
 		return
 	}
+	if appToolResultIsRedundant(result.Name) {
+		return
+	}
 	f.appendActivityLine(appProgramDimStyle.Render("  " + name + " ok"))
 	if appToolShowsResultTail(result.Name) {
 		f.appendActivityDetail("output", appProgramDimStyle, result.Content)

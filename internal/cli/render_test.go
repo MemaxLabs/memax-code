@@ -737,7 +737,7 @@ func TestRenderTUIEventsQuotesCommandAndHandlesEmptyDisplay(t *testing.T) {
 		Command:   `grep -RInE "id=123|timeout=false" README.md`,
 		PID:       123,
 	}}
-	events <- memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{ExitCode: 0}}
+	events <- memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{CommandID: "cmd-1", ExitCode: 0}}
 	close(events)
 
 	var out bytes.Buffer
@@ -747,7 +747,7 @@ func TestRenderTUIEventsQuotesCommandAndHandlesEmptyDisplay(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		`$ command id=cmd-1 pid=123 command="grep -RInE \"id=123|timeout=false\" README.md"`,
-		`+ command exit=0 timeout=false`,
+		`+ command id=cmd-1 exit=0 timeout=false`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("tui output missing %q:\n%s", want, got)

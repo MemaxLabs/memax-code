@@ -921,6 +921,9 @@ func (c *appProgramTranscriptCompactor) compactActivityLine(trimmed string) []st
 		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
 		c.lastActivityTool = appActivityToolName(trimmed)
+		if appToolResultIsRedundant(c.lastActivityTool) {
+			return out
+		}
 		return append(out, appProgramDimStyle.Render("  "+appFormatToolLine(strings.TrimSpace(strings.TrimPrefix(trimmed, "< ")))))
 	}
 	if strings.HasPrefix(trimmed, "! tool ") {
@@ -1077,34 +1080,77 @@ func appToolShowsResultTail(name string) bool {
 	}
 }
 
+func appToolResultIsRedundant(name string) bool {
+	switch name {
+	case "run_command", "start_command", "stop_command", "resize_command_terminal":
+		return true
+	default:
+		return false
+	}
+}
+
 func appFormatCommandLine(status, raw string) string {
 	fields := appParseActivityFields(raw)
 	command := fields["command"]
 	if command == "" {
 		return strings.TrimSpace("command " + raw)
 	}
-	parts := []string{"Bash(" + command + ")"}
-	switch status {
-	case "started":
-		parts = append(parts, "started")
-	case "done":
-		parts = append(parts, "done")
-	case "failed":
-		parts = append(parts, "failed")
+	if status != "started" {
+		parts := []string{status}
+		if id := fields["id"]; id != "" {
+			parts = append(parts, "id="+id)
+		}
+		if exit := fields["exit"]; exit != "" {
+			parts = append(parts, "exit="+exit)
+		}
+		if timeout := fields["timeout"]; timeout == "true" {
+			parts = append(parts, "timeout=true")
+		}
+		return strings.Join(parts, " ")
 	}
+	parts := []string{"Bash(" + command + ")", "started"}
 	if id := fields["id"]; id != "" {
 		parts = append(parts, "id="+id)
 	}
-	if pid := fields["pid"]; pid != "" && status == "started" {
+	if pid := fields["pid"]; pid != "" {
 		parts = append(parts, "pid="+pid)
 	}
-	if exit := fields["exit"]; exit != "" && status != "started" {
-		parts = append(parts, "exit="+exit)
+	return strings.Join(parts, " ")
+}
+
+func appCommandCompletionLine(prefix, status string, command *memaxagent.CommandEvent) string {
+	parts := []string{prefix + " " + status}
+	if command.CommandID != "" {
+		parts = append(parts, "id="+command.CommandID)
 	}
-	if timeout := fields["timeout"]; timeout == "true" {
+	parts = append(parts, fmt.Sprintf("exit=%d", command.ExitCode))
+	if command.TimedOut {
 		parts = append(parts, "timeout=true")
 	}
 	return strings.Join(parts, " ")
+}
+
+func appCommandAuxLine(action string, command *memaxagent.CommandEvent) string {
+	idPart := ""
+	if command.CommandID != "" {
+		idPart = " id=" + command.CommandID
+	}
+	switch action {
+	case "output":
+		return fmt.Sprintf("  output%s chunks=%d next_seq=%d", idPart, command.OutputChunks, command.NextSeq)
+	case "input":
+		return fmt.Sprintf("  input%s bytes=%d", idPart, command.InputBytes)
+	case "resize":
+		return fmt.Sprintf("  resize%s cols=%d rows=%d", idPart, command.Cols, command.Rows)
+	case "stopped":
+		status := command.Status
+		if status == "" {
+			status = "stopped"
+		}
+		return fmt.Sprintf("! stopped%s status=%s", idPart, status)
+	default:
+		return ""
+	}
 }
 
 func appCommandEventLine(event memaxagent.Event) (string, lipgloss.Style) {
@@ -1112,12 +1158,12 @@ func appCommandEventLine(event memaxagent.Event) (string, lipgloss.Style) {
 	if command == nil {
 		return "", appProgramDimStyle
 	}
-	display := commandDisplay(event)
-	if display == "" && command.CommandID != "" {
-		display = command.CommandID
-	}
 	switch event.Kind {
 	case memaxagent.EventCommandStarted:
+		display := commandDisplay(event)
+		if display == "" && command.CommandID != "" {
+			display = command.CommandID
+		}
 		parts := []string{"• " + appCommandDisplay(display), "started"}
 		if command.CommandID != "" {
 			parts = append(parts, "id="+command.CommandID)
@@ -1129,29 +1175,21 @@ func appCommandEventLine(event memaxagent.Event) (string, lipgloss.Style) {
 	case memaxagent.EventCommandFinished:
 		status := "done"
 		style := appProgramSuccessStyle
-		prefix := "✓ "
+		prefix := "✓"
 		if command.ExitCode != 0 || command.TimedOut {
 			status = "failed"
 			style = appProgramErrorStyle
-			prefix = "! "
+			prefix = "!"
 		}
-		parts := []string{prefix + appCommandDisplay(display), status, fmt.Sprintf("exit=%d", command.ExitCode)}
-		if command.TimedOut {
-			parts = append(parts, "timeout=true")
-		}
-		return strings.Join(parts, " "), style
+		return appCommandCompletionLine(prefix, status, command), style
 	case memaxagent.EventCommandOutput:
-		return fmt.Sprintf("  %s output chunks=%d next_seq=%d", appCommandDisplay(display), command.OutputChunks, command.NextSeq), appProgramDimStyle
+		return appCommandAuxLine("output", command), appProgramDimStyle
 	case memaxagent.EventCommandInput:
-		return fmt.Sprintf("  %s input bytes=%d", appCommandDisplay(display), command.InputBytes), appProgramDimStyle
+		return appCommandAuxLine("input", command), appProgramDimStyle
 	case memaxagent.EventCommandResized:
-		return fmt.Sprintf("  %s resize cols=%d rows=%d", appCommandDisplay(display), command.Cols, command.Rows), appProgramDimStyle
+		return appCommandAuxLine("resize", command), appProgramDimStyle
 	case memaxagent.EventCommandStopped:
-		status := command.Status
-		if status == "" {
-			status = "stopped"
-		}
-		return fmt.Sprintf("! %s stopped status=%s", appCommandDisplay(display), status), appProgramErrorStyle
+		return appCommandAuxLine("stopped", command), appProgramErrorStyle
 	default:
 		return "", appProgramDimStyle
 	}

@@ -413,6 +413,9 @@ func timelineCommandFinishedLine(event memaxagent.Event) string {
 	if event.Command == nil {
 		return strings.Join(parts, " ")
 	}
+	if event.Command.CommandID != "" {
+		parts = append(parts, "id="+event.Command.CommandID)
+	}
 	if display := commandDisplay(event); display != "" {
 		parts = append(parts, fmt.Sprintf("command=%q", display))
 	}
