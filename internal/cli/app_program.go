@@ -209,7 +209,8 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *appProgramModel) updateKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	switch msg.String() {
 	case "ctrl+c":
-		m.appendTranscriptLine("bye")
+		m.flushTranscriptPartial()
+		m.appendLocalTranscriptLine("dim", "bye")
 		return tea.Quit, true
 	case "f1":
 		m.showHelp = !m.showHelp
@@ -330,6 +331,7 @@ func (m *appProgramModel) finishPrompt(msg appProgramPromptDoneMsg) {
 	if msg.err != nil {
 		m.lastError = msg.err.Error()
 		m.statusLine = "error"
+		m.flushTranscriptPartial()
 		m.appendLocalTranscriptLine("error", "error: "+msg.err.Error())
 		if m.firstErr == nil {
 			m.firstErr = msg.err

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -154,6 +155,74 @@ func TestAppProgramLocalLineFlushesStreamingPartial(t *testing.T) {
 	}
 	if strings.Contains(strings.ReplaceAll(got, " ", ""), "hello›next") {
 		t.Fatalf("local row glued to streaming partial:\n%q", got)
+	}
+}
+
+func TestAppProgramFinishPromptErrorFlushesToolErrorTail(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{}
+
+	for _, chunk := range []string{
+		"[activity]\n",
+		"! tool run_command error\n",
+		"  error: line one\n",
+		"  line two\n",
+	} {
+		model.appendTranscript(chunk)
+	}
+	model.finishPrompt(appProgramPromptDoneMsg{err: errors.New("prompt failed")})
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"! tool run_command error",
+		"error tail:",
+		"line one",
+		"line two",
+		"! error: prompt failed",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error prompt transcript missing %q:\n%s", want, got)
+		}
+	}
+	if model.compactor.activityDetail != nil {
+		t.Fatalf("activity detail remained buffered after error prompt: %#v", model.compactor.activityDetail.lines)
+	}
+
+	model.appendTranscript("[activity]\n")
+	afterNextPromptStart := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	if strings.Count(afterNextPromptStart, "line one") != 1 || strings.Count(afterNextPromptStart, "line two") != 1 {
+		t.Fatalf("previous error tail leaked after next prompt start:\n%s", afterNextPromptStart)
+	}
+}
+
+func TestAppProgramCtrlCFlushesToolErrorTail(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{}
+
+	for _, chunk := range []string{
+		"[activity]\n",
+		"! tool run_command error\n",
+		"  error: line one\n",
+		"  line two\n",
+	} {
+		model.appendTranscript(chunk)
+	}
+	if _, handled := model.updateKey(tea.KeyMsg{Type: tea.KeyCtrlC}); !handled {
+		t.Fatal("ctrl+c was not handled")
+	}
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"error tail:",
+		"line one",
+		"line two",
+		"bye",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("ctrl+c transcript missing %q:\n%s", want, got)
+		}
 	}
 }
 
