@@ -194,6 +194,8 @@ func TestParseInheritsCommandEnvByDefault(t *testing.T) {
 }
 
 func TestParseCanDisableInheritedCommandEnv(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	for _, args := range [][]string{
 		{"--dry-run", "--inherit-command-env=false"},
 		{"--dry-run", "--no-inherit-command-env"},
@@ -209,7 +211,25 @@ func TestParseCanDisableInheritedCommandEnv(t *testing.T) {
 	}
 }
 
+func TestParseNoInheritedCommandEnvFalseEnablesInheritance(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"inherit_command_env": false}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stderr bytes.Buffer
+	opts, err := parseArgs([]string{"--dry-run", "--config", configPath, "--no-inherit-command-env=false"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !opts.InheritCommandEnv {
+		t.Fatal("InheritCommandEnv = false, want --no-inherit-command-env=false to enable inheritance")
+	}
+}
+
 func TestParseInheritedCommandEnvConfigAndEnvCanOptOut(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(configPath, []byte(`{"inherit_command_env": false}`), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)

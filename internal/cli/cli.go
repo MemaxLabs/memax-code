@@ -245,11 +245,11 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	inheritEnvFlagSet := flagWasSet(fs, "inherit-command-env")
 	noInheritEnvFlagSet := flagWasSet(fs, "no-inherit-command-env")
 	if inheritEnvFlagSet && noInheritEnvFlagSet {
-		return options{}, fmt.Errorf("--inherit-command-env cannot be combined with --no-inherit-command-env")
+		return options{}, fmt.Errorf("--inherit-command-env cannot be combined with --no-inherit-command-env; choose one")
 	}
-	if noInheritEnvFlagSet && *noInheritCommandEnv {
+	if noInheritEnvFlagSet {
 		inheritEnvFlagSet = true
-		*inheritCommandEnv = false
+		*inheritCommandEnv = !*noInheritCommandEnv
 	}
 	inheritEnv, err := boolSetting(*inheritCommandEnv, inheritEnvFlagSet, "MEMAX_CODE_INHERIT_COMMAND_ENV", cfg.InheritCommandEnv, true)
 	if err != nil {

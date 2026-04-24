@@ -106,13 +106,12 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 	}
 	noInheritCommandEnvFlagSet := flagWasSet(fs, "no-inherit-command-env")
 	if flagWasSet(fs, "inherit-command-env") && noInheritCommandEnvFlagSet {
-		return fmt.Errorf("--inherit-command-env cannot be combined with --no-inherit-command-env")
+		return fmt.Errorf("--inherit-command-env cannot be combined with --no-inherit-command-env; choose one")
 	}
-	noInheritCommandEnvSet := noInheritCommandEnvFlagSet && *noInheritCommandEnv
-	if noInheritCommandEnvSet {
-		*inheritCommandEnv = false
+	if noInheritCommandEnvFlagSet {
+		*inheritCommandEnv = !*noInheritCommandEnv
 	}
-	if flagWasSet(fs, "inherit-command-env") || noInheritCommandEnvSet {
+	if flagWasSet(fs, "inherit-command-env") || noInheritCommandEnvFlagSet {
 		cfg.InheritCommandEnv = boolPtr(*inheritCommandEnv)
 	}
 	if verifyCommands.set {

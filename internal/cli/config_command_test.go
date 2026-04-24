@@ -169,6 +169,27 @@ func TestConfigInitCanWriteInheritedCommandEnvOptOut(t *testing.T) {
 	}
 }
 
+func TestConfigInitNoInheritedCommandEnvFalseWritesInheritance(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"config", "init",
+		"--config", configPath,
+		"--no-inherit-command-env=false",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	body, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(body), `"inherit_command_env": true`) {
+		t.Fatalf("config missing inherit opt-in:\n%s", body)
+	}
+}
+
 func TestConfigInitRejectsConflictingInheritedCommandEnvFlags(t *testing.T) {
 	for _, args := range [][]string{
 		{
