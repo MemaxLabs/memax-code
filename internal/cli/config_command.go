@@ -50,7 +50,8 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 	uiRaw := fs.String("ui", defaultConfigUI, "event renderer: auto, app, live, tui, or plain")
 	sessionDir := fs.String("session-dir", defaultConfigSessionDir, "directory for JSONL session transcripts")
 	historyFile := fs.String("history-file", defaultConfigHistoryFile, "path to interactive prompt history JSONL")
-	inheritCommandEnv := fs.Bool("inherit-command-env", false, "let command tools inherit the host process environment")
+	inheritCommandEnv := fs.Bool("inherit-command-env", true, "let command tools inherit the host process environment")
+	noInheritCommandEnv := fs.Bool("no-inherit-command-env", false, "write inherit_command_env=false to disable host environment inheritance")
 	verifyCommands := newVerifyCommandsFlag()
 	fs.Var(verifyCommands, "verify-command", "add a verification command as name=command; repeat for test, lint, typecheck, or default (default wins over test for empty/default requests)")
 	fs.Usage = func() {
@@ -103,7 +104,15 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 		SessionDir:  strings.TrimSpace(*sessionDir),
 		HistoryFile: strings.TrimSpace(*historyFile),
 	}
-	if flagWasSet(fs, "inherit-command-env") {
+	noInheritCommandEnvFlagSet := flagWasSet(fs, "no-inherit-command-env")
+	if flagWasSet(fs, "inherit-command-env") && noInheritCommandEnvFlagSet {
+		return fmt.Errorf("--inherit-command-env cannot be combined with --no-inherit-command-env")
+	}
+	noInheritCommandEnvSet := noInheritCommandEnvFlagSet && *noInheritCommandEnv
+	if noInheritCommandEnvSet {
+		*inheritCommandEnv = false
+	}
+	if flagWasSet(fs, "inherit-command-env") || noInheritCommandEnvSet {
 		cfg.InheritCommandEnv = boolPtr(*inheritCommandEnv)
 	}
 	if verifyCommands.set {

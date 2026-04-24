@@ -88,7 +88,7 @@ memax-code config show
   "ui": "app",
   "session_dir": "~/.memax-code/sessions",
   "history_file": "~/.memax-code/history.jsonl",
-  "inherit_command_env": false,
+  "inherit_command_env": true,
   "verify_commands": {
     "test": "npm test",
     "lint": "npm run lint"
@@ -296,11 +296,16 @@ map does not define `test` or `vet`, those names still fall back to `go test
 ./...` and `go vet ./...`. In non-Go workspaces, only configured command names
 are available.
 
-By default command tools do not inherit the host process environment. Enable it
-only when the agent needs local toolchains that depend on environment variables:
+By default command tools inherit the host process environment, matching normal
+developer terminal expectations for `PATH`, language managers, local toolchain
+configuration, and provider credentials. Disable inheritance when you want a
+cleaner command environment. Inherited environment variables are visible to
+model-invoked commands, so opt out when running against untrusted workspaces or
+when you want to avoid exposing local secrets to shell commands:
 
 ```sh
-memax-code --inherit-command-env "run the relevant tests and fix failures"
+memax-code --no-inherit-command-env "run the relevant tests and fix failures"
+memax-code --inherit-command-env=false "run the relevant tests and fix failures"
 ```
 
 Configuration environment variables:

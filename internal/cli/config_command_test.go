@@ -148,6 +148,50 @@ func TestConfigInitOmitsUnsetOptionalBoolAndCanonicalizesValues(t *testing.T) {
 	}
 }
 
+func TestConfigInitCanWriteInheritedCommandEnvOptOut(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"config", "init",
+		"--config", configPath,
+		"--no-inherit-command-env",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	body, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(body), `"inherit_command_env": false`) {
+		t.Fatalf("config missing inherit opt-out:\n%s", body)
+	}
+}
+
+func TestConfigInitRejectsConflictingInheritedCommandEnvFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{
+			"config", "init",
+			"--config", filepath.Join(t.TempDir(), "config.json"),
+			"--inherit-command-env",
+			"--no-inherit-command-env",
+		},
+		{
+			"config", "init",
+			"--config", filepath.Join(t.TempDir(), "config.json"),
+			"--inherit-command-env=true",
+			"--no-inherit-command-env=false",
+		},
+	} {
+		var stdout, stderr bytes.Buffer
+		err := Run(context.Background(), args, &stdout, &stderr)
+		if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+			t.Fatalf("Run(%v) error = %v, want conflicting inherit env flags", args, err)
+		}
+	}
+}
+
 func TestConfigInitRejectsDirectoryPath(t *testing.T) {
 	configPath := t.TempDir()
 

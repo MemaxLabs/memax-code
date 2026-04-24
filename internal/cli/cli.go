@@ -119,7 +119,8 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	fs.Var(cwd, "cd", "alias for --cwd")
 	fs.Var(cwd, "cwd", "workspace root")
 	dryRun := fs.Bool("dry-run", false, "print resolved configuration without calling a provider")
-	inheritCommandEnv := fs.Bool("inherit-command-env", false, "let command tools inherit the host process environment")
+	inheritCommandEnv := fs.Bool("inherit-command-env", true, "let command tools inherit the host process environment")
+	noInheritCommandEnv := fs.Bool("no-inherit-command-env", false, "disable host environment inheritance for command tools")
 
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: memax-code [flags] [PROMPT]\n")
@@ -241,7 +242,16 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	if err != nil {
 		return options{}, err
 	}
-	inheritEnv, err := boolSetting(*inheritCommandEnv, flagWasSet(fs, "inherit-command-env"), "MEMAX_CODE_INHERIT_COMMAND_ENV", cfg.InheritCommandEnv, false)
+	inheritEnvFlagSet := flagWasSet(fs, "inherit-command-env")
+	noInheritEnvFlagSet := flagWasSet(fs, "no-inherit-command-env")
+	if inheritEnvFlagSet && noInheritEnvFlagSet {
+		return options{}, fmt.Errorf("--inherit-command-env cannot be combined with --no-inherit-command-env")
+	}
+	if noInheritEnvFlagSet && *noInheritCommandEnv {
+		inheritEnvFlagSet = true
+		*inheritCommandEnv = false
+	}
+	inheritEnv, err := boolSetting(*inheritCommandEnv, inheritEnvFlagSet, "MEMAX_CODE_INHERIT_COMMAND_ENV", cfg.InheritCommandEnv, true)
 	if err != nil {
 		return options{}, err
 	}

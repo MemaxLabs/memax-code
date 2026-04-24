@@ -179,6 +179,74 @@ func TestParseFlagAndEnvOverrideConfigFile(t *testing.T) {
 	}
 }
 
+func TestParseInheritsCommandEnvByDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MEMAX_CODE_INHERIT_COMMAND_ENV", "")
+
+	var stderr bytes.Buffer
+	opts, err := parseArgs([]string{"--dry-run"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !opts.InheritCommandEnv {
+		t.Fatal("InheritCommandEnv = false, want true by default")
+	}
+}
+
+func TestParseCanDisableInheritedCommandEnv(t *testing.T) {
+	for _, args := range [][]string{
+		{"--dry-run", "--inherit-command-env=false"},
+		{"--dry-run", "--no-inherit-command-env"},
+	} {
+		var stderr bytes.Buffer
+		opts, err := parseArgs(args, &stderr)
+		if err != nil {
+			t.Fatalf("parseArgs(%v) error = %v", args, err)
+		}
+		if opts.InheritCommandEnv {
+			t.Fatalf("parseArgs(%v) InheritCommandEnv = true, want false", args)
+		}
+	}
+}
+
+func TestParseInheritedCommandEnvConfigAndEnvCanOptOut(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"inherit_command_env": false}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stderr bytes.Buffer
+	opts, err := parseArgs([]string{"--dry-run", "--config", configPath}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs(config) error = %v", err)
+	}
+	if opts.InheritCommandEnv {
+		t.Fatal("config inherit_command_env=false did not override default")
+	}
+
+	t.Setenv("MEMAX_CODE_INHERIT_COMMAND_ENV", "false")
+	opts, err = parseArgs([]string{"--dry-run"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs(env) error = %v", err)
+	}
+	if opts.InheritCommandEnv {
+		t.Fatal("MEMAX_CODE_INHERIT_COMMAND_ENV=false did not override default")
+	}
+}
+
+func TestParseRejectsConflictingInheritedCommandEnvFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"--dry-run", "--inherit-command-env", "--no-inherit-command-env"},
+		{"--dry-run", "--inherit-command-env=true", "--no-inherit-command-env=false"},
+	} {
+		var stderr bytes.Buffer
+		_, err := parseArgs(args, &stderr)
+		if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+			t.Fatalf("parseArgs(%v) error = %v, want conflicting inherit env flags", args, err)
+		}
+	}
+}
+
 func TestParseVerifyCommandsFromConfigAndEnv(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(configPath, []byte(`{
@@ -1260,7 +1328,7 @@ func TestRunInteractiveStatus(t *testing.T) {
 		"active_session: <unset>",
 		"saved_sessions: 1",
 		"verification: go",
-		"inherit_command_env: false",
+		"inherit_command_env: true",
 		"resumed session: " + sess.ID,
 		"active_session: " + sess.ID,
 	} {
@@ -1919,13 +1987,15 @@ func TestParseRejectsMissingCWD(t *testing.T) {
 	}
 }
 
-func TestDryRunPrintsInheritedCommandEnv(t *testing.T) {
+func TestDryRunPrintsInheritedCommandEnvDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MEMAX_CODE_INHERIT_COMMAND_ENV", "")
+
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{
 		"--dry-run",
 		"--provider", "openai",
 		"--model", "example-model",
-		"--inherit-command-env",
 	}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
