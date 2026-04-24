@@ -354,6 +354,47 @@ func TestAppProgramTranscriptPreservesSplitAssistantBlankLines(t *testing.T) {
 	}
 }
 
+func TestAppProgramTranscriptDropsLeadingAssistantBlankLines(t *testing.T) {
+	tests := []struct {
+		name   string
+		chunks []string
+	}{
+		{
+			name: "single chunk header with leading blank",
+			chunks: []string{
+				"[assistant]\n\nfoo\n",
+			},
+		},
+		{
+			name: "split header then leading blank",
+			chunks: []string{
+				"[assistant]\n",
+				"\nfoo\n",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+			model.transcript = appTranscriptTail{}
+			model.compactor = appProgramTranscriptCompactor{}
+
+			for _, chunk := range tt.chunks {
+				model.appendTranscript(chunk)
+			}
+
+			got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+			if strings.HasPrefix(got, "\n") {
+				t.Fatalf("assistant transcript gained leading blank:\n%q", got)
+			}
+			if got != "foo" {
+				t.Fatalf("assistant transcript = %q, want %q", got, "foo")
+			}
+		})
+	}
+}
+
 func TestCompactAppProgramTranscriptTextKeepsDeepIndentedDashAsCode(t *testing.T) {
 	got := ansi.Strip(compactAppProgramTranscriptText(strings.Join([]string{
 		"[assistant]",

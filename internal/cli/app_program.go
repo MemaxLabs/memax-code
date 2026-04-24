@@ -515,6 +515,7 @@ type appProgramTranscriptCompactor struct {
 	section                 string
 	skipActivityDetail      bool
 	assistantInCodeBlock    bool
+	assistantHasContent     bool
 	assistantAtLineBoundary bool
 	activityDetail          *appProgramActivityDetail
 }
@@ -565,6 +566,9 @@ func (c *appProgramTranscriptCompactor) compact(text string) string {
 	leadingAssistantBoundary := c.section == "assistant" && strings.HasPrefix(text, "\n")
 	for i, line := range lines {
 		for _, compacted := range c.compactLine(line) {
+			if c.section == "assistant" && compacted == appTranscriptBlankLine && !c.assistantHasContent {
+				continue
+			}
 			if leadingAssistantBoundary && i == 0 && compacted == appTranscriptBlankLine {
 				if c.assistantAtLineBoundary {
 					out = append(out, appTranscriptBlankLine)
@@ -575,10 +579,13 @@ func (c *appProgramTranscriptCompactor) compact(text string) string {
 			}
 			if compacted != "" {
 				out = append(out, compacted)
+				if c.section == "assistant" && compacted != appTranscriptBlankLine {
+					c.assistantHasContent = true
+				}
 			}
 		}
 	}
-	c.assistantAtLineBoundary = c.section == "assistant" && trailingNewline
+	c.assistantAtLineBoundary = c.section == "assistant" && trailingNewline && len(out) > 0
 	text = strings.Join(out, "\n")
 	if text == "" && leadingAssistantBoundary && trailingNewline {
 		return "\n"
@@ -607,6 +614,10 @@ func (c *appProgramTranscriptCompactor) compactLine(line string) []string {
 	}
 	if section, label, ok := compactAppProgramSectionLabel(trimmed); ok {
 		out := c.flushActivityDetail()
+		if section == "assistant" {
+			c.assistantHasContent = false
+			c.assistantAtLineBoundary = false
+		}
 		c.section = section
 		c.skipActivityDetail = false
 		c.assistantInCodeBlock = false
