@@ -37,6 +37,45 @@ func runPrompt(ctx context.Context, stdout io.Writer, opts options) error {
 }
 
 func runPromptWithSession(ctx context.Context, stdout io.Writer, opts options) (string, error) {
+	return runPromptWithEventsRendered(ctx, stdout, opts)
+}
+
+func runPromptWithEvents(ctx context.Context, opts options, observe func(memaxagent.Event)) (string, error) {
+	queryCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	client, err := modelClient(opts)
+	if err != nil {
+		return "", err
+	}
+
+	stack, err := buildStack(opts)
+	if err != nil {
+		return "", err
+	}
+	agentOpts := stack.WithModel(client)
+	agentOpts.SessionID = opts.ResumeSessionID
+	events, err := memaxagent.Query(queryCtx, opts.Prompt, agentOpts)
+	if err != nil {
+		return "", err
+	}
+	var sessionID string
+	var firstErr error
+	for event := range events {
+		if event.Kind == memaxagent.EventSessionStarted && sessionID == "" {
+			sessionID = event.SessionID
+		}
+		if observe != nil {
+			observe(event)
+		}
+		if event.Kind == memaxagent.EventError && event.Err != nil && firstErr == nil {
+			firstErr = event.Err
+		}
+	}
+	return sessionID, firstErr
+}
+
+func runPromptWithEventsRendered(ctx context.Context, stdout io.Writer, opts options) (string, error) {
 	queryCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 

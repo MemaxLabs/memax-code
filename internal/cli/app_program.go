@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -84,6 +87,10 @@ type appProgramTranscriptMsg struct {
 	text string
 }
 
+type appProgramEventMsg struct {
+	event memaxagent.Event
+}
+
 type appProgramPromptDoneMsg struct {
 	sessionID string
 	err       error
@@ -100,6 +107,7 @@ type appProgramModel struct {
 	ctx        context.Context
 	opts       options
 	runPrompt  interactivePromptRunner
+	runEvents  interactiveEventPromptRunner
 	program    *tea.Program
 	history    persistentPromptHistory
 	composer   interactiveComposer
@@ -122,6 +130,10 @@ type appProgramModel struct {
 }
 
 func newAppProgramModel(ctx context.Context, opts options, runPrompt interactivePromptRunner) *appProgramModel {
+	return newAppProgramModelWithEvents(ctx, opts, runPrompt, nil)
+}
+
+func newAppProgramModelWithEvents(ctx context.Context, opts options, runPrompt interactivePromptRunner, runEvents interactiveEventPromptRunner) *appProgramModel {
 	input := textarea.New()
 	input.Prompt = "› "
 	input.Placeholder = "Ask Memax Code to inspect, change, or verify the repo"
@@ -148,6 +160,7 @@ func newAppProgramModel(ctx context.Context, opts options, runPrompt interactive
 		ctx:        ctx,
 		opts:       opts,
 		runPrompt:  runPrompt,
+		runEvents:  runEvents,
 		history:    newPersistentPromptHistory(opts.HistoryFile),
 		input:      input,
 		help:       helpModel,
@@ -184,6 +197,9 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case appProgramTranscriptMsg:
 		m.appendTranscript(msg.text)
+		return m, m.flushPrints()
+	case appProgramEventMsg:
+		m.appendEvent(msg.event)
 		return m, m.flushPrints()
 	case appProgramPromptDoneMsg:
 		m.finishPrompt(msg)
@@ -291,7 +307,7 @@ func (m *appProgramModel) handleCommand(text string) tea.Cmd {
 }
 
 func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
-	if m.runPrompt == nil || m.program == nil {
+	if (m.runPrompt == nil && m.runEvents == nil) || m.program == nil {
 		return nil
 	}
 	m.running = true
@@ -310,8 +326,16 @@ func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
 	opts.UI = renderModeTUI
 
 	runCmd := func() tea.Msg {
-		writer := &appProgramTranscriptWriter{send: send}
-		sessionID, err := runPrompt(m.ctx, writer, opts)
+		var sessionID string
+		var err error
+		if m.runEvents != nil {
+			sessionID, err = m.runEvents(m.ctx, opts, func(event memaxagent.Event) {
+				send(appProgramEventMsg{event: event})
+			})
+		} else {
+			writer := &appProgramTranscriptWriter{send: send}
+			sessionID, err = runPrompt(m.ctx, writer, opts)
+		}
 		return appProgramPromptDoneMsg{
 			sessionID: sessionID,
 			err:       err,
@@ -369,6 +393,154 @@ func (m *appProgramModel) appendTranscript(text string) {
 		return
 	}
 	m.queuePrints(m.transcript.append(compacted))
+	m.resize()
+}
+
+func (m *appProgramModel) appendEvent(event memaxagent.Event) {
+	switch event.Kind {
+	case memaxagent.EventSessionStarted:
+		if event.SessionID != "" {
+			m.sessionID = event.SessionID
+		}
+	case memaxagent.EventAssistant:
+		if event.Message != nil {
+			m.appendAssistantText(event.Message.PlainText())
+		}
+	case memaxagent.EventToolUse:
+		m.appendToolUse(event.ToolUse)
+	case memaxagent.EventToolResult:
+		m.appendToolResult(event.ToolResult)
+	case memaxagent.EventWorkspaceCheckpoint:
+		if event.Workspace != nil {
+			m.appendActivityLine(appProgramDimStyle.Render("~ checkpoint " + event.Workspace.CheckpointID))
+		}
+	case memaxagent.EventWorkspacePatch:
+		if event.Workspace != nil {
+			m.appendActivityLine(appProgramDimStyle.Render("~ patch " + workspaceSummary(event.Workspace)))
+		}
+	case memaxagent.EventWorkspaceDiff:
+		if event.Workspace != nil {
+			m.appendActivityLine(appProgramDimStyle.Render("~ diff " + workspaceSummary(event.Workspace)))
+		}
+	case memaxagent.EventWorkspaceRestore:
+		if event.Workspace != nil {
+			m.appendActivityLine(appProgramDimStyle.Render("~ restore " + event.Workspace.CheckpointID))
+		}
+	case memaxagent.EventCommandStarted, memaxagent.EventCommandFinished, memaxagent.EventCommandOutput,
+		memaxagent.EventCommandInput, memaxagent.EventCommandResized, memaxagent.EventCommandStopped:
+		m.appendCommandEvent(event)
+	case memaxagent.EventVerification:
+		if event.Verification != nil {
+			line := fmt.Sprintf("check %s passed=%t", event.Verification.Name, event.Verification.Passed)
+			if event.Verification.Passed {
+				m.appendActivityLine(appProgramSuccessStyle.Render("✓ " + line))
+			} else {
+				m.appendActivityLine(appProgramErrorStyle.Render("! " + line))
+			}
+		}
+	case memaxagent.EventApprovalRequested:
+		m.appendApprovalEvent("requested", event.Approval)
+	case memaxagent.EventApprovalGranted:
+		m.appendApprovalEvent("granted", event.Approval)
+	case memaxagent.EventApprovalDenied:
+		m.appendApprovalEvent("denied", event.Approval)
+	case memaxagent.EventApprovalConsumed:
+		m.appendApprovalEvent("consumed", event.Approval)
+	case memaxagent.EventError:
+		if event.Err != nil {
+			m.appendLocalTranscriptLine("error", "error: "+event.Err.Error())
+		}
+	case memaxagent.EventResult, memaxagent.EventUsage, memaxagent.EventToolUseStart, memaxagent.EventToolUseDelta:
+		// The interactive app renders assistant text, concrete tool execution,
+		// and final prompt status directly. Result/usage sections are status
+		// metadata here, not transcript rows.
+	}
+}
+
+func (m *appProgramModel) appendAssistantText(text string) {
+	if text == "" {
+		return
+	}
+	m.queueCompactorFlush(m.compactor.startSection("assistant"))
+	m.appendTranscript(text)
+}
+
+func (m *appProgramModel) appendActivityLine(line string) {
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	m.flushTranscriptPartial()
+	m.queuePrints(m.transcript.appendStandaloneLine(line))
+	m.resize()
+}
+
+func (m *appProgramModel) appendToolUse(toolUse *model.ToolUse) {
+	if toolUse == nil {
+		return
+	}
+	m.appendActivityLine(appProgramToolStyle.Render("• " + appToolUseDisplay(toolUse)))
+}
+
+func (m *appProgramModel) appendToolResult(result *model.ToolResult) {
+	if result == nil {
+		return
+	}
+	name := appToolDisplayName(result.Name)
+	if result.IsError {
+		m.appendActivityLine(appProgramErrorStyle.Render("! " + name + " error"))
+		m.appendActivityDetail("error", appProgramErrorStyle, result.Content)
+		return
+	}
+	m.appendActivityLine(appProgramDimStyle.Render("  " + name + " ok"))
+	if appToolShowsResultTail(result.Name) {
+		m.appendActivityDetail("output", appProgramDimStyle, result.Content)
+	}
+}
+
+func (m *appProgramModel) appendCommandEvent(event memaxagent.Event) {
+	if event.Command == nil {
+		return
+	}
+	line, style := appCommandEventLine(event)
+	if line == "" {
+		return
+	}
+	m.appendActivityLine(style.Render(line))
+}
+
+func (m *appProgramModel) appendApprovalEvent(action string, approval *memaxagent.ApprovalEvent) {
+	line := approvalLine(action, approval)
+	if line == "" {
+		return
+	}
+	prefix := approvalTimelinePrefix(action)
+	style := appProgramSuccessStyle
+	if prefix == "?" {
+		style = appProgramAccentStyle
+	} else if prefix == "!" {
+		style = appProgramErrorStyle
+		prefix = "!"
+	} else {
+		prefix = "✓"
+	}
+	m.appendActivityLine(style.Render(prefix + " approval " + line))
+}
+
+func (m *appProgramModel) appendActivityDetail(label string, style lipgloss.Style, content string) {
+	detail := &appProgramActivityDetail{label: label, style: style}
+	for _, line := range strings.Split(strings.TrimSpace(content), "\n") {
+		detail.append(line)
+	}
+	for _, line := range detail.render() {
+		m.appendActivityLine(line)
+	}
+}
+
+func (m *appProgramModel) queueCompactorFlush(text string) {
+	if text == "" {
+		return
+	}
+	m.queuePrints(m.transcript.append(text))
 	m.resize()
 }
 
@@ -609,6 +781,23 @@ func (c *appProgramTranscriptCompactor) compact(text string) string {
 		c.outputHasOpenLine = !strings.HasSuffix(text, "\n")
 	}
 	return text
+}
+
+func (c *appProgramTranscriptCompactor) startSection(section string) string {
+	if c.section == section {
+		return ""
+	}
+	out := c.flush()
+	c.section = section
+	c.skipActivityDetail = false
+	c.lastActivityTool = ""
+	c.activityDetail = nil
+	c.assistantInCodeBlock = false
+	if section == "assistant" {
+		c.assistantHasContent = false
+		c.assistantAtLineBoundary = false
+	}
+	return out
 }
 
 func (c *appProgramTranscriptCompactor) dropWhitespaceOnlyChunk(text string) bool {
@@ -899,27 +1088,61 @@ func appFormatToolLine(line string) string {
 	if len(fields) < 2 || fields[0] != "tool" {
 		return line
 	}
-	name := fields[1]
-	switch name {
-	case "run_command", "start_command":
-		name = "Bash"
-	case "read_command_output":
-		name = "Read command output"
-	case "wait_command_output":
-		name = "Wait for command output"
-	case "write_command_input":
-		name = "Write command input"
-	case "stop_command":
-		name = "Stop command"
-	case "resize_command_terminal":
-		name = "Resize command terminal"
-	case "workspace_apply_patch":
-		name = "Apply patch"
-	}
+	name := appToolDisplayName(fields[1])
 	if len(fields) > 2 {
 		return name + " " + strings.Join(fields[2:], " ")
 	}
 	return name
+}
+
+func appToolDisplayName(name string) string {
+	switch name {
+	case "run_command", "start_command":
+		return "Bash"
+	case "read_command_output":
+		return "Read command output"
+	case "wait_command_output":
+		return "Wait for command output"
+	case "write_command_input":
+		return "Write command input"
+	case "stop_command":
+		return "Stop command"
+	case "resize_command_terminal":
+		return "Resize command terminal"
+	case "workspace_apply_patch":
+		return "Apply patch"
+	default:
+		return statusValue(name)
+	}
+}
+
+func appToolUseDisplay(toolUse *model.ToolUse) string {
+	if toolUse == nil {
+		return ""
+	}
+	name := appToolDisplayName(toolUse.Name)
+	if command := appToolUseCommand(toolUse); command != "" {
+		return name + "(" + command + ")"
+	}
+	return name + " call"
+}
+
+func appToolUseCommand(toolUse *model.ToolUse) string {
+	if toolUse == nil {
+		return ""
+	}
+	switch toolUse.Name {
+	case "run_command", "start_command":
+	default:
+		return ""
+	}
+	var input struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(toolUse.Input, &input); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(input.Command)
 }
 
 func appToolShowsResultTail(name string) bool {
@@ -959,6 +1182,64 @@ func appFormatCommandLine(status, raw string) string {
 		parts = append(parts, "timeout=true")
 	}
 	return strings.Join(parts, " ")
+}
+
+func appCommandEventLine(event memaxagent.Event) (string, lipgloss.Style) {
+	command := event.Command
+	if command == nil {
+		return "", appProgramDimStyle
+	}
+	display := commandDisplay(event)
+	if display == "" && command.CommandID != "" {
+		display = command.CommandID
+	}
+	switch event.Kind {
+	case memaxagent.EventCommandStarted:
+		parts := []string{"• " + appCommandDisplay(display), "started"}
+		if command.CommandID != "" {
+			parts = append(parts, "id="+command.CommandID)
+		}
+		if command.PID != 0 {
+			parts = append(parts, fmt.Sprintf("pid=%d", command.PID))
+		}
+		return strings.Join(parts, " "), appProgramToolStyle
+	case memaxagent.EventCommandFinished:
+		status := "done"
+		style := appProgramSuccessStyle
+		prefix := "✓ "
+		if command.ExitCode != 0 || command.TimedOut {
+			status = "failed"
+			style = appProgramErrorStyle
+			prefix = "! "
+		}
+		parts := []string{prefix + appCommandDisplay(display), status, fmt.Sprintf("exit=%d", command.ExitCode)}
+		if command.TimedOut {
+			parts = append(parts, "timeout=true")
+		}
+		return strings.Join(parts, " "), style
+	case memaxagent.EventCommandOutput:
+		return fmt.Sprintf("  %s output chunks=%d next_seq=%d", appCommandDisplay(display), command.OutputChunks, command.NextSeq), appProgramDimStyle
+	case memaxagent.EventCommandInput:
+		return fmt.Sprintf("  %s input bytes=%d", appCommandDisplay(display), command.InputBytes), appProgramDimStyle
+	case memaxagent.EventCommandResized:
+		return fmt.Sprintf("  %s resize cols=%d rows=%d", appCommandDisplay(display), command.Cols, command.Rows), appProgramDimStyle
+	case memaxagent.EventCommandStopped:
+		status := command.Status
+		if status == "" {
+			status = "stopped"
+		}
+		return fmt.Sprintf("! %s stopped status=%s", appCommandDisplay(display), status), appProgramErrorStyle
+	default:
+		return "", appProgramDimStyle
+	}
+}
+
+func appCommandDisplay(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "Bash"
+	}
+	return "Bash(" + command + ")"
 }
 
 func appParseActivityFields(raw string) map[string]string {
@@ -1077,7 +1358,11 @@ func (w *appProgramTranscriptWriter) Write(p []byte) (int, error) {
 }
 
 func runInteractiveApp(ctx context.Context, stdin io.Reader, stdout io.Writer, opts options, runPrompt interactivePromptRunner) error {
-	model := newAppProgramModel(ctx, opts, runPrompt)
+	return runInteractiveAppWithEvents(ctx, stdin, stdout, opts, runPrompt, nil)
+}
+
+func runInteractiveAppWithEvents(ctx context.Context, stdin io.Reader, stdout io.Writer, opts options, runPrompt interactivePromptRunner, runEvents interactiveEventPromptRunner) error {
+	model := newAppProgramModelWithEvents(ctx, opts, runPrompt, runEvents)
 	if lines := model.drainPendingPrints(); len(lines) > 0 {
 		fmt.Fprintln(stdout, strings.Join(lines, "\n"))
 	}

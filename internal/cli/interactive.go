@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 )
 
@@ -17,12 +18,17 @@ type interactiveInputObserver interface {
 }
 
 type interactivePromptRunner func(context.Context, io.Writer, options) (string, error)
+type interactiveEventPromptRunner func(context.Context, options, func(memaxagent.Event)) (string, error)
 
 func runInteractive(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, opts options) error {
-	return runInteractiveWithRunner(ctx, stdin, stdout, stderr, opts, runPromptWithSession)
+	return runInteractiveWithEventRunner(ctx, stdin, stdout, stderr, opts, runPromptWithSession, runPromptWithEvents)
 }
 
 func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, opts options, runPrompt interactivePromptRunner) error {
+	return runInteractiveWithEventRunner(ctx, stdin, stdout, stderr, opts, runPrompt, nil)
+}
+
+func runInteractiveWithEventRunner(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, opts options, runPrompt interactivePromptRunner, runEvents interactiveEventPromptRunner) error {
 	if stdin == nil {
 		stdin = strings.NewReader("")
 	}
@@ -31,7 +37,7 @@ func runInteractiveWithRunner(ctx context.Context, stdin io.Reader, stdout, stde
 	}
 	resolvedUI := resolveInteractiveMode(opts.UI, stdout)
 	if resolvedUI == renderModeApp {
-		return runInteractiveApp(ctx, stdin, stdout, opts, runPrompt)
+		return runInteractiveAppWithEvents(ctx, stdin, stdout, opts, runPrompt, runEvents)
 	}
 	shellOut := interactiveShellWriter(resolvedUI, stdout, stderr)
 	var inputObserver interactiveInputObserver

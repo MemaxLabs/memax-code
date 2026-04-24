@@ -2,11 +2,14 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
 	"testing"
 
+	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -91,6 +94,74 @@ func TestAppProgramBackslashEnterInsertsNewline(t *testing.T) {
 	}
 	if got, want := model.input.Height(), 2; got != want {
 		t.Fatalf("input height = %d, want %d", got, want)
+	}
+}
+
+func TestAppProgramStructuredEventsRenderWithoutTranscriptParsing(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{
+		Kind: memaxagent.EventAssistant,
+		Message: &model.Message{Role: model.RoleAssistant, Content: []model.ContentBlock{
+			{Type: model.ContentText, Text: "working"},
+		}},
+	})
+	m.appendEvent(memaxagent.Event{
+		Kind: memaxagent.EventToolUse,
+		ToolUse: &model.ToolUse{
+			Name:  "run_command",
+			Input: json.RawMessage(`{"command":"go test ./..."}`),
+		},
+	})
+	m.appendEvent(memaxagent.Event{
+		Kind: memaxagent.EventCommandFinished,
+		Command: &memaxagent.CommandEvent{
+			Operation: "run",
+			Command:   "go test ./...",
+			ExitCode:  0,
+		},
+	})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"working",
+		"• Bash(go test ./...)",
+		"✓ Bash(go test ./...) done exit=0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("structured transcript missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"[assistant]", "[activity]", "$ command", "+ command", "command=\"go test ./...\""} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("structured transcript leaked parsed renderer text %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestAppProgramStructuredEventsTailCommandOutputToolResults(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		Name:    "wait_command_output",
+		Content: strings.Join([]string{"line 1", "line 2", "line 3", "line 4", "line 5", "line 6"}, "\n"),
+	}})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"Wait for command output ok",
+		"output tail:",
+		"line 2",
+		"line 6",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("structured transcript missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "line 1") {
+		t.Fatalf("structured transcript did not tail command output:\n%s", got)
 	}
 }
 
