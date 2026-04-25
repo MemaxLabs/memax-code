@@ -15,6 +15,8 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
 - OpenAI and Anthropic provider adapters through the SDK
 - root-confined workspace tools
 - root-confined command execution tools
+- default bounded `web_fetch` for HTTP(S) pages, with private-network
+  protection and an explicit `--no-web` opt-out
 - managed command sessions for long-running processes
 - bounded subagents for parallel exploration, review, and isolated worker tasks
 - JSONL-backed conversation sessions with resume, `latest`, activity listing,
@@ -90,6 +92,8 @@ memax-code config show
   "session_dir": "~/.memax-code/sessions",
   "history_file": "~/.memax-code/history.jsonl",
   "inherit_command_env": true,
+  "web": true,
+  "web_fetch_max_bytes": 524288,
   "verify_commands": {
     "test": "npm test",
     "lint": "npm run lint"
@@ -106,6 +110,19 @@ memax-code --config .memax-code/config.json --dry-run "inspect this repository"
 Configuration precedence is `flag > environment > config file > built-in
 default`. The default config file is optional; an explicitly supplied
 `--config` path must exist and decode as strict JSON.
+
+The normal coding-agent toolset includes `web_fetch` for HTTP(S) URLs. The
+default fetcher is bounded, strips URL credentials before sending requests,
+follows a small number of redirects, and blocks loopback, link-local, multicast,
+unspecified, and private-network addresses. Disable it for locked-down
+workspaces with `--no-web` or config `"web": false`; tune the response cap with
+`--web-fetch-max-bytes` or config `"web_fetch_max_bytes"`. The cap is limited to
+4 MiB. Local service checks and explicit private-network diagnostics should go
+through command tools, where the user intent is visible in the shell command.
+The default fetcher does not inherit proxy environment variables such as
+`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY`; proxy-based or
+authenticated network paths should also go through explicit command tools until
+the CLI has a first-class proxy policy.
 
 Memax Code registers a built-in `run_subagent` tool. Parent agents can delegate
 bounded work to three child profiles:
@@ -346,6 +363,10 @@ Configuration environment variables:
 - `MEMAX_CODE_HISTORY_FILE`: default JSONL interactive prompt history file.
 - `MEMAX_CODE_INHERIT_COMMAND_ENV`: default command environment inheritance,
   accepting `1/0`, `t/f`, `true/false`, and case variants.
+- `MEMAX_CODE_WEB`: default web tool availability, accepting `1/0`, `t/f`,
+  `true/false`, and case variants.
+- `MEMAX_CODE_WEB_FETCH_MAX_BYTES`: maximum bytes read by the default web
+  fetcher per URL, capped at 4 MiB.
 - `MEMAX_CODE_VERIFY_COMMANDS`: JSON object mapping verification names to shell
   commands, for example `{"test":"npm test","lint":"npm run lint"}`.
 - `OPENAI_API_KEY`: OpenAI API key.

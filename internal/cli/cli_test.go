@@ -42,6 +42,8 @@ func TestDryRunPrintsResolvedConfig(t *testing.T) {
 		"resume_session: <unset>",
 		"verification: go",
 		"subagents: explorer, reviewer, worker",
+		"web: true",
+		"web_fetch_max_bytes: 524288",
 		"prompt: fix tests",
 	} {
 		if !strings.Contains(out, want) {
@@ -191,6 +193,128 @@ func TestParseInheritsCommandEnvByDefault(t *testing.T) {
 	}
 	if !opts.InheritCommandEnv {
 		t.Fatal("InheritCommandEnv = false, want true by default")
+	}
+}
+
+func TestParseEnablesWebByDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MEMAX_CODE_WEB", "")
+	t.Setenv("MEMAX_CODE_WEB_FETCH_MAX_BYTES", "")
+
+	var stderr bytes.Buffer
+	opts, err := parseArgs([]string{"--dry-run"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !opts.WebEnabled {
+		t.Fatal("WebEnabled = false, want true by default")
+	}
+	if opts.WebFetchMaxBytes != defaultWebFetchMaxBytes {
+		t.Fatalf("WebFetchMaxBytes = %d, want %d", opts.WebFetchMaxBytes, defaultWebFetchMaxBytes)
+	}
+}
+
+func TestParseCanDisableDefaultWeb(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	for _, args := range [][]string{
+		{"--dry-run", "--web=false"},
+		{"--dry-run", "--no-web"},
+	} {
+		var stderr bytes.Buffer
+		opts, err := parseArgs(args, &stderr)
+		if err != nil {
+			t.Fatalf("parseArgs(%v) error = %v", args, err)
+		}
+		if opts.WebEnabled {
+			t.Fatalf("parseArgs(%v) WebEnabled = true, want false", args)
+		}
+	}
+}
+
+func TestParseNoWebFalseEnablesWeb(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"web": false}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stderr bytes.Buffer
+	opts, err := parseArgs([]string{"--dry-run", "--config", configPath, "--no-web=false"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !opts.WebEnabled {
+		t.Fatal("WebEnabled = false, want --no-web=false to enable web")
+	}
+}
+
+func TestParseWebConfigAndEnvCanOptOut(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"web": false, "web_fetch_max_bytes": 1024}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stderr bytes.Buffer
+	opts, err := parseArgs([]string{"--dry-run", "--config", configPath}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs(config) error = %v", err)
+	}
+	if opts.WebEnabled {
+		t.Fatal("config web=false did not override default")
+	}
+	if opts.WebFetchMaxBytes != 1024 {
+		t.Fatalf("config WebFetchMaxBytes = %d, want 1024", opts.WebFetchMaxBytes)
+	}
+
+	t.Setenv("MEMAX_CODE_WEB", "false")
+	t.Setenv("MEMAX_CODE_WEB_FETCH_MAX_BYTES", "2048")
+	opts, err = parseArgs([]string{"--dry-run"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs(env) error = %v", err)
+	}
+	if opts.WebEnabled {
+		t.Fatal("MEMAX_CODE_WEB=false did not override default")
+	}
+	if opts.WebFetchMaxBytes != 2048 {
+		t.Fatalf("env WebFetchMaxBytes = %d, want 2048", opts.WebFetchMaxBytes)
+	}
+}
+
+func TestParseRejectsConflictingWebFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"--dry-run", "--web", "--no-web"},
+		{"--dry-run", "--web=true", "--no-web=false"},
+	} {
+		var stderr bytes.Buffer
+		_, err := parseArgs(args, &stderr)
+		if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+			t.Fatalf("parseArgs(%v) error = %v, want conflicting web flags", args, err)
+		}
+	}
+}
+
+func TestParseRejectsInvalidWebFetchMaxBytes(t *testing.T) {
+	for _, args := range [][]string{
+		{"--dry-run", "--web-fetch-max-bytes", "0"},
+		{"--dry-run", "--web-fetch-max-bytes", "-1"},
+	} {
+		var stderr bytes.Buffer
+		_, err := parseArgs(args, &stderr)
+		if err == nil || !strings.Contains(err.Error(), "web-fetch-max-bytes must be greater than 0") {
+			t.Fatalf("parseArgs(%v) error = %v, want invalid web fetch max", args, err)
+		}
+	}
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"web_fetch_max_bytes": 0}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	var stderr bytes.Buffer
+	_, err := parseArgs([]string{"--dry-run", "--config", configPath}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "web-fetch-max-bytes must be greater than 0") {
+		t.Fatalf("parseArgs(config zero) error = %v, want invalid web fetch max", err)
 	}
 }
 

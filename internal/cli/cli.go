@@ -83,6 +83,8 @@ type options struct {
 	DryRun            bool
 	Interactive       bool
 	InheritCommandEnv bool
+	WebEnabled        bool
+	WebFetchMaxBytes  int
 	VerifyCommands    map[string]string
 }
 
@@ -121,6 +123,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	dryRun := fs.Bool("dry-run", false, "print resolved configuration without calling a provider")
 	inheritCommandEnv := fs.Bool("inherit-command-env", true, "let command tools inherit the host process environment")
 	noInheritCommandEnv := fs.Bool("no-inherit-command-env", false, "disable host environment inheritance for command tools")
+	webEnabled := fs.Bool("web", true, "enable default web tools")
+	noWeb := fs.Bool("no-web", false, "disable default web tools")
+	webFetchMaxBytes := fs.Int("web-fetch-max-bytes", defaultWebFetchMaxBytes, "maximum bytes the default web fetcher reads per URL")
 
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: memax-code [flags] [PROMPT]\n")
@@ -255,6 +260,27 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	if err != nil {
 		return options{}, err
 	}
+	webFlagSet := flagWasSet(fs, "web")
+	noWebFlagSet := flagWasSet(fs, "no-web")
+	if webFlagSet && noWebFlagSet {
+		return options{}, fmt.Errorf("--web cannot be combined with --no-web; choose one")
+	}
+	if noWebFlagSet {
+		webFlagSet = true
+		*webEnabled = !*noWeb
+	}
+	web, err := boolSetting(*webEnabled, webFlagSet, "MEMAX_CODE_WEB", cfg.Web, true)
+	if err != nil {
+		return options{}, err
+	}
+	webFetchMax, err := intSetting(*webFetchMaxBytes, flagWasSet(fs, "web-fetch-max-bytes"), "MEMAX_CODE_WEB_FETCH_MAX_BYTES", cfg.WebFetchMaxBytes, defaultWebFetchMaxBytes)
+	if err != nil {
+		return options{}, err
+	}
+	if webFetchMax <= 0 {
+		return options{}, fmt.Errorf("web-fetch-max-bytes must be greater than 0")
+	}
+	webFetchMax = normalizedWebFetchMaxBytes(webFetchMax)
 	verifyCommands, verifyCommandsSource, err := verifyCommandsSetting(verifyCommandsFlag, "MEMAX_CODE_VERIFY_COMMANDS", cfg.VerifyCommands)
 	if err != nil {
 		if verifyCommandsSource == settingSourceConfig {
@@ -282,6 +308,8 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		InspectTools:      *inspectTools,
 		DryRun:            *dryRun,
 		InheritCommandEnv: inheritEnv,
+		WebEnabled:        web,
+		WebFetchMaxBytes:  webFetchMax,
 		VerifyCommands:    verifyCommands,
 	}
 	if interactive {
@@ -376,6 +404,8 @@ type fileConfig struct {
 	SessionDir        string            `json:"session_dir,omitempty"`
 	HistoryFile       string            `json:"history_file,omitempty"`
 	InheritCommandEnv *bool             `json:"inherit_command_env,omitempty"`
+	Web               *bool             `json:"web,omitempty"`
+	WebFetchMaxBytes  *int              `json:"web_fetch_max_bytes,omitempty"`
 	VerifyCommands    map[string]string `json:"verify_commands,omitempty"`
 }
 
@@ -447,6 +477,23 @@ func boolSetting(flagValue bool, flagSet bool, envKey string, configValue *bool,
 		value, err := strconv.ParseBool(raw)
 		if err != nil {
 			return false, fmt.Errorf("invalid %s: %w", envKey, err)
+		}
+		return value, nil
+	}
+	if configValue != nil {
+		return *configValue, nil
+	}
+	return fallback, nil
+}
+
+func intSetting(flagValue int, flagSet bool, envKey string, configValue *int, fallback int) (int, error) {
+	if flagSet {
+		return flagValue, nil
+	}
+	if raw := strings.TrimSpace(os.Getenv(envKey)); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil {
+			return 0, fmt.Errorf("invalid %s: %w", envKey, err)
 		}
 		return value, nil
 	}
@@ -659,6 +706,10 @@ func renderDryRun(w io.Writer, opts options) error {
 	fmt.Fprintf(w, "resume_session: %s\n", valueOrUnset(opts.ResumeSessionID))
 	fmt.Fprintf(w, "verification: %s\n", verificationMode(opts.CWD, opts.VerifyCommands))
 	fmt.Fprintf(w, "subagents: %s\n", strings.Join(cliSubagentProfiles(), ", "))
+	fmt.Fprintf(w, "web: %t\n", opts.WebEnabled)
+	if opts.WebEnabled {
+		fmt.Fprintf(w, "web_fetch_max_bytes: %d\n", opts.WebFetchMaxBytes)
+	}
 	if len(opts.VerifyCommands) > 0 {
 		for _, name := range sortedMapKeys(opts.VerifyCommands) {
 			fmt.Fprintf(w, "verify_command.%s: %s\n", name, opts.VerifyCommands[name])

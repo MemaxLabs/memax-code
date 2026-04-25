@@ -52,6 +52,9 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 	historyFile := fs.String("history-file", defaultConfigHistoryFile, "path to interactive prompt history JSONL")
 	inheritCommandEnv := fs.Bool("inherit-command-env", true, "let command tools inherit the host process environment")
 	noInheritCommandEnv := fs.Bool("no-inherit-command-env", false, "write inherit_command_env=false to disable host environment inheritance")
+	webEnabled := fs.Bool("web", true, "write web=true to enable default web tools")
+	noWeb := fs.Bool("no-web", false, "write web=false to disable default web tools")
+	webFetchMaxBytes := fs.Int("web-fetch-max-bytes", defaultWebFetchMaxBytes, "maximum bytes the default web fetcher reads per URL")
 	verifyCommands := newVerifyCommandsFlag()
 	fs.Var(verifyCommands, "verify-command", "add a verification command as name=command; repeat for test, lint, typecheck, or default (default wins over test for empty/default requests)")
 	fs.Usage = func() {
@@ -113,6 +116,22 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 	}
 	if flagWasSet(fs, "inherit-command-env") || noInheritCommandEnvFlagSet {
 		cfg.InheritCommandEnv = boolPtr(*inheritCommandEnv)
+	}
+	noWebFlagSet := flagWasSet(fs, "no-web")
+	if flagWasSet(fs, "web") && noWebFlagSet {
+		return fmt.Errorf("--web cannot be combined with --no-web; choose one")
+	}
+	if noWebFlagSet {
+		*webEnabled = !*noWeb
+	}
+	if flagWasSet(fs, "web") || noWebFlagSet {
+		cfg.Web = boolPtr(*webEnabled)
+	}
+	if flagWasSet(fs, "web-fetch-max-bytes") {
+		if *webFetchMaxBytes <= 0 {
+			return fmt.Errorf("web-fetch-max-bytes must be greater than 0")
+		}
+		cfg.WebFetchMaxBytes = intPtr(normalizedWebFetchMaxBytes(*webFetchMaxBytes))
 	}
 	if verifyCommands.set {
 		cfg.VerifyCommands = cloneStringMap(verifyCommands.values)
@@ -197,6 +216,10 @@ func writeConfigJSON(w io.Writer, cfg fileConfig) error {
 }
 
 func boolPtr(value bool) *bool {
+	return &value
+}
+
+func intPtr(value int) *int {
 	return &value
 }
 

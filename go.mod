@@ -5,7 +5,7 @@ go 1.24.2
 toolchain go1.24.4
 
 require (
-	github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260424081447-290671d6a7cd
+	github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260425024529-e7fc826f469f
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0

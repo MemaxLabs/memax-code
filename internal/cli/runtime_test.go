@@ -13,6 +13,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/webtools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
 )
 
@@ -154,9 +155,11 @@ func TestBuildStackEnablesCustomVerificationOutsideGoModule(t *testing.T) {
 
 func TestBuildStackUsesModelFriendlyToolContracts(t *testing.T) {
 	stack, err := buildStack(options{
-		CWD:        t.TempDir(),
-		Preset:     "interactive_dev",
-		SessionDir: t.TempDir(),
+		CWD:              t.TempDir(),
+		Preset:           "interactive_dev",
+		SessionDir:       t.TempDir(),
+		WebEnabled:       true,
+		WebFetchMaxBytes: defaultWebFetchMaxBytes,
 	})
 	if err != nil {
 		t.Fatalf("buildStack() error = %v", err)
@@ -206,6 +209,14 @@ func TestBuildStackUsesModelFriendlyToolContracts(t *testing.T) {
 		t.Fatalf("start command schema = %#v, did not want argv array", spec.InputSchema)
 	}
 
+	spec, ok = toolSpec(stack.Registry(), webtools.FetchToolName)
+	if !ok {
+		t.Fatalf("registry missing %q", webtools.FetchToolName)
+	}
+	if !spec.ReadOnly || !spec.ConcurrencySafe || spec.Destructive {
+		t.Fatalf("web fetch spec read_only=%t concurrency_safe=%t destructive=%t, want read-only concurrent non-destructive", spec.ReadOnly, spec.ConcurrencySafe, spec.Destructive)
+	}
+
 	prompt := stack.Options().AppendSystemPrompt
 	for _, want := range []string{
 		"Use managed command sessions when continuous feedback helps",
@@ -214,10 +225,26 @@ func TestBuildStackUsesModelFriendlyToolContracts(t *testing.T) {
 		"Use start_command with command as one shell command string",
 		"Use workspace_apply_patch with exactly one unified_diff string",
 		"Do not provide structured patch operations",
+		"Use web_fetch for HTTP(S) URLs",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("AppendSystemPrompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestBuildStackCanDisableDefaultWebTools(t *testing.T) {
+	stack, err := buildStack(options{
+		CWD:        t.TempDir(),
+		Preset:     "interactive_dev",
+		SessionDir: t.TempDir(),
+		WebEnabled: false,
+	})
+	if err != nil {
+		t.Fatalf("buildStack() error = %v", err)
+	}
+	if _, ok := toolSpec(stack.Registry(), webtools.FetchToolName); ok {
+		t.Fatalf("registry unexpectedly includes %q when web is disabled", webtools.FetchToolName)
 	}
 }
 
@@ -267,7 +294,7 @@ func TestBuildStackRegistersCLIManagedSubagents(t *testing.T) {
 		"Use explorer only for read-only repository inspection",
 		"It cannot run shell commands",
 		"reviewer for code-review risk checks",
-		"Use worker for isolated implementation, shell commands, network checks through shell",
+		"Use worker for isolated implementation, shell commands, web_fetch",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("AppendSystemPrompt missing %q:\n%s", want, prompt)
@@ -279,9 +306,11 @@ func TestBuildStackSubagentExecutesChildSession(t *testing.T) {
 	client := &scriptedTextClient{text: "child result"}
 	sessionDir := t.TempDir()
 	stack, err := buildStackWithModel(options{
-		CWD:        t.TempDir(),
-		Preset:     "interactive_dev",
-		SessionDir: sessionDir,
+		CWD:              t.TempDir(),
+		Preset:           "interactive_dev",
+		SessionDir:       sessionDir,
+		WebEnabled:       true,
+		WebFetchMaxBytes: defaultWebFetchMaxBytes,
 	}, client)
 	if err != nil {
 		t.Fatalf("buildStackWithModel() error = %v", err)
@@ -337,6 +366,9 @@ func TestBuildStackSubagentExecutesChildSession(t *testing.T) {
 	if hasTool(req.Tools, workspacetools.ApplyPatchToolName) || hasTool(req.Tools, commandtools.ToolName) {
 		t.Fatalf("explorer child tools = %#v, want read-only tools", toolNames(req.Tools))
 	}
+	if hasTool(req.Tools, webtools.FetchToolName) {
+		t.Fatalf("explorer child tools = %#v, want no network tools", toolNames(req.Tools))
+	}
 
 	result, err = delegate.Execute(context.Background(), tool.Call{
 		Use: model.ToolUse{
@@ -366,6 +398,7 @@ func TestBuildStackSubagentExecutesChildSession(t *testing.T) {
 		commandtools.ToolName,
 		commandtools.StartToolName,
 		tasktools.UpsertToolName,
+		webtools.FetchToolName,
 	} {
 		if !hasTool(req.Tools, want) {
 			t.Fatalf("worker child tools = %#v, missing %q", toolNames(req.Tools), want)
@@ -384,6 +417,48 @@ func TestBuildStackSubagentExecutesChildSession(t *testing.T) {
 		if !strings.Contains(workerPrompt, want) {
 			t.Fatalf("worker prompt missing %q:\n%s", want, workerPrompt)
 		}
+	}
+}
+
+func TestBuildStackDisablesWebForWorkerSubagent(t *testing.T) {
+	client := &scriptedTextClient{text: "child result"}
+	sessionDir := t.TempDir()
+	stack, err := buildStackWithModel(options{
+		CWD:        t.TempDir(),
+		Preset:     "interactive_dev",
+		SessionDir: sessionDir,
+		WebEnabled: false,
+	}, client)
+	if err != nil {
+		t.Fatalf("buildStackWithModel() error = %v", err)
+	}
+	delegate, ok := stack.Registry().Get(subagents.ToolName)
+	if !ok {
+		t.Fatalf("registry missing %q", subagents.ToolName)
+	}
+
+	result, err := delegate.Execute(context.Background(), tool.Call{
+		Use: model.ToolUse{
+			ID:    "delegate-1",
+			Name:  subagents.ToolName,
+			Input: json.RawMessage(`{"agent":"worker","prompt":"inspect and report available tools"}`),
+		},
+		Runtime: tool.Runtime{
+			SessionID: "00000000-0000-7000-8000-000000000001",
+			Sessions:  session.NewJSONLStore(sessionDir),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result IsError = true: %s", result.Content)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("model requests = %d, want 1", len(client.requests))
+	}
+	if hasTool(client.requests[0].Tools, webtools.FetchToolName) {
+		t.Fatalf("worker child tools = %#v, want no web_fetch when web disabled", toolNames(client.requests[0].Tools))
 	}
 }
 

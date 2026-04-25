@@ -23,6 +23,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/webtools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/workspace"
 	"github.com/charmbracelet/x/ansi"
@@ -376,7 +377,22 @@ func buildStackWithModel(opts options, client model.Client) (coding.Stack, error
 		config.Policies.RequireVerificationBeforeFinal = false
 		config.Policies.RecommendRollbackOnFailedVerification = false
 	}
-	delegate, err := codingSubagentTool(client, config, taskStore)
+	var webFetch tool.Tool
+	if opts.WebEnabled {
+		webFetchMaxBytes := normalizedWebFetchMaxBytes(opts.WebFetchMaxBytes)
+		fetcher := NewHTTPFetcher(HTTPFetcherConfig{
+			MaxBytes: webFetchMaxBytes,
+		})
+		var err error
+		webFetch, err = webtools.NewFetchTool(webtools.Config{
+			Fetcher:         fetcher,
+			DefaultMaxBytes: webFetchMaxBytes,
+		})
+		if err != nil {
+			return coding.Stack{}, fmt.Errorf("configure web tools: %w", err)
+		}
+	}
+	delegate, err := codingSubagentTool(client, config, taskStore, webFetch)
 	if err != nil {
 		return coding.Stack{}, err
 	}
@@ -385,6 +401,11 @@ func buildStackWithModel(opts options, client model.Client) (coding.Stack, error
 		baseRegistry = tool.NewRegistry()
 	} else {
 		baseRegistry = baseRegistry.Clone()
+	}
+	if webFetch != nil {
+		if err := baseRegistry.Register(webFetch); err != nil {
+			return coding.Stack{}, fmt.Errorf("configure web tools: %w", err)
+		}
 	}
 	if err := baseRegistry.Register(delegate); err != nil {
 		return coding.Stack{}, fmt.Errorf("configure subagents: %w", err)
@@ -399,13 +420,23 @@ func buildStackWithModel(opts options, client model.Client) (coding.Stack, error
 	return stack, nil
 }
 
-func codingSubagentTool(client model.Client, config coding.Config, taskStore tasktools.Store) (tool.Tool, error) {
+func normalizedWebFetchMaxBytes(value int) int {
+	if value <= 0 {
+		return defaultWebFetchMaxBytes
+	}
+	if value > maxWebFetchMaxBytes {
+		return maxWebFetchMaxBytes
+	}
+	return value
+}
+
+func codingSubagentTool(client model.Client, config coding.Config, taskStore tasktools.Store, webFetch tool.Tool) (tool.Tool, error) {
 	sessions := config.Sessions
 	reviewerTools, err := reviewerTools(config)
 	if err != nil {
 		return nil, err
 	}
-	workerOptions, err := workerSubagentOptions(client, config)
+	workerOptions, err := workerSubagentOptions(client, config, webFetch)
 	if err != nil {
 		return nil, err
 	}
@@ -479,12 +510,15 @@ func reviewerTools(config coding.Config) (*tool.Registry, error) {
 	return registry, nil
 }
 
-func workerSubagentOptions(client model.Client, config coding.Config) (memaxagent.Options, error) {
+func workerSubagentOptions(client model.Client, config coding.Config, webFetch tool.Tool) (memaxagent.Options, error) {
 	child := config
 	// Worker profiles intentionally receive the CLI-owned coding toolset, not
 	// arbitrary parent Base.Tools, so delegation stays bounded and cannot
 	// accidentally regain run_subagent or host-specific tools.
 	child.Base.Tools = nil
+	if webFetch != nil {
+		child.Base.Tools = tool.NewRegistry(webFetch)
+	}
 	child.Base.MaxTurns = 12
 	child.Base.MaxToolConcurrency = 4
 	child.Base.MaxRunDuration = maxWorkerSubagentRunDuration
@@ -505,13 +539,14 @@ const cliToolContractGuidance = `CLI tool contract:
 - Use run_command with command as one shell command string, not an argv array.
 - Use start_command with command as one shell command string for long-running processes such as dev servers, test watchers, and REPLs.
 - Use workspace_apply_patch with exactly one unified_diff string. Do not provide structured patch operations.
+- Use web_fetch for HTTP(S) URLs when current external documentation or linked pages matter; do not use shell network commands just to fetch a page.
 - If a tool schema error says a field has the wrong type, retry with the contract above before changing strategy.`
 
 const cliSubagentGuidance = `Subagent delegation:
 - Use run_subagent for bounded parallel work when a task can be handed to an explorer, reviewer, or worker with a clear prompt.
 - Use explorer only for read-only repository inspection. It cannot run shell commands, wait, curl, use network tools, or edit files.
 - Use reviewer for code-review risk checks and configured verification evidence.
-- Use worker for isolated implementation, shell commands, network checks through shell, waiting, and verification that must run under normal coding policy gates.
+- Use worker for isolated implementation, shell commands, web_fetch, waiting, and verification that must run under normal coding policy gates.
 - Keep subagent prompts scoped. Include the files, question, expected evidence, stop condition, and task_id when delegating a tracked task.
 - Prefer parallel explorer or reviewer calls for read-only work. Avoid running multiple worker subagents against the same files or commands unless the work is clearly disjoint.
 - Do not delegate urgent work whose result you need before your next immediate step; do that work yourself.

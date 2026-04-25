@@ -169,6 +169,77 @@ func TestConfigInitCanWriteInheritedCommandEnvOptOut(t *testing.T) {
 	}
 }
 
+func TestConfigInitCanWriteWebOptOut(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"config", "init",
+		"--config", configPath,
+		"--no-web",
+		"--web-fetch-max-bytes", "2048",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	body, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	for _, want := range []string{
+		`"web": false`,
+		`"web_fetch_max_bytes": 2048`,
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("config missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestConfigInitNoWebFalseWritesWebEnabled(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"config", "init",
+		"--config", configPath,
+		"--no-web=false",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	body, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(body), `"web": true`) {
+		t.Fatalf("config missing web opt-in:\n%s", body)
+	}
+}
+
+func TestConfigInitRejectsConflictingWebFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{
+			"config", "init",
+			"--config", filepath.Join(t.TempDir(), "config.json"),
+			"--web",
+			"--no-web",
+		},
+		{
+			"config", "init",
+			"--config", filepath.Join(t.TempDir(), "config.json"),
+			"--web=true",
+			"--no-web=false",
+		},
+	} {
+		var stdout, stderr bytes.Buffer
+		err := Run(context.Background(), args, &stdout, &stderr)
+		if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+			t.Fatalf("Run(%v) error = %v, want conflicting web flags", args, err)
+		}
+	}
+}
+
 func TestConfigInitNoInheritedCommandEnvFalseWritesInheritance(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 
