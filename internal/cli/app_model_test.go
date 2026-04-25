@@ -2514,6 +2514,38 @@ func TestAppProgramComposerContentWidthHandlesNarrowTerminal(t *testing.T) {
 	}
 }
 
+func TestAppProgramLiveRegionWidthReservesPhysicalWrapColumn(t *testing.T) {
+	for _, tc := range []struct {
+		width int
+		want  int
+	}{
+		{0, 1},
+		{1, 1},
+		{2, 1},
+		{48, 47},
+		{120, 119},
+	} {
+		if got := appProgramLiveRegionWidth(tc.width); got != tc.want {
+			t.Fatalf("appProgramLiveRegionWidth(%d) = %d, want %d", tc.width, got, tc.want)
+		}
+	}
+}
+
+func TestAppProgramFitPrintedLinesWrapsBeforeTerminalEdge(t *testing.T) {
+	lines := appProgramFitPrintedLines([]string{
+		"short",
+		strings.Repeat("x", 18),
+	}, 8)
+	if len(lines) != 4 {
+		t.Fatalf("wrapped line count = %d, want 4: %#v", len(lines), lines)
+	}
+	for _, line := range lines {
+		if got := ansi.StringWidth(line); got > 8 {
+			t.Fatalf("printed line width = %d, want <= 8: %#v", got, lines)
+		}
+	}
+}
+
 func TestAppProgramBottomStatusDimsMetadata(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.ANSI256)
@@ -2571,8 +2603,8 @@ func TestAppProgramViewFitsAfterTerminalResize(t *testing.T) {
 		}
 	}
 	for _, line := range strings.Split(view, "\n") {
-		if got := lipgloss.Width(line); got > 48 {
-			t.Fatalf("view line width = %d, want <= 48:\n%s\nfull view:\n%s", got, line, view)
+		if got := lipgloss.Width(line); got >= 48 {
+			t.Fatalf("view line width = %d, want < 48 to avoid terminal autowrap:\n%s\nfull view:\n%s", got, line, view)
 		}
 	}
 	if model.width != 48 || model.height != 18 {
@@ -2872,7 +2904,7 @@ func TestAppProgramTranscriptRendersAssistantMarkdownTables(t *testing.T) {
 	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
 	for _, want := range []string{
 		"•   │ Area │ Status │",
-		"  ├────┼──────┤",
+		"  ├──────┼────────┤",
 		"  │ UI   │ better │",
 	} {
 		if !strings.Contains(got, want) {
@@ -2882,6 +2914,20 @@ func TestAppProgramTranscriptRendersAssistantMarkdownTables(t *testing.T) {
 	for _, unwanted := range []string{"| Area | Status |", "| --- | --- |", "**better**"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("markdown table transcript leaked raw marker %q:\n%s", unwanted, got)
+		}
+	}
+	var tableWidths []int
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "│") || strings.Contains(line, "├") {
+			tableWidths = append(tableWidths, lipgloss.Width(line))
+		}
+	}
+	if len(tableWidths) != 3 {
+		t.Fatalf("table row count = %d, want 3:\n%s", len(tableWidths), got)
+	}
+	for _, width := range tableWidths[1:] {
+		if width != tableWidths[0] {
+			t.Fatalf("table row widths = %v, want aligned rows:\n%s", tableWidths, got)
 		}
 	}
 }

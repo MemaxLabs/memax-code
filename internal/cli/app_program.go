@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -498,6 +499,9 @@ func (m *appProgramModel) flushPrints() tea.Cmd {
 	if len(lines) == 0 {
 		return nil
 	}
+	if m.width > 0 {
+		lines = appProgramFitPrintedLines(lines, appProgramLiveRegionWidth(m.width))
+	}
 	return tea.Println(strings.Join(lines, "\n"))
 }
 
@@ -527,9 +531,10 @@ func (m *appProgramModel) resize() {
 	if width <= 0 {
 		width = defaultAppShellWidth
 	}
-	m.compactor.width = width
+	renderWidth := appProgramLiveRegionWidth(width)
+	m.compactor.width = renderWidth
 	composerHeight := max(appProgramMinComposer, min(8, strings.Count(m.input.Value(), "\n")+1))
-	m.input.SetWidth(appProgramComposerContentWidth(width))
+	m.input.SetWidth(appProgramComposerContentWidth(renderWidth))
 	m.input.SetHeight(composerHeight)
 }
 
@@ -538,10 +543,11 @@ func (m *appProgramModel) View() string {
 	if width <= 0 {
 		width = defaultAppShellWidth
 	}
+	renderWidth := appProgramLiveRegionWidth(width)
 
 	rows := make([]string, 0, 8)
-	active := m.activeRuntimeActivityView(width)
-	activity := m.activityStatusView(width)
+	active := m.activeRuntimeActivityView(renderWidth)
+	activity := m.activityStatusView(renderWidth)
 	if active != "" {
 		rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 		rows = append(rows, active)
@@ -558,10 +564,10 @@ func (m *appProgramModel) View() string {
 		rows = append(rows, "")
 	}
 	rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
-	rows = append(rows, m.composerView(width))
-	rows = append(rows, m.bottomStatusView(width))
+	rows = append(rows, m.composerView(renderWidth))
+	rows = append(rows, m.bottomStatusView(renderWidth))
 	if m.showHelp {
-		rows = append(rows, m.helpView(width))
+		rows = append(rows, m.helpView(renderWidth))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
@@ -716,6 +722,31 @@ func appProgramComposerContentWidth(width int) int {
 		return 1
 	}
 	return width - 2
+}
+
+func appProgramLiveRegionWidth(width int) int {
+	if width <= 1 {
+		return 1
+	}
+	// Keep one physical terminal column free. Many terminals auto-wrap when
+	// output reaches the final column, while Bubble Tea still accounts for one
+	// logical row; reserving a column keeps resize repaint math aligned.
+	return width - 1
+}
+
+func appProgramFitPrintedLines(lines []string, width int) []string {
+	if width <= 0 {
+		return lines
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if xansi.StringWidth(line) <= width {
+			out = append(out, line)
+			continue
+		}
+		out = append(out, strings.Split(xansi.Hardwrap(line, width, true), "\n")...)
+	}
+	return out
 }
 
 func appProgramFitLine(line string, width int) string {
@@ -1150,7 +1181,7 @@ func appRenderMarkdownTableRow(cells []string, widths []int) []string {
 	if appMarkdownTableSeparator(cells) {
 		segments := make([]string, len(widths))
 		for i, width := range widths {
-			segments[i] = strings.Repeat("─", width)
+			segments[i] = strings.Repeat("─", width+2)
 		}
 		return []string{appProgramDimStyle.Render("  ├" + strings.Join(segments, "┼") + "┤")}
 	}
