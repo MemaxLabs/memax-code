@@ -737,7 +737,7 @@ func renderDryRun(w io.Writer, opts options) error {
 		fmt.Fprintln(w, "context_window: disabled")
 		fmt.Fprintln(w, "context_summary_tokens: disabled")
 	} else {
-		budgets := resolveContextBudgets(opts)
+		budgets := resolveContextBudgets(opts, nil)
 		fmt.Fprintf(w, "context_window: %d\n", budgets.WindowTokens)
 		fmt.Fprintf(w, "context_summary_tokens: %d\n", budgets.SummaryTokens)
 		fmt.Fprintf(w, "context_main_tokens: %d\n", budgets.MainTokens)

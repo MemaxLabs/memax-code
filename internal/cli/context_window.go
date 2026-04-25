@@ -6,6 +6,8 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/providers/anthropic"
+	"github.com/MemaxLabs/memax-go-agent-sdk/providers/openai"
 )
 
 type compactionMode string
@@ -40,9 +42,12 @@ func parseCompactionMode(raw string) (compactionMode, error) {
 	}
 }
 
-func effectiveContextWindow(opts options) int {
+func effectiveContextWindow(opts options, client model.Client) int {
 	if opts.ContextWindow > 0 {
 		return opts.ContextWindow
+	}
+	if caps, ok := model.ClientCapabilities(client); ok && caps.ContextWindowTokens > 0 {
+		return caps.ContextWindowTokens
 	}
 	return inferredContextWindow(opts.Provider, opts.Model)
 }
@@ -68,18 +73,20 @@ func inferredContextWindow(provider provider, modelName string) int {
 	name := strings.ToLower(strings.TrimSpace(modelName))
 	switch provider {
 	case providerOpenAI:
-		switch {
-		case strings.Contains(name, "gpt-5"), strings.Contains(name, "gpt-4.1"), strings.Contains(name, "gpt-4o"):
-			return 128000
+		if caps := openai.CapabilitiesForModel(name); caps.ContextWindowTokens > 0 {
+			return caps.ContextWindowTokens
 		}
 	case providerAnthropic:
+		if caps := anthropic.CapabilitiesForModel(name); caps.ContextWindowTokens > 0 {
+			return caps.ContextWindowTokens
+		}
 		return 200000
 	}
 	return defaultContextWindowTokens
 }
 
-func resolveContextBudgets(opts options) resolvedContextBudgets {
-	window := effectiveContextWindow(opts)
+func resolveContextBudgets(opts options, client model.Client) resolvedContextBudgets {
+	window := effectiveContextWindow(opts, client)
 	if window < minContextWindowTokens {
 		window = minContextWindowTokens
 	}
@@ -134,7 +141,7 @@ func contextPolicies(opts options, client model.Client) (contextwindow.Policy, c
 	if opts.Compaction == compactionModeOff || client == nil {
 		return nil, nil
 	}
-	budgets := resolveContextBudgets(opts)
+	budgets := resolveContextBudgets(opts, client)
 	summarizer := contextwindow.ModelSummarizer{
 		Model:        client,
 		SystemPrompt: "You compact coding-agent transcripts for future turns. Preserve user goals, repo facts, decisions, changed files, command results, open risks, and next actions. Do not add new facts.",

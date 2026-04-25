@@ -233,14 +233,14 @@ func TestParseEnablesCompactionByDefault(t *testing.T) {
 	if opts.Compaction != compactionModeAuto {
 		t.Fatalf("Compaction = %q, want auto", opts.Compaction)
 	}
-	if got := effectiveContextWindow(opts); got != 128000 {
-		t.Fatalf("effectiveContextWindow() = %d, want 128000", got)
+	if got := effectiveContextWindow(opts, nil); got != 272000 {
+		t.Fatalf("effectiveContextWindow() = %d, want 272000", got)
 	}
-	if got := effectiveContextSummaryTokens(opts, effectiveContextWindow(opts)); got != 8192 {
+	if got := effectiveContextSummaryTokens(opts, effectiveContextWindow(opts, nil)); got != 8192 {
 		t.Fatalf("effectiveContextSummaryTokens() = %d, want 8192", got)
 	}
-	budgets := resolveContextBudgets(opts)
-	if budgets.WindowTokens != 128000 || budgets.SummaryTokens != 8192 || budgets.RetryTokens >= budgets.MainTokens {
+	budgets := resolveContextBudgets(opts, nil)
+	if budgets.WindowTokens != 272000 || budgets.SummaryTokens != 8192 || budgets.RetryTokens >= budgets.MainTokens {
 		t.Fatalf("resolveContextBudgets() = %+v, want resolved budgets with retry < main", budgets)
 	}
 }
@@ -257,7 +257,7 @@ func TestResolveContextBudgetsClampsDryRunValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}
-	budgets := resolveContextBudgets(opts)
+	budgets := resolveContextBudgets(opts, nil)
 	if budgets.WindowTokens != minContextWindowTokens {
 		t.Fatalf("WindowTokens = %d, want %d", budgets.WindowTokens, minContextWindowTokens)
 	}
@@ -266,6 +266,28 @@ func TestResolveContextBudgetsClampsDryRunValues(t *testing.T) {
 	}
 	if budgets.RetryTokens > budgets.MainTokens {
 		t.Fatalf("RetryTokens = %d, MainTokens = %d; retry must not exceed main", budgets.RetryTokens, budgets.MainTokens)
+	}
+}
+
+func TestResolveContextBudgetsPrefersClientCapabilities(t *testing.T) {
+	opts := options{
+		Provider:   providerOpenAI,
+		Model:      "unknown-model",
+		Compaction: compactionModeAuto,
+	}
+	client := capabilitiesOnlyClient{
+		caps: model.Capabilities{
+			Provider:            "custom",
+			Model:               "unknown-model",
+			ContextWindowTokens: 64000,
+		},
+	}
+	budgets := resolveContextBudgets(opts, client)
+	if budgets.WindowTokens != 64000 {
+		t.Fatalf("WindowTokens = %d, want client capability 64000", budgets.WindowTokens)
+	}
+	if budgets.MainTokens != 51200 || budgets.RetryTokens != 35200 {
+		t.Fatalf("budgets = %+v, want 80%%/55%% of client capability", budgets)
 	}
 }
 
@@ -280,6 +302,18 @@ func TestEstimateApproxTokensIsConservative(t *testing.T) {
 	if got, want := estimateApproxTokens(msg), 4; got != want {
 		t.Fatalf("estimateApproxTokens() = %d, want %d", got, want)
 	}
+}
+
+type capabilitiesOnlyClient struct {
+	caps model.Capabilities
+}
+
+func (c capabilitiesOnlyClient) Stream(context.Context, model.Request) (model.Stream, error) {
+	return nil, model.ErrEndOfStream
+}
+
+func (c capabilitiesOnlyClient) Capabilities() model.Capabilities {
+	return c.caps
 }
 
 func TestParseCanDisableCompactionAndOverrideContextBudget(t *testing.T) {
