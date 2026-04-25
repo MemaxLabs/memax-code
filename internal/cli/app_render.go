@@ -11,6 +11,7 @@ import (
 
 const (
 	defaultAppShellWidth  = defaultLiveStatusWidth
+	defaultAppShellHeight = 24
 	appShellTickInterval  = 120 * time.Millisecond
 	maxAppTranscriptLines = 512
 )
