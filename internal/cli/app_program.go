@@ -81,6 +81,7 @@ type appProgramModel struct {
 	sessionID  string
 	statusLine string
 	lastError  string
+	lastRunErr string
 	running    bool
 	canceling  bool
 	showHelp   bool
@@ -189,6 +190,7 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 	m.syncComposerDraftFromInput()
 	if m.input.Value() != beforeInput {
+		m.composer.history.ResetTraversal()
 		m.resize()
 	}
 	return m, m.withFlush(cmd)
@@ -230,6 +232,14 @@ func (m *appProgramModel) updateKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	case "alt+enter", "shift+enter":
 		m.insertInputNewline()
 		return nil, true
+	case "up":
+		if m.inputCursorAtTop() {
+			return m.recallPreviousPrompt(), true
+		}
+	case "down":
+		if m.inputCursorAtBottom() {
+			return m.recallNextPrompt(), true
+		}
 	case "enter", "ctrl+m", "ctrl+j":
 		if m.consumeTrailingBackslashForNewline() {
 			return nil, true
@@ -308,6 +318,7 @@ func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
 	m.canceling = false
 	m.runCancel = cancel
 	m.lastError = ""
+	m.lastRunErr = ""
 	m.statusLine = "running"
 	m.appendLocalTranscriptLine("user", "› "+strings.ReplaceAll(strings.TrimSpace(prompt), "\n", " "))
 	m.input.Reset()
@@ -363,10 +374,13 @@ func (m *appProgramModel) finishPrompt(msg appProgramPromptDoneMsg) {
 			m.appendLocalTranscriptLine("dim", "canceled")
 			return
 		}
-		m.lastError = msg.err.Error()
+		errText := msg.err.Error()
+		m.lastError = errText
 		m.statusLine = "error"
 		m.flushTranscriptPartial()
-		m.appendLocalTranscriptLine("error", "error: "+msg.err.Error())
+		if errText != m.lastRunErr {
+			m.appendLocalTranscriptLine("error", "error: "+errText)
+		}
 		if m.firstErr == nil {
 			m.firstErr = msg.err
 		}
@@ -402,9 +416,54 @@ func (m *appProgramModel) appendEvent(event memaxagent.Event) {
 		if event.SessionID != "" {
 			m.sessionID = event.SessionID
 		}
+	case memaxagent.EventError:
+		if event.Err != nil && m.lastRunErr == "" {
+			m.lastRunErr = event.Err.Error()
+		}
+		m.appTranscriptFormatter.appendEvent(event)
 	default:
 		m.appTranscriptFormatter.appendEvent(event)
 	}
+}
+
+func (m *appProgramModel) inputCursorAtTop() bool {
+	if m.input.Line() > 0 {
+		return false
+	}
+	info := m.input.LineInfo()
+	return info.RowOffset <= 0
+}
+
+func (m *appProgramModel) inputCursorAtBottom() bool {
+	if m.input.Line() < m.input.LineCount()-1 {
+		return false
+	}
+	info := m.input.LineInfo()
+	return info.RowOffset >= max(0, info.Height-1)
+}
+
+func (m *appProgramModel) recallPreviousPrompt() tea.Cmd {
+	text, ok := m.composer.history.Previous(m.input.Value())
+	if !ok {
+		return nil
+	}
+	m.input.SetValue(text)
+	m.input.CursorEnd()
+	m.syncComposerDraftFromInput()
+	m.resize()
+	return nil
+}
+
+func (m *appProgramModel) recallNextPrompt() tea.Cmd {
+	text, ok := m.composer.history.Next()
+	if !ok {
+		return nil
+	}
+	m.input.SetValue(text)
+	m.input.CursorEnd()
+	m.syncComposerDraftFromInput()
+	m.resize()
+	return nil
 }
 
 func (m *appProgramModel) flushPrints() tea.Cmd {
@@ -592,10 +651,15 @@ type appProgramTranscriptCompactor struct {
 	assistantHasContent     bool
 	assistantAtLineBoundary bool
 	assistantLineBuffer     string
-	assistantTableWidths    []int
+	assistantTableRows      []appMarkdownTableRow
 	outputHasOpenLine       bool
 	lastActivityTool        string
 	activityDetail          *appProgramActivityDetail
+}
+
+type appMarkdownTableRow struct {
+	raw   string
+	cells []string
 }
 
 type appProgramActivityDetail struct {
@@ -701,6 +765,7 @@ func (c *appProgramTranscriptCompactor) startSection(section string) string {
 		c.assistantHasContent = false
 		c.assistantAtLineBoundary = false
 		c.assistantLineBuffer = ""
+		c.assistantTableRows = nil
 	}
 	return out
 }
@@ -721,6 +786,7 @@ func (c *appProgramTranscriptCompactor) compactLine(line string, completeLine bo
 				return nil
 			}
 			out := c.flushAssistantLineBuffer()
+			out = append(out, c.flushAssistantTable()...)
 			return append(out, appTranscriptBlankLine)
 		}
 		if c.activityDetail != nil {
@@ -731,6 +797,7 @@ func (c *appProgramTranscriptCompactor) compactLine(line string, completeLine bo
 	}
 	if section, label, ok := compactAppProgramSectionLabel(trimmed); ok {
 		out := c.flushAssistantLineBuffer()
+		out = append(out, c.flushAssistantTable()...)
 		out = append(out, c.flushActivityDetail()...)
 		c.lastActivityTool = ""
 		if section == "assistant" {
@@ -741,7 +808,7 @@ func (c *appProgramTranscriptCompactor) compactLine(line string, completeLine bo
 		c.section = section
 		c.skipActivityDetail = false
 		c.assistantInCodeBlock = false
-		c.assistantTableWidths = nil
+		c.assistantTableRows = nil
 		if label != "" {
 			out = append(out, label)
 		}
@@ -770,7 +837,7 @@ func (c *appProgramTranscriptCompactor) compactAssistantLineChunk(line string, c
 		line = c.assistantLineBuffer + line
 		c.assistantLineBuffer = ""
 	}
-	return []string{c.compactAssistantLine(line)}
+	return c.compactAssistantLine(line)
 }
 
 func compactAppProgramLocalLine(kind, text string) string {
@@ -805,34 +872,50 @@ func compactAppProgramSectionLabel(trimmed string) (section, label string, ok bo
 	}
 }
 
-func (c *appProgramTranscriptCompactor) compactAssistantLine(line string) string {
+func (c *appProgramTranscriptCompactor) compactAssistantLine(line string) []string {
 	trimmedRight := strings.TrimRight(line, "\r\n")
 	trimmed := strings.TrimSpace(trimmedRight)
 	if trimmed == "" {
-		return appTranscriptBlankLine
+		out := c.flushAssistantTable()
+		return append(out, appTranscriptBlankLine)
 	}
+	if strings.HasPrefix(trimmed, "```") || c.assistantInCodeBlock {
+		return c.compactAssistantNonTableWithFlushedTable(trimmedRight, trimmed)
+	}
+	if c.appendAssistantTableLine(trimmedRight) {
+		return nil
+	}
+	return c.compactAssistantNonTableWithFlushedTable(trimmedRight, trimmed)
+}
+
+func (c *appProgramTranscriptCompactor) compactAssistantNonTableWithFlushedTable(trimmedRight, trimmed string) []string {
+	out := c.flushAssistantTable()
+	if len(out) > 0 {
+		c.assistantHasContent = true
+	}
+	rendered := c.compactAssistantNonTableLine(trimmedRight, trimmed)
+	c.assistantHasContent = true
+	return append(out, rendered)
+}
+
+func (c *appProgramTranscriptCompactor) compactAssistantNonTableLine(trimmedRight, trimmed string) string {
 	prefix := c.assistantLinePrefix()
 	if strings.HasPrefix(trimmed, "```") {
-		c.assistantTableWidths = nil
 		c.assistantInCodeBlock = !c.assistantInCodeBlock
 		return prefix + appProgramCodeStyle.Render(trimmed)
 	}
 	if c.assistantInCodeBlock {
-		c.assistantTableWidths = nil
 		return prefix + appProgramCodeStyle.Render(strings.TrimRight(trimmedRight, "\t "))
 	}
 	if heading, ok := appMarkdownHeading(trimmed); ok {
-		c.assistantTableWidths = nil
 		return prefix + appProgramHeadingStyle.Render(appStripMarkdownDelimiters(heading))
 	}
 	if strings.HasPrefix(trimmed, ">") && !strings.HasPrefix(trimmed, "> tool ") {
-		c.assistantTableWidths = nil
 		return prefix + appProgramQuoteStyle.Render("│ "+appStripMarkdownDelimiters(strings.TrimSpace(strings.TrimPrefix(trimmed, ">"))))
 	}
-	if table, ok := c.compactAssistantTableLine(trimmedRight); ok {
-		return prefix + table
+	if appMarkdownHorizontalRule(trimmed) {
+		return prefix + appProgramDimStyle.Render(strings.Repeat("─", 64))
 	}
-	c.assistantTableWidths = nil
 	if indent, bullet, rest, ok := appMarkdownBulletLine(trimmedRight); ok {
 		if !c.assistantHasContent && indent == "" && bullet == "•" {
 			return prefix + appRenderInlineMarkdown(rest)
@@ -845,40 +928,99 @@ func (c *appProgramTranscriptCompactor) compactAssistantLine(line string) string
 	return prefix + appRenderInlineMarkdown(trimmedRight)
 }
 
-func (c *appProgramTranscriptCompactor) compactAssistantTableLine(line string) (string, bool) {
+func (c *appProgramTranscriptCompactor) appendAssistantTableLine(line string) bool {
 	cells, ok := appMarkdownTableCells(line)
 	if !ok || len(cells) < 2 {
-		return "", false
+		return false
 	}
-	if appMarkdownTableSeparator(cells) {
-		widths := c.assistantTableWidths
-		if len(widths) != len(cells) {
-			widths = appMarkdownTableCellWidths(cells)
+	c.assistantTableRows = append(c.assistantTableRows, appMarkdownTableRow{
+		raw:   line,
+		cells: cells,
+	})
+	return true
+}
+
+func (c *appProgramTranscriptCompactor) flushAssistantTable() []string {
+	if len(c.assistantTableRows) == 0 {
+		return nil
+	}
+	rows := c.assistantTableRows
+	c.assistantTableRows = nil
+	if !appMarkdownTableRowsContainSeparator(rows) {
+		return c.flushAssistantTableRowsAsText(rows)
+	}
+	widths := appMarkdownTableWidths(rows)
+	out := make([]string, 0, len(rows))
+	hadContent := c.assistantHasContent
+	for _, row := range rows {
+		prefix := "  "
+		if !hadContent {
+			prefix = appProgramMarkdownStyle.Render("• ")
+			hadContent = true
 		}
+		out = append(out, prefix+appRenderMarkdownTableRow(row.cells, widths))
+	}
+	c.assistantHasContent = true
+	return out
+}
+
+func (c *appProgramTranscriptCompactor) flushAssistantTableRowsAsText(rows []appMarkdownTableRow) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, c.compactAssistantNonTableLine(row.raw, strings.TrimSpace(row.raw)))
+		c.assistantHasContent = true
+	}
+	return out
+}
+
+func appMarkdownTableRowsContainSeparator(rows []appMarkdownTableRow) bool {
+	for _, row := range rows {
+		if appMarkdownTableSeparator(row.cells) {
+			return true
+		}
+	}
+	return false
+}
+
+func appMarkdownTableWidths(rows []appMarkdownTableRow) []int {
+	var widths []int
+	for _, row := range rows {
+		cells := row.cells
+		if len(widths) < len(cells) {
+			widths = append(widths, make([]int, len(cells)-len(widths))...)
+		}
+		if appMarkdownTableSeparator(cells) {
+			for i := range cells {
+				widths[i] = max(widths[i], 3)
+			}
+			continue
+		}
+		for i, cell := range cells {
+			widths[i] = max(widths[i], lipgloss.Width(appRenderInlineMarkdown(strings.TrimSpace(cell))))
+		}
+	}
+	for i, width := range widths {
+		widths[i] = max(3, width)
+	}
+	return widths
+}
+
+func appRenderMarkdownTableRow(cells []string, widths []int) string {
+	if appMarkdownTableSeparator(cells) {
 		segments := make([]string, len(widths))
 		for i, width := range widths {
-			segments[i] = strings.Repeat("─", max(3, width))
+			segments[i] = strings.Repeat("─", width)
 		}
-		return appProgramDimStyle.Render("  ├" + strings.Join(segments, "┼") + "┤"), true
+		return appProgramDimStyle.Render("  ├" + strings.Join(segments, "┼") + "┤")
 	}
-
 	rendered := make([]string, len(cells))
 	for i, cell := range cells {
 		rendered[i] = appRenderInlineMarkdown(strings.TrimSpace(cell))
 	}
-	widths := c.assistantTableWidths
-	if len(widths) != len(rendered) {
-		widths = make([]int, len(rendered))
-	}
-	for i, cell := range rendered {
-		widths[i] = max(widths[i], lipgloss.Width(cell))
-	}
-	c.assistantTableWidths = widths
-
 	for i, cell := range rendered {
 		rendered[i] = appPadRenderedRight(cell, widths[i])
 	}
-	return appProgramMarkdownStyle.Render("  │ ") + strings.Join(rendered, appProgramDimStyle.Render(" │ ")) + appProgramMarkdownStyle.Render(" │"), true
+	return appProgramMarkdownStyle.Render("  │ ") + strings.Join(rendered, appProgramDimStyle.Render(" │ ")) + appProgramMarkdownStyle.Render(" │")
 }
 
 func (c *appProgramTranscriptCompactor) assistantLinePrefix() string {
@@ -895,6 +1037,7 @@ func (c *appProgramTranscriptCompactor) resetSection() {
 	c.assistantHasContent = false
 	c.assistantAtLineBoundary = false
 	c.assistantLineBuffer = ""
+	c.assistantTableRows = nil
 	c.outputHasOpenLine = false
 	c.lastActivityTool = ""
 	c.activityDetail = nil
@@ -1019,14 +1162,6 @@ func appMarkdownTableCells(line string) ([]string, bool) {
 	return cells, true
 }
 
-func appMarkdownTableCellWidths(cells []string) []int {
-	widths := make([]int, len(cells))
-	for i, cell := range cells {
-		widths[i] = max(3, lipgloss.Width(appRenderInlineMarkdown(strings.TrimSpace(cell))))
-	}
-	return widths
-}
-
 func appMarkdownTableSeparator(cells []string) bool {
 	if len(cells) == 0 {
 		return false
@@ -1038,6 +1173,30 @@ func appMarkdownTableSeparator(cells []string) bool {
 		}
 	}
 	return true
+}
+
+func appMarkdownHorizontalRule(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	var marker rune
+	count := 0
+	for _, r := range trimmed {
+		if r == ' ' || r == '\t' {
+			continue
+		}
+		if marker == 0 {
+			switch r {
+			case '-', '*', '_':
+				marker = r
+			default:
+				return false
+			}
+		}
+		if r != marker {
+			return false
+		}
+		count++
+	}
+	return count >= 3
 }
 
 func appPadRenderedRight(text string, width int) string {
@@ -1481,11 +1640,12 @@ func (c *appProgramTranscriptCompactor) flushAssistantLineBuffer() []string {
 	if strings.TrimSpace(line) == "" {
 		return nil
 	}
-	return []string{c.compactAssistantLine(line)}
+	return c.compactAssistantLine(line)
 }
 
 func (c *appProgramTranscriptCompactor) flush() string {
 	out := c.flushAssistantLineBuffer()
+	out = append(out, c.flushAssistantTable()...)
 	out = append(out, c.flushActivityDetail()...)
 	if len(out) == 0 {
 		return ""

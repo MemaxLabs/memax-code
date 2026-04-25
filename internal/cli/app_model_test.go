@@ -122,6 +122,52 @@ func TestAppProgramComposerShrinksAfterDeletion(t *testing.T) {
 	}
 }
 
+func TestAppProgramComposerHistoryUsesUpDownAtInputBoundaries(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.composer.loadHistory([]string{"first prompt", "second prompt"})
+	model.input.SetValue("draft")
+	model.input.CursorStart()
+
+	if _, handled := model.updateKey(tea.KeyMsg{Type: tea.KeyUp}); !handled {
+		t.Fatal("up at first input row was not handled")
+	}
+	if got, want := model.input.Value(), "second prompt"; got != want {
+		t.Fatalf("first history recall = %q, want %q", got, want)
+	}
+	if _, handled := model.updateKey(tea.KeyMsg{Type: tea.KeyUp}); !handled {
+		t.Fatal("second up at first input row was not handled")
+	}
+	if got, want := model.input.Value(), "first prompt"; got != want {
+		t.Fatalf("second history recall = %q, want %q", got, want)
+	}
+	if _, handled := model.updateKey(tea.KeyMsg{Type: tea.KeyDown}); !handled {
+		t.Fatal("down at last input row was not handled")
+	}
+	if got, want := model.input.Value(), "second prompt"; got != want {
+		t.Fatalf("history next = %q, want %q", got, want)
+	}
+	if _, handled := model.updateKey(tea.KeyMsg{Type: tea.KeyDown}); !handled {
+		t.Fatal("down back to draft was not handled")
+	}
+	if got, want := model.input.Value(), "draft"; got != want {
+		t.Fatalf("restored draft = %q, want %q", got, want)
+	}
+}
+
+func TestAppProgramComposerHistoryDoesNotStealUpInsideMultilineInput(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.composer.loadHistory([]string{"old prompt"})
+	model.input.SetValue("line one\nline two")
+	model.input.CursorEnd()
+
+	if _, handled := model.updateKey(tea.KeyMsg{Type: tea.KeyUp}); handled {
+		t.Fatal("up inside multiline input was handled as history recall")
+	}
+	if got, want := model.input.Value(), "line one\nline two"; got != want {
+		t.Fatalf("input changed after non-boundary up = %q, want %q", got, want)
+	}
+}
+
 func TestAppProgramBackslashEnterInsertsNewline(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.input.SetValue("line one\\")
@@ -1299,6 +1345,45 @@ func TestAppProgramStructuredToolErrorAfterInterveningActivityKeepsContext(t *te
 	}
 }
 
+func TestAppProgramFinishPromptDedupesMatchingEventError(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+	err := errors.New("receive model event: quota exceeded")
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventError, Err: err})
+	m.finishPrompt(appProgramPromptDoneMsg{err: err})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := strings.Count(got, "! error: receive model event: quota exceeded"); count != 1 {
+		t.Fatalf("matching event/run error count = %d, want 1:\n%s", count, got)
+	}
+	if m.lastError != err.Error() {
+		t.Fatalf("lastError = %q, want %q", m.lastError, err.Error())
+	}
+}
+
+func TestAppProgramFinishPromptDedupesFirstEventError(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+	first := errors.New("first model error")
+	second := errors.New("second model error")
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventError, Err: first})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventError, Err: second})
+	m.finishPrompt(appProgramPromptDoneMsg{err: first})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := strings.Count(got, "! error: first model error"); count != 1 {
+		t.Fatalf("first error count = %d, want 1:\n%s", count, got)
+	}
+	if count := strings.Count(got, "! error: second model error"); count != 1 {
+		t.Fatalf("second error count = %d, want 1:\n%s", count, got)
+	}
+	if m.lastError != first.Error() {
+		t.Fatalf("lastError = %q, want %q", m.lastError, first.Error())
+	}
+}
+
 func TestAppProgramParallelWebFetchesCommitAsGroupedCells(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
@@ -2313,6 +2398,7 @@ func TestAppProgramTranscriptRendersAssistantMarkdownTables(t *testing.T) {
 	model.compactor = appProgramTranscriptCompactor{}
 
 	model.appendTranscript("[assistant]\n| Area | Status |\n| --- | --- |\n| UI | **better** |\n")
+	model.flushTranscriptPartial()
 
 	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
 	for _, want := range []string{
@@ -2337,10 +2423,62 @@ func TestAppProgramTranscriptRendersAssistantMarkdownTableEmptyCells(t *testing.
 	model.compactor = appProgramTranscriptCompactor{}
 
 	model.appendTranscript("[assistant]\n| A | B | C |\n| --- | --- | --- |\n| a | | c |\n")
+	model.flushTranscriptPartial()
 
 	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
-	if !strings.Contains(got, "  │ a │   │ c │") {
+	if !strings.Contains(got, "  │ a   │     │ c   │") {
 		t.Fatalf("markdown table empty cell was not preserved:\n%s", got)
+	}
+}
+
+func TestAppProgramTranscriptRendersAssistantHorizontalRule(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{}
+
+	model.appendTranscript("[assistant]\nBefore\n---\n- - -\nAfter\n")
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"• Before",
+		"  " + strings.Repeat("─", 64),
+		"  " + strings.Repeat("─", 64) + "\n  " + strings.Repeat("─", 64),
+		"  After",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("horizontal rule transcript missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "\n  ---\n") || strings.Contains(got, "\n  - - -\n") {
+		t.Fatalf("horizontal rule leaked raw markdown:\n%s", got)
+	}
+}
+
+func TestAppProgramTranscriptDoesNotRenderTablesInsideCodeBlocks(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{}
+
+	model.appendTranscript("[assistant]\nExample table:\n```\n| col1 | col2 |\n| --- | --- |\n| a | b |\n```\nDone.\n")
+	model.flushTranscriptPartial()
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"• Example table:",
+		"  ```",
+		"  | col1 | col2 |",
+		"  | --- | --- |",
+		"  | a | b |",
+		"  Done.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("assistant code-block table transcript missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"├", "┼", "│ col1 │"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("assistant code-block table rendered as table via %q:\n%s", unwanted, got)
+		}
 	}
 }
 
@@ -2349,12 +2487,14 @@ func TestAppProgramTranscriptDoesNotRenderProsePipesAsTables(t *testing.T) {
 	model.transcript = appTranscriptTail{}
 	model.compactor = appProgramTranscriptCompactor{}
 
-	model.appendTranscript("[assistant]\nRun `grep foo | head` to filter.\nUse --flag yes|no for that.\n")
+	model.appendTranscript("[assistant]\nRun `grep foo | head` to filter.\nUse --flag yes|no for that.\n| TODO | done |\n")
+	model.flushTranscriptPartial()
 
 	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
 	for _, want := range []string{
 		"• Run grep foo | head to filter.",
 		"  Use --flag yes|no for that.",
+		"  | TODO | done |",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("assistant prose pipe line missing %q:\n%s", want, got)
