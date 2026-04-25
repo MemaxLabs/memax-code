@@ -226,6 +226,9 @@ func TestBuildStackUsesModelFriendlyToolContracts(t *testing.T) {
 		"Use workspace_apply_patch with exactly one unified_diff string",
 		"Do not provide structured patch operations",
 		"Use web_fetch for HTTP(S) URLs",
+		"Visible progress:",
+		"Before non-trivial investigation",
+		"Do not expose hidden reasoning",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("AppendSystemPrompt missing %q:\n%s", want, prompt)

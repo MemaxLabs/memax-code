@@ -81,7 +81,7 @@ type appProgramModel struct {
 	sessionID  string
 	statusLine string
 	lastError  string
-	lastRunErr string
+	runErrors  map[string]struct{}
 	running    bool
 	canceling  bool
 	showHelp   bool
@@ -318,7 +318,7 @@ func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
 	m.canceling = false
 	m.runCancel = cancel
 	m.lastError = ""
-	m.lastRunErr = ""
+	m.runErrors = nil
 	m.statusLine = "running"
 	m.appendLocalTranscriptLine("user", "› "+strings.ReplaceAll(strings.TrimSpace(prompt), "\n", " "))
 	m.input.Reset()
@@ -378,7 +378,8 @@ func (m *appProgramModel) finishPrompt(msg appProgramPromptDoneMsg) {
 		m.lastError = errText
 		m.statusLine = "error"
 		m.flushTranscriptPartial()
-		if errText != m.lastRunErr {
+		if !m.hasRunError(errText) {
+			m.recordRunError(errText)
 			m.appendLocalTranscriptLine("error", "error: "+errText)
 		}
 		if m.firstErr == nil {
@@ -417,13 +418,36 @@ func (m *appProgramModel) appendEvent(event memaxagent.Event) {
 			m.sessionID = event.SessionID
 		}
 	case memaxagent.EventError:
-		if event.Err != nil && m.lastRunErr == "" {
-			m.lastRunErr = event.Err.Error()
+		if event.Err != nil {
+			if errText := event.Err.Error(); errText != "" {
+				if m.hasRunError(errText) {
+					return
+				}
+				m.recordRunError(errText)
+			}
 		}
 		m.appTranscriptFormatter.appendEvent(event)
 	default:
 		m.appTranscriptFormatter.appendEvent(event)
 	}
+}
+
+func (m *appProgramModel) hasRunError(errText string) bool {
+	if errText == "" || m.runErrors == nil {
+		return false
+	}
+	_, ok := m.runErrors[errText]
+	return ok
+}
+
+func (m *appProgramModel) recordRunError(errText string) {
+	if errText == "" {
+		return
+	}
+	if m.runErrors == nil {
+		m.runErrors = make(map[string]struct{}, 1)
+	}
+	m.runErrors[errText] = struct{}{}
 }
 
 func (m *appProgramModel) inputCursorAtTop() bool {

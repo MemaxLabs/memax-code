@@ -1497,6 +1497,40 @@ func TestAppProgramFinishPromptDedupesMatchingEventError(t *testing.T) {
 	}
 }
 
+func TestAppProgramDedupesRepeatedEventError(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+	err := errors.New("receive model event: provider quota exceeded")
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventError, Err: err})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventError, Err: err})
+	m.finishPrompt(appProgramPromptDoneMsg{err: err})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := strings.Count(got, "! error: receive model event: provider quota exceeded"); count != 1 {
+		t.Fatalf("duplicate event/run error count = %d, want 1:\n%s", count, got)
+	}
+}
+
+func TestAppProgramDedupesRepeatedDistinctEventError(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+	first := errors.New("first model error")
+	second := errors.New("second model error")
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventError, Err: first})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventError, Err: second})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventError, Err: second})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := strings.Count(got, "! error: first model error"); count != 1 {
+		t.Fatalf("first error count = %d, want 1:\n%s", count, got)
+	}
+	if count := strings.Count(got, "! error: second model error"); count != 1 {
+		t.Fatalf("second error count = %d, want 1:\n%s", count, got)
+	}
+}
+
 func TestAppProgramFinishPromptDedupesFirstEventError(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
@@ -1516,6 +1550,42 @@ func TestAppProgramFinishPromptDedupesFirstEventError(t *testing.T) {
 	}
 	if m.lastError != first.Error() {
 		t.Fatalf("lastError = %q, want %q", m.lastError, first.Error())
+	}
+}
+
+func TestAppProgramFinishPromptDedupesAnyRenderedEventError(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+	first := errors.New("first model error")
+	second := errors.New("second model error")
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventError, Err: first})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventError, Err: second})
+	m.finishPrompt(appProgramPromptDoneMsg{err: second})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := strings.Count(got, "! error: first model error"); count != 1 {
+		t.Fatalf("first error count = %d, want 1:\n%s", count, got)
+	}
+	if count := strings.Count(got, "! error: second model error"); count != 1 {
+		t.Fatalf("second error count = %d, want 1:\n%s", count, got)
+	}
+	if m.lastError != second.Error() {
+		t.Fatalf("lastError = %q, want %q", m.lastError, second.Error())
+	}
+}
+
+func TestAppProgramFinishPromptRecordsRenderedTerminalError(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+	err := errors.New("terminal model error")
+
+	m.finishPrompt(appProgramPromptDoneMsg{err: err})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventError, Err: err})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := strings.Count(got, "! error: terminal model error"); count != 1 {
+		t.Fatalf("terminal error count = %d, want 1:\n%s", count, got)
 	}
 }
 

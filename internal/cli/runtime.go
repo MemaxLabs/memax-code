@@ -413,6 +413,7 @@ func buildStackWithModel(opts options, client model.Client) (coding.Stack, error
 	config.Base.Tools = baseRegistry
 	config.Base.AppendSystemPrompt = appendPromptSection(config.Base.AppendSystemPrompt, cliToolContractGuidance)
 	config.Base.AppendSystemPrompt = appendPromptSection(config.Base.AppendSystemPrompt, cliSubagentGuidance)
+	config.Base.AppendSystemPrompt = appendPromptSection(config.Base.AppendSystemPrompt, cliVisibleProgressGuidance)
 	stack, err := coding.New(config)
 	if err != nil {
 		return coding.Stack{}, fmt.Errorf("configure runtime: %w", userFacingError(err))
@@ -551,6 +552,12 @@ const cliSubagentGuidance = `Subagent delegation:
 - Prefer parallel explorer or reviewer calls for read-only work. Avoid running multiple worker subagents against the same files or commands unless the work is clearly disjoint.
 - Do not delegate urgent work whose result you need before your next immediate step; do that work yourself.
 - Integrate child results in the parent before finalizing.`
+
+const cliVisibleProgressGuidance = `Visible progress:
+- Before non-trivial investigation, code edits, broad verification, web research, or a long-running command, write at most one short user-visible sentence saying what you are about to check or change and why.
+- During multi-step work, provide occasional concise progress updates when the next action changes, a blocker appears, or a batch of work finishes.
+- Do not narrate every trivial tool call. Do not expose hidden reasoning or step-by-step internal deliberation; summarize only the public next action.
+- Keep progress notes factual, brief, and actionable; then continue with the needed tool calls.`
 
 func appendPromptSection(base, section string) string {
 	base = strings.TrimSpace(base)
