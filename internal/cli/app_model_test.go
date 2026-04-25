@@ -2554,10 +2554,22 @@ func TestAppProgramViewFitsAfterTerminalResize(t *testing.T) {
 			},
 		},
 	}
+	model.pendingToolOrder = []string{"tool"}
 
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 48, Height: 18})
 	model = updated.(*appProgramModel)
 	view := model.View()
+	stripped := ansi.Strip(view)
+	for _, want := range []string{"Web fetch(", "title: wide status", "input draft: inactive", "F1 help"} {
+		if !strings.Contains(stripped, want) {
+			t.Fatalf("resized view missing %q:\n%s", want, stripped)
+		}
+	}
+	for _, line := range strings.Split(stripped, "\n") {
+		if strings.Contains(line, "input draft: inactive") && strings.Contains(line, "Memax Code") {
+			t.Fatalf("resized narrow status should prioritize input/help over brand:\n%s", stripped)
+		}
+	}
 	for _, line := range strings.Split(view, "\n") {
 		if got := lipgloss.Width(line); got > 48 {
 			t.Fatalf("view line width = %d, want <= 48:\n%s\nfull view:\n%s", got, line, view)

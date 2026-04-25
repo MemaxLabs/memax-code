@@ -645,6 +645,19 @@ func (m *appProgramModel) bottomStatusView(width int) string {
 		parts = append(parts, secondary...)
 		line = appProgramStatusLine(parts)
 	}
+	for _, compactParts := range [][]string{
+		append([]string{m.phaseLabel()}, secondary...),
+		{m.phaseLabel(), appProgramStatusMetaStyle.Render("F1 help")},
+		{m.phaseLabel()},
+	} {
+		compactLine := appProgramStatusLine(compactParts)
+		if width <= 0 || lipgloss.Width(line) <= width || lipgloss.Width(compactLine) <= width {
+			if width > 0 && lipgloss.Width(line) > width {
+				line = compactLine
+			}
+			break
+		}
+	}
 	return appProgramFitLine(line, width)
 }
 
