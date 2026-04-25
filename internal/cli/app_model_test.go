@@ -1285,6 +1285,183 @@ func TestAppProgramStructuredToolErrorAfterInterveningActivityKeepsContext(t *te
 	}
 }
 
+func TestAppProgramStructuredSubagentResultIsCompact(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:    "delegate-1",
+		Name:  "run_subagent",
+		Input: json.RawMessage(`{"agent":"explorer","prompt":"inspect health check behavior and report concise evidence"}`),
+	}})
+	live := ansi.Strip(m.View())
+	if !strings.Contains(live, "• Subagent(explorer) inspect health check behavior and report concise evid...") {
+		t.Fatalf("live subagent invocation missing before result:\n%s", live)
+	}
+	if got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n")); strings.Contains(got, "Subagent(explorer)") {
+		t.Fatalf("active subagent committed to scrollback before result:\n%s", got)
+	}
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		ToolUseID: "delegate-1",
+		Name:      "run_subagent",
+		Content: strings.Join([]string{
+			`subagent "explorer" result: Reported fields:`,
+			"- Delay used: not applicable / not executed",
+			"- Command exit status: not available",
+			"- HTTP response/status/body: not available",
+		}, "\n"),
+		Metadata: map[string]any{
+			"agent":                        "explorer",
+			metadataSubagentChildSessionID: "019dbe66-3b4f-7d79-a333-34d708f1d4a6",
+			model.MetadataTaskID:           "task-1",
+			model.MetadataTaskStatus:       "completed",
+		},
+	}})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"• Subagent(explorer) inspect health check behavior and report concise evid...",
+		"  └ done",
+		"  └ child 019dbe66...d4a6",
+		"  └ task task-1 completed",
+		"  └ summary: Reported fields:",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("subagent transcript missing %q:\n%s", want, got)
+		}
+	}
+	for _, noisy := range []string{"output tail:", "Delay used:", "HTTP response/status/body"} {
+		if strings.Contains(got, noisy) {
+			t.Fatalf("subagent transcript leaked raw output tail %q:\n%s", noisy, got)
+		}
+	}
+}
+
+func TestAppProgramStructuredParallelSubagentsStayDistinct(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	delegations := []struct {
+		id     string
+		agent  string
+		prompt string
+		child  string
+	}{
+		{"delegate-1", "worker", "curl the health endpoint after a short delay", "019dbe66-0000-7000-8000-000000000001"},
+		{"delegate-2", "worker", "curl the health endpoint with headers", "019dbe66-0000-7000-8000-000000000002"},
+		{"delegate-3", "worker", "curl the health endpoint and summarize status", "019dbe66-0000-7000-8000-000000000003"},
+	}
+	for _, delegation := range delegations {
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+			ID:    delegation.id,
+			Name:  "run_subagent",
+			Input: json.RawMessage(`{"agent":` + strconv.Quote(delegation.agent) + `,"prompt":` + strconv.Quote(delegation.prompt) + `}`),
+		}})
+	}
+	for i := len(delegations) - 1; i >= 0; i-- {
+		delegation := delegations[i]
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+			ToolUseID: delegation.id,
+			Name:      "run_subagent",
+			Content:   `subagent "worker" result: HTTP 200 {"status":"ok","ready":true}`,
+			Metadata: map[string]any{
+				"agent":                        delegation.agent,
+				metadataSubagentChildSessionID: delegation.child,
+			},
+		}})
+	}
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, delegation := range delegations {
+		header := "• Subagent(worker) " + delegation.prompt
+		if count := countTranscriptLine(got, header); count != 1 {
+			t.Fatalf("subagent header %q count = %d, want 1:\n%s", header, count, got)
+		}
+	}
+	if count := strings.Count(got, "  └ done"); count != len(delegations) {
+		t.Fatalf("subagent done rows = %d, want %d:\n%s", count, len(delegations), got)
+	}
+	if strings.Contains(got, "output tail:") {
+		t.Fatalf("parallel subagents rendered raw output tails:\n%s", got)
+	}
+}
+
+func TestAppProgramStructuredSubagentFlushedBeforeResultDoesNotDuplicateHeader(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:    "delegate-1",
+		Name:  "run_subagent",
+		Input: json.RawMessage(`{"agent":"explorer","prompt":"inspect filesystem state"}`),
+	}})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventError, Err: errors.New("stream warning while child is still running")})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		ToolUseID: "delegate-1",
+		Name:      "run_subagent",
+		Content:   `subagent "explorer" result: found README and go.mod`,
+		Metadata: map[string]any{
+			"agent": "explorer",
+		},
+	}})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := countTranscriptLine(got, "• Subagent(explorer) inspect filesystem state"); count != 1 {
+		t.Fatalf("subagent header count = %d, want 1:\n%s", count, got)
+	}
+	for _, want := range []string{
+		"error: stream warning while child is still running",
+		"• Subagent(explorer) inspect filesystem state result",
+		"  └ done",
+		"  └ summary: found README and go.mod",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("subagent flushed transcript missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestAppProgramStructuredSubagentErrorKeepsTail(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:    "delegate-1",
+		Name:  "run_subagent",
+		Input: json.RawMessage(`{"agent":"worker","prompt":"run the failing verification"}`),
+	}})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		ToolUseID: "delegate-1",
+		Name:      "run_subagent",
+		IsError:   true,
+		Content: strings.Join([]string{
+			`subagent "worker" failed: verification failed`,
+			"exit status 1",
+			"missing generated file",
+		}, "\n"),
+		Metadata: map[string]any{
+			"agent": "worker",
+		},
+	}})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"• Subagent(worker) run the failing verification",
+		"  └ failed",
+		"  └ error tail:",
+		"    verification failed",
+		"    exit status 1",
+		"    missing generated file",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("subagent error transcript missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `subagent "worker" failed:`) {
+		t.Fatalf("subagent error transcript kept redundant wrapper prefix:\n%s", got)
+	}
+}
+
 func TestAppProgramStructuredUnterminatedCommandFlushesAtLocalBoundary(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}

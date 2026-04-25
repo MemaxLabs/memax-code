@@ -10,6 +10,7 @@ import (
 )
 
 const maxAppCommandGroupChildren = 6
+const metadataSubagentChildSessionID = "child_session_id"
 
 type appTranscriptFormatter struct {
 	transcript             appTranscriptTail
@@ -17,6 +18,8 @@ type appTranscriptFormatter struct {
 	pending                []string
 	pendingToolsByID       map[string]*model.ToolUse
 	pendingToolsByName     map[string][]*model.ToolUse
+	pendingToolGroups      map[string]*appProgramToolGroup
+	pendingToolOrder       []string
 	pendingCommands        map[string]*appProgramCommandGroup
 	pendingCommandOrder    []string
 	pendingCommandID       map[string]string
@@ -138,6 +141,10 @@ func (f *appTranscriptFormatter) appendToolUse(toolUse *model.ToolUse) {
 	if alreadyRendered {
 		return
 	}
+	if f.toolUseUsesLiveGroup(toolUse.Name) {
+		f.pendingToolGroup(f.toolUseKey(toolUse), appToolUseDisplay(toolUse))
+		return
+	}
 	f.printUnprintedCommandGroups()
 	display := appToolUseDisplay(toolUse)
 	f.appendToolBlock(f.toolUseKey(toolUse), appProgramToolStyle.Render("• "+display))
@@ -150,17 +157,19 @@ func (f *appTranscriptFormatter) appendToolResult(result *model.ToolResult) {
 	}
 	f.printUnprintedCommandGroups()
 	toolUse := f.takePendingTool(result.ToolUseID, result.Name)
+	if f.appendLiveToolResult(toolUse, result) {
+		return
+	}
 	rendered, renderedKey, renderedDisplay := f.consumeRenderedToolUse(toolUse, result.ToolUseID)
 	name := appToolDisplayName(result.Name)
 	if result.IsError {
-		lines := make([]string, 0, 2)
+		lines := make([]string, 0, 4)
 		if !rendered && toolUse == nil {
 			lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplayOrName(nil, name)))
 		} else if !rendered {
 			lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplay(toolUse)))
 		}
-		lines = append(lines, appProgramErrorStyle.Render("  └ error"))
-		lines = append(lines, appActivityTailLines("error", appProgramErrorStyle, result.Content)...)
+		lines = append(lines, appToolResultStatusLines(toolUse, result)...)
 		if rendered {
 			f.appendToolResultLines(renderedKey, renderedDisplay, true, lines...)
 		} else {
@@ -185,16 +194,13 @@ func (f *appTranscriptFormatter) appendToolResult(result *model.ToolResult) {
 		}
 		return
 	}
-	lines := make([]string, 0, 2)
+	lines := make([]string, 0, 4)
 	if !rendered && toolUse == nil {
 		lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplayOrName(nil, name)))
 	} else if !rendered {
 		lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplay(toolUse)))
 	}
-	lines = append(lines, appProgramDimStyle.Render("  └ ok"))
-	if appToolShowsResultTail(result.Name) {
-		lines = append(lines, appActivityTailLines("output", appProgramDimStyle, result.Content)...)
-	}
+	lines = append(lines, appToolResultStatusLines(toolUse, result)...)
 	if rendered {
 		f.appendToolResultLines(renderedKey, renderedDisplay, false, lines...)
 	} else {
@@ -550,6 +556,155 @@ func appToolResultHasCommandLifecycleMetadata(result *model.ToolResult) bool {
 	return false
 }
 
+func appToolResultStatusLines(toolUse *model.ToolUse, result *model.ToolResult) []string {
+	if result == nil {
+		return nil
+	}
+	if result.Name == "run_subagent" {
+		return appSubagentResultStatusLines(toolUse, result)
+	}
+	if result.IsError {
+		lines := []string{appProgramErrorStyle.Render("  └ error")}
+		lines = append(lines, appActivityTailLines("error", appProgramErrorStyle, result.Content)...)
+		return lines
+	}
+	lines := []string{appProgramDimStyle.Render("  └ ok")}
+	if appToolShowsResultTail(result.Name) {
+		lines = append(lines, appActivityTailLines("output", appProgramDimStyle, result.Content)...)
+	}
+	return lines
+}
+
+func appSubagentResultStatusLines(toolUse *model.ToolUse, result *model.ToolResult) []string {
+	status := "done"
+	style := appProgramSuccessStyle
+	if result.IsError {
+		status = "failed"
+		style = appProgramErrorStyle
+	}
+	lines := []string{style.Render("  └ " + status)}
+	if childSessionID := appToolMetadataString(result.Metadata, metadataSubagentChildSessionID); childSessionID != "" {
+		lines = append(lines, appProgramDimStyle.Render(appActivityChildLine("child "+appShortDisplayID(childSessionID))))
+	}
+	taskID := appToolMetadataString(result.Metadata, model.MetadataTaskID)
+	taskStatus := appToolMetadataString(result.Metadata, model.MetadataTaskStatus)
+	switch {
+	case taskID != "" && taskStatus != "":
+		lines = append(lines, appProgramDimStyle.Render(appActivityChildLine("task "+taskID+" "+taskStatus)))
+	case taskID != "":
+		lines = append(lines, appProgramDimStyle.Render(appActivityChildLine("task "+taskID)))
+	}
+	if progressErr := appToolMetadataString(result.Metadata, model.MetadataTaskProgressError); progressErr != "" {
+		lines = append(lines, appProgramErrorStyle.Render(appActivityChildLine("progress update failed: "+appInlineSnippet(progressErr, 96))))
+	}
+	if result.IsError {
+		lines = append(lines, appSubagentErrorTailLines(toolUse, result)...)
+		return lines
+	}
+	if summary := appSubagentResultSummary(toolUse, result); summary != "" {
+		lines = append(lines, appProgramDimStyle.Render(appActivityChildLine("summary: "+summary)))
+	}
+	return lines
+}
+
+func appSubagentErrorTailLines(toolUse *model.ToolUse, result *model.ToolResult) []string {
+	content := appSubagentResultContent(toolUse, result)
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+	return appActivityTailLines("error", appProgramErrorStyle, content)
+}
+
+func appSubagentResultSummary(toolUse *model.ToolUse, result *model.ToolResult) string {
+	for _, line := range strings.Split(appSubagentResultContent(toolUse, result), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "```") {
+			continue
+		}
+		return appInlineSnippet(line, 120)
+	}
+	return ""
+}
+
+func appSubagentResultContent(toolUse *model.ToolUse, result *model.ToolResult) string {
+	if result == nil {
+		return ""
+	}
+	content := strings.TrimSpace(result.Content)
+	if content == "" {
+		return ""
+	}
+	prefixes := appSubagentResultPrefixes(toolUse, result)
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		for _, prefix := range prefixes {
+			if next, ok := strings.CutPrefix(line, prefix+" result:"); ok {
+				lines[i] = strings.TrimSpace(next)
+				return strings.TrimSpace(strings.Join(lines[i:], "\n"))
+			}
+			if next, ok := strings.CutPrefix(line, prefix+" failed:"); ok {
+				lines[i] = strings.TrimSpace(next)
+				return strings.TrimSpace(strings.Join(lines[i:], "\n"))
+			}
+		}
+	}
+	return content
+}
+
+func appSubagentResultPrefixes(toolUse *model.ToolUse, result *model.ToolResult) []string {
+	seen := make(map[string]bool)
+	var prefixes []string
+	add := func(agent string) {
+		agent = strings.TrimSpace(agent)
+		if agent == "" {
+			return
+		}
+		prefix := `subagent "` + agent + `"`
+		if seen[prefix] {
+			return
+		}
+		seen[prefix] = true
+		prefixes = append(prefixes, prefix)
+	}
+	if subagent, ok := appToolUseSubagentInput(toolUse); ok {
+		add(subagent.Agent)
+	}
+	if result != nil {
+		add(appToolMetadataString(result.Metadata, "agent"))
+	}
+	return prefixes
+}
+
+func appToolMetadataString(metadata map[string]any, key string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	value, ok := metadata[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case fmt.Stringer:
+		return strings.TrimSpace(typed.String())
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
+}
+
+func appShortDisplayID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 16 {
+		return id
+	}
+	return id[:8] + "..." + id[len(id)-4:]
+}
+
 func appToolUseDefersToCommandLifecycle(name string) bool {
 	return appToolResultIsRedundant(name)
 }
@@ -708,6 +863,7 @@ func (g *appProgramCommandGroup) appendChild(child string) {
 
 func (f *appTranscriptFormatter) flushPendingCommandGroups() {
 	if len(f.pendingCommands) == 0 {
+		f.flushPendingToolGroups()
 		return
 	}
 	for _, key := range append([]string(nil), f.pendingCommandOrder...) {
@@ -724,6 +880,7 @@ func (f *appTranscriptFormatter) flushPendingCommandGroups() {
 	}
 	f.pendingCommandFallback = nil
 	f.pendingCommandID = nil
+	f.flushPendingToolGroups()
 }
 
 func (f *appTranscriptFormatter) flushUnprintedCommandGroups() {
@@ -778,25 +935,166 @@ func (f *appTranscriptFormatter) appendPrintedCommandChild(key string, group *ap
 	f.appendCommandActivityGroup(key, child)
 }
 
-func (f *appTranscriptFormatter) activeCommandLines() []string {
-	if !f.liveCommandGroups || len(f.pendingCommands) == 0 {
+func (f *appTranscriptFormatter) activeActivityLines() []string {
+	if !f.liveCommandGroups {
 		return nil
 	}
-	// Live command groups are intentionally mutable UI state. Their finalized
-	// transcript block is committed on command finish, so scrollback stays
-	// grouped even when unrelated assistant/tool rows arrived while it ran.
+	// Live activity groups are intentionally mutable UI state. Their finalized
+	// transcript block is committed on finish, so scrollback stays grouped even
+	// when unrelated assistant/tool rows arrived while it ran.
 	var lines []string
-	for _, key := range f.pendingCommandOrder {
-		group := f.pendingCommands[key]
-		if group == nil || group.printed {
-			continue
+	if len(f.pendingCommands) > 0 {
+		for _, key := range f.pendingCommandOrder {
+			group := f.pendingCommands[key]
+			if group == nil || group.printed {
+				continue
+			}
+			if len(lines) > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, group.render()...)
 		}
-		if len(lines) > 0 {
-			lines = append(lines, "")
+	}
+	if len(f.pendingToolGroups) > 0 {
+		for _, key := range f.pendingToolOrder {
+			group := f.pendingToolGroups[key]
+			if group == nil {
+				continue
+			}
+			if len(lines) > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, group.render()...)
 		}
-		lines = append(lines, group.render()...)
 	}
 	return lines
+}
+
+func (f *appTranscriptFormatter) toolUseUsesLiveGroup(name string) bool {
+	return f.liveCommandGroups && name == "run_subagent"
+}
+
+func (f *appTranscriptFormatter) pendingToolGroup(key string, display string) *appProgramToolGroup {
+	if strings.TrimSpace(key) == "" {
+		return nil
+	}
+	if f.pendingToolGroups == nil {
+		f.pendingToolGroups = make(map[string]*appProgramToolGroup)
+	}
+	group := f.pendingToolGroups[key]
+	if group == nil {
+		group = &appProgramToolGroup{display: display}
+		f.pendingToolGroups[key] = group
+		f.pendingToolOrder = append(f.pendingToolOrder, key)
+		return group
+	}
+	if strings.TrimSpace(display) != "" {
+		group.display = display
+	}
+	return group
+}
+
+func (f *appTranscriptFormatter) appendLiveToolResult(toolUse *model.ToolUse, result *model.ToolResult) bool {
+	key := f.toolResultKey(toolUse, result.ToolUseID)
+	if key == "" || len(f.pendingToolGroups) == 0 {
+		return false
+	}
+	group := f.pendingToolGroups[key]
+	if group == nil {
+		return false
+	}
+	group.appendChildren(appToolResultStatusLines(toolUse, result)...)
+	f.appendToolBlock(key, group.render()...)
+	f.deletePendingToolGroup(key)
+	return true
+}
+
+func (f *appTranscriptFormatter) flushPendingToolGroups() {
+	if len(f.pendingToolGroups) == 0 {
+		return
+	}
+	for _, key := range append([]string(nil), f.pendingToolOrder...) {
+		group := f.pendingToolGroups[key]
+		if group == nil {
+			continue
+		}
+		f.appendToolBlock(key, group.render()...)
+		f.markToolGroupRendered(key, group.display)
+		f.deletePendingToolGroup(key)
+	}
+}
+
+func (f *appTranscriptFormatter) markToolGroupRendered(key string, display string) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return
+	}
+	if f.renderedToolKeys == nil {
+		f.renderedToolKeys = make(map[string]bool)
+	}
+	if f.renderedToolDisplays == nil {
+		f.renderedToolDisplays = make(map[string]string)
+	}
+	f.renderedToolKeys[key] = true
+	f.renderedToolDisplays[key] = strings.TrimSpace(display)
+}
+
+func (f *appTranscriptFormatter) deletePendingToolGroup(key string) {
+	delete(f.pendingToolGroups, key)
+	if len(f.pendingToolOrder) == 0 {
+		return
+	}
+	next := f.pendingToolOrder[:0]
+	for _, candidate := range f.pendingToolOrder {
+		if candidate != key {
+			next = append(next, candidate)
+		}
+	}
+	f.pendingToolOrder = next
+	if len(f.pendingToolOrder) == 0 {
+		f.pendingToolGroups = nil
+	}
+}
+
+func (f *appTranscriptFormatter) toolResultKey(toolUse *model.ToolUse, resultID string) string {
+	if toolUse != nil {
+		return f.toolUseKey(toolUse)
+	}
+	resultID = strings.TrimSpace(resultID)
+	if resultID == "" {
+		return ""
+	}
+	return "tool:id:" + resultID
+}
+
+type appProgramToolGroup struct {
+	display  string
+	children []string
+}
+
+func (g *appProgramToolGroup) render() []string {
+	if g == nil {
+		return nil
+	}
+	display := strings.TrimSpace(g.display)
+	if display == "" {
+		display = "tool"
+	}
+	lines := []string{appProgramToolStyle.Render("• " + display)}
+	lines = append(lines, g.children...)
+	return lines
+}
+
+func (g *appProgramToolGroup) appendChildren(children ...string) {
+	if g == nil {
+		return
+	}
+	for _, child := range children {
+		if strings.TrimSpace(child) == "" {
+			continue
+		}
+		g.children = append(g.children, child)
+	}
 }
 
 func (f *appTranscriptFormatter) markCommandGroupRendered(group *appProgramCommandGroup) {

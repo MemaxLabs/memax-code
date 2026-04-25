@@ -509,7 +509,9 @@ const cliToolContractGuidance = `CLI tool contract:
 
 const cliSubagentGuidance = `Subagent delegation:
 - Use run_subagent for bounded parallel work when a task can be handed to an explorer, reviewer, or worker with a clear prompt.
-- Use explorer for read-only investigation, reviewer for code-review risk checks, and worker for isolated implementation tasks that can safely run under normal coding policy gates.
+- Use explorer only for read-only repository inspection. It cannot run shell commands, wait, curl, use network tools, or edit files.
+- Use reviewer for code-review risk checks and configured verification evidence.
+- Use worker for isolated implementation, shell commands, network checks through shell, waiting, and verification that must run under normal coding policy gates.
 - Keep subagent prompts scoped. Include the files, question, expected evidence, stop condition, and task_id when delegating a tracked task.
 - Prefer parallel explorer or reviewer calls for read-only work. Avoid running multiple worker subagents against the same files or commands unless the work is clearly disjoint.
 - Do not delegate urgent work whose result you need before your next immediate step; do that work yourself.

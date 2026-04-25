@@ -264,9 +264,10 @@ func TestBuildStackRegistersCLIManagedSubagents(t *testing.T) {
 	for _, want := range []string{
 		"Subagent delegation:",
 		"Use run_subagent for bounded parallel work",
-		"Use explorer for read-only investigation",
+		"Use explorer only for read-only repository inspection",
+		"It cannot run shell commands",
 		"reviewer for code-review risk checks",
-		"worker for isolated implementation tasks",
+		"Use worker for isolated implementation, shell commands, network checks through shell",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("AppendSystemPrompt missing %q:\n%s", want, prompt)
@@ -392,11 +393,11 @@ func TestAppToolUseDisplaySubagentProfile(t *testing.T) {
 		Name:  subagents.ToolName,
 		Input: json.RawMessage(`{"agent":"reviewer","prompt":"review the diff"}`),
 	})
-	if got != "Subagent(reviewer)" {
-		t.Fatalf("appToolUseDisplay() = %q, want Subagent(reviewer)", got)
+	if got != "Subagent(reviewer) review the diff" {
+		t.Fatalf("appToolUseDisplay() = %q, want Subagent(reviewer) review the diff", got)
 	}
-	if !appToolShowsResultTail(subagents.ToolName) {
-		t.Fatalf("subagent results should render a compact result tail")
+	if appToolShowsResultTail(subagents.ToolName) {
+		t.Fatalf("subagent results should use compact lifecycle summaries, not raw tails")
 	}
 }
 

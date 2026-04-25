@@ -453,7 +453,7 @@ func (m *appProgramModel) View() string {
 	}
 
 	rows := make([]string, 0, 6)
-	if active := m.activeCommandActivityView(); active != "" {
+	if active := m.activeRuntimeActivityView(); active != "" {
 		rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 		rows = append(rows, active)
 	}
@@ -492,8 +492,8 @@ func (m *appProgramModel) activityStatusView() string {
 	return ""
 }
 
-func (m *appProgramModel) activeCommandActivityView() string {
-	lines := m.activeCommandLines()
+func (m *appProgramModel) activeRuntimeActivityView() string {
+	lines := m.activeActivityLines()
 	if len(lines) == 0 {
 		return ""
 	}
@@ -1144,8 +1144,12 @@ func appToolUseDisplay(toolUse *model.ToolUse) string {
 	if command := appToolUseCommand(toolUse); command != "" {
 		return name + "(" + command + ")"
 	}
-	if agent := appToolUseSubagent(toolUse); agent != "" {
-		return name + "(" + agent + ")"
+	if subagent, ok := appToolUseSubagentInput(toolUse); ok {
+		display := name + "(" + subagent.Agent + ")"
+		if prompt := appInlineSnippet(subagent.Prompt, 56); prompt != "" {
+			display += " " + prompt
+		}
+		return display
 	}
 	return name + " call"
 }
@@ -1169,25 +1173,52 @@ func appToolUseCommand(toolUse *model.ToolUse) string {
 }
 
 func appToolUseSubagent(toolUse *model.ToolUse) string {
+	input, ok := appToolUseSubagentInput(toolUse)
+	if !ok {
+		return ""
+	}
+	return input.Agent
+}
+
+type appSubagentToolInput struct {
+	Agent  string `json:"agent"`
+	Prompt string `json:"prompt"`
+}
+
+func appToolUseSubagentInput(toolUse *model.ToolUse) (appSubagentToolInput, bool) {
 	if toolUse == nil || toolUse.Name != "run_subagent" {
-		return ""
+		return appSubagentToolInput{}, false
 	}
-	var input struct {
-		Agent string `json:"agent"`
-	}
+	var input appSubagentToolInput
 	if err := json.Unmarshal(toolUse.Input, &input); err != nil {
-		return ""
+		return appSubagentToolInput{}, false
 	}
-	return strings.TrimSpace(input.Agent)
+	input.Agent = strings.TrimSpace(input.Agent)
+	input.Prompt = strings.TrimSpace(input.Prompt)
+	if input.Agent == "" {
+		return appSubagentToolInput{}, false
+	}
+	return input, true
 }
 
 func appToolShowsResultTail(name string) bool {
 	switch name {
-	case "read_command_output", "wait_command_output", "write_command_input", "run_subagent":
+	case "read_command_output", "wait_command_output", "write_command_input":
 		return true
 	default:
 		return false
 	}
+}
+
+func appInlineSnippet(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	if limit <= 3 {
+		return text[:limit]
+	}
+	return strings.TrimSpace(text[:limit-3]) + "..."
 }
 
 func appToolResultIsRedundant(name string) bool {
