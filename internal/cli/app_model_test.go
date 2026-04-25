@@ -2546,6 +2546,30 @@ func TestAppProgramFitPrintedLinesWrapsBeforeTerminalEdge(t *testing.T) {
 	}
 }
 
+func TestAppProgramFitPrintedLinesPreservesANSIStyledText(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(previousProfile)
+
+	styled := appProgramErrorStyle.Render(strings.Repeat("x", 18))
+	lines := appProgramFitPrintedLines([]string{styled}, 8)
+	if len(lines) < 2 {
+		t.Fatalf("styled line was not wrapped: %#v", lines)
+	}
+	for _, line := range lines {
+		if got := ansi.StringWidth(line); got > 8 {
+			t.Fatalf("styled printed line width = %d, want <= 8: %#v", got, lines)
+		}
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "\x1b[") {
+		t.Fatalf("styled wrapping stripped ANSI escapes: %q", joined)
+	}
+	if got, want := strings.ReplaceAll(ansi.Strip(joined), "\n", ""), strings.Repeat("x", 18); got != want {
+		t.Fatalf("styled wrapping changed visible text = %q, want %q", got, want)
+	}
+}
+
 func TestAppProgramBottomStatusDimsMetadata(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.ANSI256)
