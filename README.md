@@ -1,65 +1,90 @@
-# Memax Code
+<br>
 
-Memax Code is the coding-agent CLI built on top of the Memax Go Agent SDK.
+<p align="center">
+  <a href="https://github.com/MemaxLabs/memax-code">
+    <img src="https://memax.app/images/memax-wordmark.svg" alt="Memax" width="320" />
+  </a>
+</p>
 
-This repository is intentionally separate from the SDK. The SDK owns the
-provider-neutral runtime and host-owned tool contracts; this CLI owns the
-developer-facing product surface: flags, workspace wiring, event rendering,
-session UX, and policy defaults.
+<h1 align="center">Memax Code</h1>
 
-## Status
+<p align="center">
+  A coding-agent CLI built on top of the Memax Go Agent SDK.
+</p>
 
-Foundation. The first slice provides a runnable non-interactive CLI with:
+<p align="center">
+  <a href="https://github.com/MemaxLabs/memax-go-agent-sdk">View the Memax Go Agent SDK</a>
+</p>
+
+<p align="center">
+  <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg"></a>
+  <img alt="Go version" src="https://img.shields.io/badge/go-1.24+-00ADD8?logo=go&logoColor=white">
+</p>
+
+## Overview
+
+Memax Code is the developer-facing CLI for the Memax coding agent stack.
+
+This repository is intentionally separate from the SDK:
+
+- the **SDK** owns the provider-neutral runtime and host-owned tool contracts
+- the **CLI** owns the product surface: flags, workspace wiring, rendering,
+  session UX, and policy defaults
+
+## Highlights
 
 - provider-neutral model profiles: `fast`, `balanced`, `deep`
 - OpenAI and Anthropic provider adapters through the SDK
-- root-confined workspace tools
-- root-confined command execution tools
-- default bounded `web_fetch` for HTTP(S) pages, with private-network
-  protection and an explicit `--no-web` opt-out
+- root-confined workspace and command tools
+- bounded `web_fetch` for HTTP(S) pages with private-network protections
 - managed command sessions for long-running processes
-- bounded subagents for parallel exploration, review, and isolated worker tasks
-- JSONL-backed conversation sessions with resume, `latest`, activity listing,
-  and transcript inspection
-- dry-run configuration inspection
-- local setup diagnostics with `memax-code doctor`
-- an interactive shell with slash commands, prompt history recall, and a
-  dedicated terminal app surface for transcript, status, and composer state
-- event-stream rendering for assistant text, tool calls, command lifecycle,
-  workspace edits, verification, usage, and final results, with `auto` plus
-  explicit compatibility modes for live status, structured text, and plain logs
-- a machine-readable event stream with `--event-stream json` for wrappers,
-  editors, and future GUI clients
+- bounded subagents for exploration, review, and isolated worker tasks
+- JSONL-backed sessions with resume, listing, and transcript inspection
+- local diagnostics with `memax-code doctor`
+- interactive terminal shell with slash commands and prompt history recall
+- multiple renderers: `app`, `live`, `tui`, `plain`, and machine-readable JSON
 
-The CLI now has the first real terminal UI foundation: `auto` chooses app mode
-for interactive terminals and plain rendering for logs, tests, and pipes.
-`--ui app` is still available when you want to be explicit, but it is now the
-default human-facing terminal surface. The interactive app shell is an inline
-Bubble Tea program that prints transcript rows into normal terminal scrollback
-and keeps only the status strip, thinking indicator, and composer interactive at
-the bottom. It starts with a one-line composer, grows for multiline prompts, and
-compacts successful tool output while preserving error tails.
-`--ui live`, `--ui tui`, and `--ui plain` remain available for wrappers,
-debugging, and log-oriented workflows.
-The interactive shell keeps `/help`, `/session`, `/pick`, `/sessions`,
-`/resume`, `/draft`, `/append`, `/show-draft`, `/submit`, `/cancel`,
-`/history`, `/recall`, `/new`, and `/quit`. Submitted prompts are stored as
-text-only JSONL history, separate from session transcripts, so recall works
-across interactive shell restarts. The app shell is still Foundation quality:
-it now has the right single-surface program structure, but the richer coding
-agent timeline, approvals queue, and deeper composer behavior are still follow-on
-product slices.
+## Current status
 
-## Usage
+**Foundation**.
+
+The CLI is already usable for real workflows, with a solid interactive shell,
+session persistence, structured tool rendering, verification hooks, and a first
+terminal app surface. Richer timeline UX, approvals flow, and deeper composer
+behavior are follow-on slices.
+
+## Screenshot
+
+<p align="center">
+  <img src=".github/SCREENSHOT.png" alt="Memax Code screenshot" width="900" />
+</p>
+
+## Installation
+
+### Build from source
+
+```sh
+go build ./cmd/memax-code
+```
+
+### Development dependency note
+
+The SDK dependency currently lives in the private `MemaxLabs` GitHub namespace.
+If you are building from source in a development environment, configure Go and
+git before dependency resolution:
+
+```sh
+gh auth setup-git
+GOPRIVATE=github.com/MemaxLabs/* go test ./...
+```
+
+## Quick start
 
 Inspect the resolved configuration without calling a model:
 
 ```sh
 memax-code --dry-run --provider openai --profile deep --model gpt-5.4 "fix the failing tests"
 ```
-
-Flags must precede the prompt because the CLI currently uses Go's standard
-flag parser, which stops parsing flags at the first positional argument.
 
 Run with OpenAI:
 
@@ -75,12 +100,33 @@ export ANTHROPIC_API_KEY=...
 memax-code --provider anthropic --model claude-sonnet-4-5 "repair the test failure"
 ```
 
+Start the interactive shell:
+
+```sh
+memax-code
+memax-code --interactive
+```
+
+Check local setup:
+
+```sh
+memax-code doctor
+memax-code doctor --config .memax-code/config.json --cwd .
+```
+
+> Flags must precede the prompt because the CLI currently uses Go's standard
+> flag parser, which stops parsing flags at the first positional argument.
+
+## Configuration
+
 Persist local defaults in `~/.memax-code/config.json`:
 
 ```sh
 memax-code config init --provider openai --model gpt-5.4 --ui app
 memax-code config show
 ```
+
+Example config:
 
 ```json
 {
@@ -107,77 +153,22 @@ Use a project-local config when needed:
 memax-code --config .memax-code/config.json --dry-run "inspect this repository"
 ```
 
-Configuration precedence is `flag > environment > config file > built-in
-default`. The default config file is optional; an explicitly supplied
-`--config` path must exist and decode as strict JSON.
+Configuration precedence is:
 
-The normal coding-agent toolset includes `web_fetch` for HTTP(S) URLs. The
-default fetcher is bounded, strips URL credentials before sending requests,
-follows a small number of redirects, and blocks loopback, link-local, multicast,
-unspecified, and private-network addresses. Disable it for locked-down
-workspaces with `--no-web` or config `"web": false`; tune the response cap with
-`--web-fetch-max-bytes` or config `"web_fetch_max_bytes"`. The cap is limited to
-4 MiB. Local service checks and explicit private-network diagnostics should go
-through command tools, where the user intent is visible in the shell command.
-The default fetcher does not inherit proxy environment variables such as
-`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY`; proxy-based or
-authenticated network paths should also go through explicit command tools until
-the CLI has a first-class proxy policy.
-
-Memax Code registers a built-in `run_subagent` tool. Parent agents can delegate
-bounded work to three child profiles:
-
-- `explorer`: read-only repository investigation with workspace read/list/diff
-  tools.
-- `reviewer`: read-only workspace review focused on bugs, regressions,
-  configured verification evidence, and missing tests. It may run the
-  configured verification tool.
-- `worker`: isolated implementation work with workspace edit, command,
-  verification, and task-state tools. Worker children are assembled through the
-  same coding stack policy path as the parent, so checkpoint, command,
-  approval, and verification gates still apply. Worker children use the
-  CLI-owned coding toolset, not arbitrary parent custom tools.
-
-Child runs use the same provider/model selection and session store as the
-parent, persist their own child session, and return parent/child session
-metadata in the tool result. Child profiles do not receive `run_subagent`, so
-delegation is bounded and cannot recurse accidentally. Pass `task_id` when
-delegating tracked work so subagent verification evidence can update the same
-task record. Parent event streams include the `run_subagent` tool result and
-child session metadata; wrappers can read the child session transcript for the
-full child event stream. Explorer and reviewer runs are capped at 2 minutes;
-worker runs are capped at 15 minutes.
-
-Check local setup without calling a model:
-
-```sh
-memax-code doctor
-memax-code doctor --config .memax-code/config.json --cwd .
+```text
+flag > environment > config file > built-in default
 ```
 
-`doctor` reports config loading, provider/model resolution, API-key presence,
-session storage, workspace verification mode, and required local binaries. It
-exits non-zero for usage errors, invalid config, or hard local setup failures.
+The default config file is optional. An explicitly supplied `--config` path
+must exist and decode as strict JSON.
 
-Start an interactive shell:
-
-```sh
-memax-code
-memax-code --interactive
-```
+## Interactive shell
 
 On a real terminal, running `memax-code` with no prompt opens the interactive
-shell automatically. `--interactive` remains useful when you want that behavior
-to be explicit in scripts, wrappers, or docs.
+shell automatically.
 
-`--interactive --ui app` now runs as an inline terminal program. Transcript
-rows, slash-command output, assistant text, and compact tool activity are printed
-into normal terminal scrollback. The shell redraws only the bottom status strip,
-thinking indicator, and composer instead of switching to an alternate screen
-buffer or putting the transcript in a scroll window.
-
-Inside the shell, type normal prompts to continue the current session. Slash
-commands control local session state without calling a model:
+Inside the shell, normal prompts continue the current session. Slash commands
+control local state without calling a model:
 
 ```text
 /help
@@ -198,108 +189,72 @@ commands control local session state without calling a model:
 /quit
 ```
 
-Use `//` when a normal prompt needs to start with `/`, for example
-`//etc/hosts is broken; investigate`. Inside an active draft, non-command lines
-are accumulated until `/submit`; use `/cancel` to discard the draft. Slash
-commands inside a draft must start at the beginning of the line, so indented
-paths and code snippets such as `  /etc/hosts` stay in the draft.
-Submitted prompts are remembered in `~/.memax-code/history.jsonl` by default;
-use `/history` and `/recall N` to restore one into the draft before editing
-and submitting again. Set `--history-file` when you want project-local,
-temporary, or custom prompt recall storage. Multiple interactive shells can
-append to the same JSONL file; each shell loads its recall view on startup and
-does not live-refresh entries written by other shells. On Unix-like systems,
-writes and compaction use an adjacent lock file. When the history grows past
-625 parseable prompts, it is compacted to the most recent 500. Corrupt,
-oversized, and very large new prompts are skipped for recall. Custom history
-paths create a sibling `.lock` file; ignore both files when the path is inside
-a project checkout.
-In the terminal app shell, `Enter` sends the current prompt, `Ctrl+S` also
-sends, `\` followed by `Enter` inserts a newline, and Shift/Alt+Enter insert a
-newline when the terminal reports those key sequences. Inside `/draft` mode,
-plain `Enter` keeps adding lines until `/submit`. `F1` toggles help and
-`Ctrl+C` quits. The older line-oriented shell behavior remains on the non-app
-renderers.
+Submitted prompts are stored separately from session transcripts in JSONL-backed
+history so recall works across shell restarts.
 
-Resume an earlier conversation:
+## Sessions
+
+Session transcripts are stored under `~/.memax-code/sessions` by default.
+Prompt recall history is stored separately under `~/.memax-code/history.jsonl`.
+
+Useful commands:
 
 ```sh
 memax-code --list-sessions
 memax-code --show-session latest
-memax-code --resume 0194d9a4-7b8c-7d20-9a1b-4f6c6f4f7a01
-memax-code --resume 0194d9a4-7b8c-7d20-9a1b-4f6c6f4f7a01 "continue from the last plan"
 memax-code --resume latest
 memax-code --resume latest "continue the most recent active session"
 ```
 
 When `--resume` is provided without a prompt on a real terminal, Memax Code
-reopens that session in the interactive shell instead of requiring
-`--interactive`. Non-terminal invocations still keep the normal missing-prompt
-error path.
+reopens that session in the interactive shell.
 
-Session transcripts are stored under `~/.memax-code/sessions` by default.
-Prompt recall history is stored separately under `~/.memax-code/history.jsonl`
-so transcript retention and composer recall can be governed independently. Use
-`--session-dir` and `--history-file` when you want project-local state,
-temporary test state, or a different filesystem policy:
+## Rendering and event streams
 
-```sh
-memax-code --session-dir .memax-code/sessions --list-sessions
-memax-code --history-file .memax-code/history.jsonl --interactive
-```
+Memax Code supports several renderers:
 
-Choose an alternate event renderer explicitly when needed:
+- `app`: default human-facing terminal surface
+- `live`: lighter status-line mode
+- `tui`: structured/raw sectioned output
+- `plain`: stable log-oriented output
+- `--event-stream json`: JSONL event stream for wrappers and tooling
+
+Examples:
 
 ```sh
 memax-code --ui app "repair the failing test"
 memax-code --ui live "repair the failing test"
 memax-code --ui tui "inspect the failing test"
 memax-code --ui plain "run the relevant checks" > run.log
-```
-
-For machine consumers, bypass the human renderer and stream structured events:
-
-```sh
 memax-code --event-stream json "repair the failing test"
 ```
 
-`--event-stream json` writes one JSON object per line so wrappers can parse
-incrementally while the run is still in progress. The user-facing mode name is
-`json`; the transport stays line-delimited because a single JSON document is
-not stream-friendly for long-running agent sessions.
-
 `--ui auto` is the default. It uses app mode for interactive terminals and the
-plain event stream for non-terminal writers, so CI logs and redirected output
-remain stable.
+plain renderer for non-terminal output.
 
-`--ui app` is the default terminal mode while the terminal UX continues to
-mature. When output is redirected, it falls back to the plain renderer so
-scripts never receive terminal control sequences. Both single-prompt app mode
-and the interactive app shell print compact transcript rows into normal
-terminal scrollback instead of drawing a transcript window. The interactive
-shell uses Bubble Tea only for the live bottom surface: status, thinking
-indicator, help, and composer. Single-prompt terminal runs still print a compact
-session line so the run can be resumed later. Assistant text is printed once,
-structured section labels are compacted away, successful tool results collapse
-by default, and tool errors keep a short tail for diagnosis. This is still
-Foundation terminal UX, not yet the full coding-agent timeline/composer product
-surface. Use `--ui tui` when full raw sectioned event output matters.
-`--ui live` is the lighter-weight status line mode; it reports phase, elapsed
-time, tool errors, active tool, command, approval, compact activity counts, and
-usage while preserving the sectioned transcript underneath.
-Operational events are rendered as a compact `[activity]` timeline so tool
-calls, command lifecycle, approvals, workspace edits, verification, and errors
-remain easy to scan without losing assistant text. The structured renderer ends
-with a status panel that summarizes phase, session, counts, active tools, recent
-command or patch context, approval state, usage, and errors.
+## Safety and execution model
 
-`--list-sessions` prints sessions newest activity first, including the updated
-time, created time, parent session, and the first user prompt as a short title.
-Use `--show-session SESSION_ID` or `--show-session latest` to inspect the
-readable transcript, including assistant text, tool calls, and tool results.
+### Web access
 
-Configure project-specific verification commands when the workspace is not a
-Go module, or when the default Go checks are not the right contract:
+The built-in `web_fetch` tool is bounded and intended for explicit HTTP(S)
+retrieval. It:
+
+- strips URL credentials before requests
+- follows a small number of redirects
+- blocks loopback, link-local, multicast, unspecified, and private-network
+  addresses
+- can be disabled with `--no-web` or config `"web": false`
+
+The response cap is configurable with `--web-fetch-max-bytes` and limited to
+4 MiB.
+
+### Verification
+
+Go workspaces with a root `go.mod` automatically enable built-in verification,
+including `go test ./...` and `go vet ./...`, unless custom verification
+commands are configured.
+
+Project-specific checks can be supplied with `--verify-command`:
 
 ```sh
 memax-code --verify-command 'test=npm test' \
@@ -307,93 +262,73 @@ memax-code --verify-command 'test=npm test' \
   "make the failing lint and test checks pass"
 ```
 
-`--verify-command` accepts `name=command` and can be repeated. The names are
-the checks the agent can request through `workspace_verify`, such as `test`,
-`lint`, `typecheck`, or `default`. Empty/default verification requests use
-`default` when it is configured, otherwise `test`. Commands run through the
-same root-confined command runner as normal shell tools. For scoped checks,
-include `{target}` in the configured command; the target must be one safe
-package/path token and is passed as a single shell-quoted positional argument,
-not expanded as shell syntax:
+### Command environment inheritance
 
-```sh
-memax-code --verify-command 'test=npm test -- {target}' \
-  "fix the tests for packages/api"
-```
-
-The same map can be stored in config:
-
-```json
-{
-  "verify_commands": {
-    "test": "npm test",
-    "lint": "npm run lint",
-    "typecheck": "npm run typecheck"
-  }
-}
-```
-
-In Go workspaces, custom commands extend the built-in Go verifier: if a custom
-map does not define `test` or `vet`, those names still fall back to `go test
-./...` and `go vet ./...`. In non-Go workspaces, only configured command names
-are available.
-
-By default command tools inherit the host process environment, matching normal
-developer terminal expectations for `PATH`, language managers, local toolchain
-configuration, and provider credentials. Disable inheritance when you want a
-cleaner command environment. Inherited environment variables are visible to
-model-invoked commands, so opt out when running against untrusted workspaces or
-when you want to avoid exposing local secrets to shell commands:
+By default, command tools inherit the host process environment so local
+toolchains and normal developer shell behavior work out of the box. Disable it
+when you want a cleaner or lower-trust execution environment:
 
 ```sh
 memax-code --no-inherit-command-env "run the relevant tests and fix failures"
-memax-code --inherit-command-env=false "run the relevant tests and fix failures"
 ```
 
-Configuration environment variables:
+## Subagents
 
-- `MEMAX_CODE_PROVIDER`: default provider, `openai` or `anthropic`.
-- `MEMAX_CODE_CONFIG`: path to the JSON config file.
-- `MEMAX_CODE_PROFILE`: default coding model profile.
-- `MEMAX_CODE_EFFORT`: default reasoning effort, `auto`, `low`, `medium`,
-  `high`, or `xhigh`.
-- `MEMAX_CODE_PRESET`: default coding preset.
-- `MEMAX_CODE_UI`: default renderer, `auto`, `app`, `live`, `tui`, or `plain`.
-- `MEMAX_CODE_SESSION_DIR`: default JSONL session transcript directory.
-- `MEMAX_CODE_HISTORY_FILE`: default JSONL interactive prompt history file.
-- `MEMAX_CODE_INHERIT_COMMAND_ENV`: default command environment inheritance,
-  accepting `1/0`, `t/f`, `true/false`, and case variants.
-- `MEMAX_CODE_WEB`: default web tool availability, accepting `1/0`, `t/f`,
-  `true/false`, and case variants.
-- `MEMAX_CODE_WEB_FETCH_MAX_BYTES`: maximum bytes read by the default web
-  fetcher per URL, capped at 4 MiB.
-- `MEMAX_CODE_VERIFY_COMMANDS`: JSON object mapping verification names to shell
-  commands, for example `{"test":"npm test","lint":"npm run lint"}`.
-- `OPENAI_API_KEY`: OpenAI API key.
-- `OPENAI_MODEL`: default OpenAI model when `--model` is omitted.
-- `ANTHROPIC_API_KEY`: Anthropic API key.
-- `ANTHROPIC_MODEL`: default Anthropic model when `--model` is omitted.
+Memax Code registers a built-in `run_subagent` tool with three bounded child
+profiles:
+
+- `explorer`: read-only repository investigation
+- `reviewer`: read-only bug/regression review with verification evidence
+- `worker`: isolated implementation work with edit, command, and verification
+  tools
+
+Child runs use the same provider/model selection and session store as the
+parent, but do not receive `run_subagent`, so delegation stays bounded and does
+not recurse accidentally.
+
+## Repository layout
+
+```text
+cmd/memax-code/    CLI entrypoint
+internal/cli/      CLI runtime, rendering, config, shell, and tool plumbing
+```
+
+## Development
+
+Run tests:
+
+```sh
+GOPRIVATE=github.com/MemaxLabs/* go test ./...
+```
+
+Run the CLI locally:
+
+```sh
+GOPRIVATE=github.com/MemaxLabs/* go run ./cmd/memax-code --dry-run "summarize this repository"
+```
+
+## Environment variables
+
+- `MEMAX_CODE_PROVIDER`
+- `MEMAX_CODE_CONFIG`
+- `MEMAX_CODE_PROFILE`
+- `MEMAX_CODE_EFFORT`
+- `MEMAX_CODE_PRESET`
+- `MEMAX_CODE_UI`
+- `MEMAX_CODE_SESSION_DIR`
+- `MEMAX_CODE_HISTORY_FILE`
+- `MEMAX_CODE_INHERIT_COMMAND_ENV`
+- `MEMAX_CODE_WEB`
+- `MEMAX_CODE_WEB_FETCH_MAX_BYTES`
+- `MEMAX_CODE_VERIFY_COMMANDS`
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`
+- `ANTHROPIC_API_KEY`
+- `ANTHROPIC_MODEL`
 
 Relative paths in flags, environment variables, and config files resolve
 against the process working directory at startup.
 
-Verification is enabled automatically for Go workspaces with a root `go.mod`
-and runs `go test ./...` or `go vet ./...` through the SDK verifier tool unless
-custom verification commands are configured. Non-Go workspaces disable required
-verification unless `--verify-command`, config `verify_commands`, or
-`MEMAX_CODE_VERIFY_COMMANDS` supplies host-owned checks.
+## License
 
-## Development
-
-The SDK dependency currently lives in the private `MemaxLabs` GitHub
-namespace. Configure Go and git before dependency resolution:
-
-```sh
-gh auth setup-git
-GOPRIVATE=github.com/MemaxLabs/* go test ./...
-```
-
-```sh
-GOPRIVATE=github.com/MemaxLabs/* go test ./...
-GOPRIVATE=github.com/MemaxLabs/* go run ./cmd/memax-code --dry-run "summarize this repository"
-```
+This project is licensed under the **Apache License 2.0**. See [LICENSE](./LICENSE).
