@@ -2029,7 +2029,7 @@ func runInteractiveAppWithEvents(ctx context.Context, stdin io.Reader, stdout io
 	model := newAppProgramModelWithEvents(ctx, opts, runPrompt, runEvents)
 	if lines := model.drainPendingPrints(); len(lines) > 0 {
 		if terminal, width, _ := terminalWriterInfo(stdout); terminal && width > 0 {
-			lines = appProgramFitPrintedLines(lines, appProgramLiveRegionWidth(width))
+			lines = appProgramFitPrintedLines(lines, width)
 		}
 		fmt.Fprintln(stdout, strings.Join(lines, "\n"))
 	}
