@@ -540,8 +540,8 @@ func (m *appProgramModel) View() string {
 	}
 
 	rows := make([]string, 0, 8)
-	active := m.activeRuntimeActivityView()
-	activity := m.activityStatusView()
+	active := m.activeRuntimeActivityView(width)
+	activity := m.activityStatusView(width)
 	if active != "" {
 		rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 		rows = append(rows, active)
@@ -559,9 +559,9 @@ func (m *appProgramModel) View() string {
 	}
 	rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 	rows = append(rows, m.composerView(width))
-	rows = append(rows, m.bottomStatusView())
+	rows = append(rows, m.bottomStatusView(width))
 	if m.showHelp {
-		rows = append(rows, m.helpView())
+		rows = append(rows, m.helpView(width))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
@@ -573,7 +573,8 @@ func appendAppProgramBlankRows(rows []string, count int) []string {
 	return rows
 }
 
-func (m *appProgramModel) activityStatusView() string {
+func (m *appProgramModel) activityStatusView(width int) string {
+	var line string
 	if m.running {
 		label := "thinking"
 		if m.canceling {
@@ -581,12 +582,15 @@ func (m *appProgramModel) activityStatusView() string {
 		}
 		frame := liveStatusFrames[m.spinner%len(liveStatusFrames)]
 		if elapsed := m.turnElapsed(); elapsed != "" {
-			return appProgramAccentStyle.Render(frame+" "+label) + appProgramDimStyle.Render(" · "+elapsed)
+			line = appProgramAccentStyle.Render(frame+" "+label) + appProgramDimStyle.Render(" · "+elapsed)
+		} else {
+			line = appProgramAccentStyle.Render(frame + " " + label)
 		}
-		return appProgramAccentStyle.Render(frame + " " + label)
+		return appProgramFitLine(line, width)
 	}
 	if m.lastError != "" {
-		return appProgramErrorStyle.Render("! " + m.lastError)
+		line = appProgramErrorStyle.Render("! " + m.lastError)
+		return appProgramFitLine(line, width)
 	}
 	return ""
 }
@@ -602,29 +606,49 @@ func (m *appProgramModel) turnElapsed() string {
 	return "running " + elapsed.String()
 }
 
-func (m *appProgramModel) activeRuntimeActivityView() string {
+func (m *appProgramModel) activeRuntimeActivityView(width int) string {
 	lines := m.activeActivityLines()
 	if len(lines) == 0 {
 		return ""
 	}
+	for i, line := range lines {
+		lines[i] = appProgramFitLine(line, width)
+	}
 	return strings.Join(lines, "\n")
 }
 
-func (m *appProgramModel) bottomStatusView() string {
-	parts := []string{
+func (m *appProgramModel) bottomStatusView(width int) string {
+	primary := []string{
 		appProgramBrandStyle.Render("Memax Code"),
 		m.phaseLabel(),
+	}
+	contextParts := []string{
 		appProgramStatusPart("session", nonEmptyOr(shortSessionID(m.sessionID), "none")),
 		appProgramStatusPart("workspace", filepath.Base(m.opts.CWD)),
 	}
 	if m.opts.Model != "" {
-		parts = append(parts, appProgramStatusMetaStyle.Render(m.opts.Model))
+		contextParts = append(contextParts, appProgramStatusMetaStyle.Render(m.opts.Model))
 	}
 	if m.opts.Effort != "" && m.opts.Effort != "auto" {
-		parts = append(parts, appProgramStatusPart("effort", m.opts.Effort))
+		contextParts = append(contextParts, appProgramStatusPart("effort", m.opts.Effort))
 	}
-	parts = append(parts, appProgramStatusPart("input", m.composer.statusLine()))
-	parts = append(parts, appProgramStatusMetaStyle.Render("F1 help"))
+	secondary := []string{
+		appProgramStatusPart("input", m.composer.statusLine()),
+		appProgramStatusMetaStyle.Render("F1 help"),
+	}
+	parts := append(append([]string{}, primary...), contextParts...)
+	parts = append(parts, secondary...)
+	line := appProgramStatusLine(parts)
+	for width > 0 && lipgloss.Width(line) > width && len(contextParts) > 0 {
+		contextParts = contextParts[:len(contextParts)-1]
+		parts = append(append([]string{}, primary...), contextParts...)
+		parts = append(parts, secondary...)
+		line = appProgramStatusLine(parts)
+	}
+	return appProgramFitLine(line, width)
+}
+
+func appProgramStatusLine(parts []string) string {
 	return lipgloss.NewStyle().PaddingLeft(appProgramStatusInset).Render(strings.Join(parts, appProgramDimStyle.Render("  ·  ")))
 }
 
@@ -645,8 +669,8 @@ func (m *appProgramModel) phaseLabel() string {
 	return appProgramSuccessStyle.Render(m.statusLine)
 }
 
-func (m *appProgramModel) helpView() string {
-	return appProgramMutedStyle.Render("/help /status /session /pick /show /sessions /resume /new /draft /submit /cancel /quit")
+func (m *appProgramModel) helpView(width int) string {
+	return appProgramFitLine(appProgramMutedStyle.Render("/help /status /session /pick /show /sessions /resume /new /draft /submit /cancel /quit"), width)
 }
 
 func (m *appProgramModel) composerView(width int) string {
@@ -679,6 +703,13 @@ func appProgramComposerContentWidth(width int) int {
 		return 1
 	}
 	return width - 2
+}
+
+func appProgramFitLine(line string, width int) string {
+	if width <= 0 {
+		return line
+	}
+	return truncateStatusLine(line, width)
 }
 
 func compactAppProgramTranscriptText(text string) string {

@@ -694,6 +694,7 @@ func TestAppProgramStructuredSequentialIdenticalRunCommandsWithoutStartedUseSepa
 func TestAppProgramStructuredParallelRunCommandsRenderLiveThenFinalizeGrouped(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
+	m.width = 200
 
 	commands := []string{
 		`bash -lc 's=$((RANDOM % 9 + 2)); echo "agent1_sleep=${s}s"; sleep "$s"; curl -sS -i https://api.memax.app/health'`,
@@ -2519,7 +2520,7 @@ func TestAppProgramBottomStatusDimsMetadata(t *testing.T) {
 	defer lipgloss.SetColorProfile(previousProfile)
 
 	model := newAppProgramModel(context.Background(), options{CWD: ".", Model: "gpt-5.4"}, nil)
-	raw := model.bottomStatusView()
+	raw := model.bottomStatusView(140)
 	if !strings.Contains(raw, "\x1b[2;") && !strings.Contains(raw, "\x1b[2m") {
 		t.Fatalf("bottom status metadata did not use faint styling:\n%q", raw)
 	}
@@ -2531,6 +2532,39 @@ func TestAppProgramBottomStatusDimsMetadata(t *testing.T) {
 		if !strings.Contains(stripped, want) {
 			t.Fatalf("bottom status missing %q:\n%s", want, stripped)
 		}
+	}
+}
+
+func TestAppProgramViewFitsAfterTerminalResize(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{
+		CWD:    "/very/long/workspace/name/that/should/not/break/layout",
+		Model:  "openai/gpt-5.5-pro-with-a-long-gateway-name",
+		Effort: "extraordinarily-deep",
+	}, nil)
+	model.showHelp = true
+	model.running = true
+	model.turnStartedAt = time.Now().Add(-2*time.Minute - 5*time.Second)
+	model.lastActivityToolKey = "tool"
+	model.pendingToolGroups = map[string]*appProgramToolGroup{
+		"tool": {
+			name:    "web_fetch",
+			display: "Web fetch(https://example.com/some/really/long/path/that/should/not-overflow-the-terminal)",
+			children: []string{
+				appProgramDimStyle.Render("  └ title: " + strings.Repeat("wide status ", 12)),
+			},
+		},
+	}
+
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 48, Height: 18})
+	model = updated.(*appProgramModel)
+	view := model.View()
+	for _, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(line); got > 48 {
+			t.Fatalf("view line width = %d, want <= 48:\n%s\nfull view:\n%s", got, line, view)
+		}
+	}
+	if model.width != 48 || model.height != 18 {
+		t.Fatalf("model size = %dx%d, want 48x18", model.width, model.height)
 	}
 }
 
