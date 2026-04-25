@@ -450,6 +450,30 @@ func TestAppProgramStructuredCommandToolDoesNotDuplicateHeader(t *testing.T) {
 	}
 }
 
+func TestAppProgramStructuredTailToolDoesNotDuplicateSingleLineSummary(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		Name:    "wait_command_output",
+		Content: "build succeeded in 12s",
+	}})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"• Wait for command output",
+		"  └ ok",
+		"  └ output: build succeeded in 12s",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("tail tool transcript missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "ok: build succeeded") {
+		t.Fatalf("tail tool duplicated output in success summary:\n%s", got)
+	}
+}
+
 func TestAppProgramStructuredRunCommandRendersBeforeResult(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
@@ -516,6 +540,31 @@ func TestAppProgramStructuredCommandResultSummarizesRuntime(t *testing.T) {
 	want := "• Bash(go test ./...)\n  └ done exit=0 duration=1.2s stdout=2.0KB stderr=12B truncated=true"
 	if !strings.Contains(got, want) {
 		t.Fatalf("command result summary missing:\nwant %q\n%s", want, got)
+	}
+}
+
+func TestAppProgramStructuredCommandResultSummarizesFailure(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:    "tool-run-1",
+		Name:  "run_command",
+		Input: json.RawMessage(`{"command":"go test ./..."}`),
+	}})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
+		Operation:   "run",
+		Command:     "go test ./...",
+		ExitCode:    1,
+		TimedOut:    true,
+		DurationMS:  900,
+		StderrBytes: 32,
+	}})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	want := "• Bash(go test ./...)\n  └ failed exit=1 duration=900ms stderr=32B timeout=true"
+	if !strings.Contains(got, want) {
+		t.Fatalf("command failure summary missing:\nwant %q\n%s", want, got)
 	}
 }
 
@@ -1257,7 +1306,7 @@ func TestAppProgramStructuredReplacingToolUseIDUsesGenericMismatchedResult(t *te
 	if !strings.Contains(got, "• read_file\n  └ ok") {
 		t.Fatalf("same-ID mismatched result did not stay generic under original header:\n%s", got)
 	}
-	for _, unwanted := range []string{"Subagent(worker)", "summary: found README"} {
+	for _, unwanted := range []string{"Subagent(worker)", `subagent "worker"`, "summary: found README"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("same-ID mismatched result leaked new tool-specific detail %q:\n%s", unwanted, got)
 		}
@@ -1281,8 +1330,9 @@ func TestAppProgramStructuredNameOnlyToolResultsUseFIFO(t *testing.T) {
 	if count := strings.Count(got, "• read_file"); count != 2 {
 		t.Fatalf("read_file header count = %d, want 2:\n%s", count, got)
 	}
-	if count := strings.Count(got, "  └ ok"); count != 2 {
-		t.Fatalf("read_file ok count = %d, want 2:\n%s", count, got)
+	want := "• read_file\n  └ ok: 1 line, 13B"
+	if count := strings.Count(got, want); count != 2 {
+		t.Fatalf("read_file summary count = %d, want 2 for %q:\n%s", count, want, got)
 	}
 }
 

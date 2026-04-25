@@ -596,10 +596,12 @@ func appToolResultStatusLines(toolUse *model.ToolUse, result *model.ToolResult) 
 		lines = append(lines, appActivityTailLines("error", appProgramErrorStyle, result.Content)...)
 		return lines
 	}
-	lines := []string{appProgramDimStyle.Render(appToolResultSuccessLine(result))}
 	if appToolShowsResultTail(result.Name) {
+		lines := []string{appProgramDimStyle.Render("  └ ok")}
 		lines = append(lines, appActivityTailLines("output", appProgramDimStyle, result.Content)...)
+		return lines
 	}
+	lines := []string{appProgramDimStyle.Render(appToolResultSuccessLine(result))}
 	return lines
 }
 
@@ -1168,7 +1170,7 @@ func appGenericToolResultStatusLines(result *model.ToolResult) []string {
 		lines = append(lines, appActivityTailLines("error", appProgramErrorStyle, result.Content)...)
 		return lines
 	}
-	return []string{appProgramDimStyle.Render(appToolResultSuccessLine(result))}
+	return []string{appProgramDimStyle.Render("  └ ok")}
 }
 
 func appToolResultSuccessLine(result *model.ToolResult) string {
@@ -1178,7 +1180,7 @@ func appToolResultSuccessLine(result *model.ToolResult) string {
 	if command := appCommandMetadataResultSummary(result.Metadata); command != "" {
 		return "  └ " + command
 	}
-	if summary := appToolResultContentSummary(result.Content); summary != "" {
+	if summary := appToolResultContentSummary(result.Name, result.Content); summary != "" {
 		return "  └ ok: " + summary
 	}
 	return "  └ ok"
@@ -1202,21 +1204,21 @@ func appCommandMetadataResultSummary(metadata map[string]any) string {
 	if hasExit {
 		parts = append(parts, fmt.Sprintf("exit=%d", exitCode))
 	}
-	parts = append(parts, appCommandRuntimeSummaryParts(durationMS, hasDuration, stdoutBytes, hasStdout, stderrBytes, hasStderr, truncated, hasTruncated)...)
+	parts = append(parts, appCommandRuntimeSummaryParts(durationMS, stdoutBytes, stderrBytes, truncated)...)
 	if timedOut {
 		parts = append(parts, "timeout=true")
 	}
 	return strings.Join(parts, " ")
 }
 
-func appToolResultContentSummary(content string) string {
+func appToolResultContentSummary(name string, content string) string {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return ""
 	}
 	lower := strings.ToLower(content)
 	switch lower {
-	case "ok", "done", "success", "true":
+	case "ok", "done", "success":
 		return ""
 	}
 	lines := strings.Split(content, "\n")
@@ -1230,23 +1232,35 @@ func appToolResultContentSummary(content string) string {
 		return ""
 	}
 	if nonEmpty == 1 {
+		if !appToolMayInlineResultSnippet(name) {
+			return fmt.Sprintf("1 line, %s", appFormatBytes(len(content)))
+		}
 		return appInlineSnippet(content, 120)
 	}
 	return fmt.Sprintf("%d lines, %s", nonEmpty, appFormatBytes(len(content)))
 }
 
-func appCommandRuntimeSummaryParts(durationMS int, hasDuration bool, stdoutBytes int, hasStdout bool, stderrBytes int, hasStderr bool, truncated bool, hasTruncated bool) []string {
+func appToolMayInlineResultSnippet(name string) bool {
+	switch name {
+	case "workspace_list_files", "workspace_apply_patch", "workspace_verify":
+		return true
+	default:
+		return false
+	}
+}
+
+func appCommandRuntimeSummaryParts(durationMS int, stdoutBytes int, stderrBytes int, truncated bool) []string {
 	parts := make([]string, 0, 4)
-	if hasDuration && durationMS > 0 {
+	if durationMS > 0 {
 		parts = append(parts, "duration="+appFormatDurationMS(durationMS))
 	}
-	if hasStdout && stdoutBytes > 0 {
+	if stdoutBytes > 0 {
 		parts = append(parts, "stdout="+appFormatBytes(stdoutBytes))
 	}
-	if hasStderr && stderrBytes > 0 {
+	if stderrBytes > 0 {
 		parts = append(parts, "stderr="+appFormatBytes(stderrBytes))
 	}
-	if hasTruncated && truncated {
+	if truncated {
 		parts = append(parts, "truncated=true")
 	}
 	return parts
@@ -1592,7 +1606,7 @@ func appCommandTerminalChildLine(event memaxagent.Event) (string, lipgloss.Style
 			parts = append(parts, "id="+command.CommandID)
 		}
 		parts = append(parts, fmt.Sprintf("exit=%d", command.ExitCode))
-		parts = append(parts, appCommandRuntimeSummaryParts(command.DurationMS, command.DurationMS != 0, command.StdoutBytes, command.StdoutBytes != 0, command.StderrBytes, command.StderrBytes != 0, command.OutputTruncated, command.OutputTruncated)...)
+		parts = append(parts, appCommandRuntimeSummaryParts(command.DurationMS, command.StdoutBytes, command.StderrBytes, command.OutputTruncated)...)
 		if command.TimedOut {
 			parts = append(parts, "timeout=true")
 		}
