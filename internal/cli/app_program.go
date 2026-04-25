@@ -699,14 +699,14 @@ func (m *appProgramModel) composerView(width int) string {
 		lines = []string{appProgramEmptyComposerLine(m.input.Placeholder)}
 	}
 	for i, line := range lines {
-		lines[i] = lipgloss.PlaceHorizontal(
-			contentWidth,
-			lipgloss.Left,
-			line,
-			lipgloss.WithWhitespaceBackground(appProgramComposerBackground),
-		)
+		lines[i] = appProgramFitLine(line, contentWidth)
 	}
-	return appProgramComposerStyle.Width(width).Render(strings.Join(lines, "\n"))
+	// Do not force the composer to paint to the full terminal width in inline
+	// mode. Previously-rendered full-width rows are reflowed by the terminal
+	// when the window becomes narrower, while Bubble Tea's inline renderer still
+	// tracks the old logical row count. Keeping the painted region content-sized
+	// prevents resize cycles from leaving stale gray bars in scrollback.
+	return appProgramComposerStyle.Render(strings.Join(lines, "\n"))
 }
 
 func appProgramEmptyComposerLine(placeholder string) string {

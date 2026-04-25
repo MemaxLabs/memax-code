@@ -2398,6 +2398,16 @@ func TestAppProgramComposerViewPaintsTrailingWhitespace(t *testing.T) {
 	}
 }
 
+func TestAppProgramComposerViewAvoidsFullWidthPaint(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	raw := model.composerView(120)
+	for _, line := range strings.Split(raw, "\n") {
+		if got := lipgloss.Width(line); got >= 119 {
+			t.Fatalf("composer line width = %d, want content-sized line below live region width:\n%q", got, raw)
+		}
+	}
+}
+
 func TestAppProgramUserPromptTranscriptHasVerticalPadding(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.transcript = appTranscriptTail{}
