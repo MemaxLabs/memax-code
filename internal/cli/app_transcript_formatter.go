@@ -1241,6 +1241,7 @@ func appToolResultContentSummary(name string, content string) string {
 }
 
 func appToolMayInlineResultSnippet(name string) bool {
+	// Inline only short, structured, non-sensitive success summaries.
 	switch name {
 	case "workspace_list_files", "workspace_apply_patch", "workspace_verify":
 		return true
