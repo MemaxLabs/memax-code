@@ -8,6 +8,8 @@ github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260425093504-6815c21f0834 h1:7t
 github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260425093504-6815c21f0834/go.mod h1:3gwC28HU+igj2X3xDc7GEsYPU1iLqRW2y5WlecO5Oo8=
 github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260425093747-35d758f9f16e h1:g+x+eZl7x+8T90Jcd6rW0C6b49t+Nzti/ACNGQGfiAo=
 github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260425093747-35d758f9f16e/go.mod h1:3gwC28HU+igj2X3xDc7GEsYPU1iLqRW2y5WlecO5Oo8=
+github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260425095218-e37319fe5b8a h1:pYao65i7ZnnzwfgV3Ah5FWemFC4XuTSt/OuENJBzqKY=
+github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260425095218-e37319fe5b8a/go.mod h1:3gwC28HU+igj2X3xDc7GEsYPU1iLqRW2y5WlecO5Oo8=
 github.com/atotto/clipboard v0.1.4 h1:EH0zSVneZPSuFR11BlR9YppQTVDbh5+16AmcJi4g1z4=
 github.com/atotto/clipboard v0.1.4/go.mod h1:ZY9tmq7sm5xIbd9bOK4onWV4S6X0u6GY7Vn0Yu86PYI=
 github.com/aymanbagabas/go-osc52/v2 v2.0.1 h1:HwpRHbFMcZLEVr42D4p7XBqjyuxQH5SMiErDT4WkJ2k=

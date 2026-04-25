@@ -71,6 +71,9 @@ func effectiveContextSummaryTokens(opts options, window int) int {
 
 func inferredContextWindow(provider provider, modelName string) int {
 	name := strings.ToLower(strings.TrimSpace(modelName))
+	if caps := gatewayModelCapabilities(name); caps.ContextWindowTokens > 0 {
+		return caps.ContextWindowTokens
+	}
 	switch provider {
 	case providerOpenAI:
 		if caps := openai.CapabilitiesForModel(name); caps.ContextWindowTokens > 0 {
@@ -83,6 +86,21 @@ func inferredContextWindow(provider provider, modelName string) int {
 		return 200000
 	}
 	return defaultContextWindowTokens
+}
+
+func gatewayModelCapabilities(modelName string) model.Capabilities {
+	family, _, ok := strings.Cut(strings.ToLower(strings.TrimSpace(modelName)), "/")
+	if !ok {
+		return model.Capabilities{}
+	}
+	switch family {
+	case "openai":
+		return openai.CapabilitiesForModel(modelName)
+	case "anthropic":
+		return anthropic.CapabilitiesForModel(modelName)
+	default:
+		return model.Capabilities{}
+	}
 }
 
 func resolveContextBudgets(opts options, client model.Client) resolvedContextBudgets {

@@ -291,6 +291,59 @@ func TestResolveContextBudgetsPrefersClientCapabilities(t *testing.T) {
 	}
 }
 
+func TestInferredContextWindowHonorsGatewayModelFamily(t *testing.T) {
+	tests := []struct {
+		name      string
+		provider  provider
+		modelName string
+		want      int
+	}{
+		{
+			name:      "openai transport openai model",
+			provider:  providerOpenAI,
+			modelName: "openai/gpt-5.5-pro",
+			want:      272000,
+		},
+		{
+			name:      "openai transport anthropic model through gateway",
+			provider:  providerOpenAI,
+			modelName: "anthropic/claude-opus-4.7",
+			want:      200000,
+		},
+		{
+			name:      "anthropic transport openai model through gateway",
+			provider:  providerAnthropic,
+			modelName: "openai/gpt-5.5-pro",
+			want:      272000,
+		},
+		{
+			name:      "anthropic transport anthropic model",
+			provider:  providerAnthropic,
+			modelName: "anthropic/claude-sonnet-4.6",
+			want:      200000,
+		},
+		{
+			name:      "unknown openai transport keeps default",
+			provider:  providerOpenAI,
+			modelName: "gateway/custom-model",
+			want:      defaultContextWindowTokens,
+		},
+		{
+			name:      "unknown anthropic transport keeps anthropic default",
+			provider:  providerAnthropic,
+			modelName: "gateway/custom-model",
+			want:      200000,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := inferredContextWindow(tt.provider, tt.modelName); got != tt.want {
+				t.Fatalf("inferredContextWindow(%q, %q) = %d, want %d", tt.provider, tt.modelName, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEstimateApproxTokensIsConservative(t *testing.T) {
 	msg := model.Message{
 		Role: model.RoleUser,
