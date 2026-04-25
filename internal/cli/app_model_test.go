@@ -1201,6 +1201,43 @@ func TestAppProgramStructuredReplacingToolUseIDKeepsOriginalRenderedDisplay(t *t
 	}
 }
 
+func TestAppProgramStructuredReplacingToolUseIDUsesGenericMismatchedResult(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	for _, event := range []memaxagent.Event{
+		{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+			ID:   "tool-1",
+			Name: "read_file",
+		}},
+		{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+			ID:    "tool-1",
+			Name:  "run_subagent",
+			Input: json.RawMessage(`{"agent":"worker","prompt":"inspect"}`),
+		}},
+		{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+			ToolUseID: "tool-1",
+			Name:      "run_subagent",
+			Content:   `subagent "worker" result: found README`,
+			Metadata: map[string]any{
+				"agent": "worker",
+			},
+		}},
+	} {
+		m.appendEvent(event)
+	}
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(got, "• read_file call\n  └ ok") {
+		t.Fatalf("same-ID mismatched result did not stay generic under original header:\n%s", got)
+	}
+	for _, unwanted := range []string{"Subagent(worker)", "summary: found README"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("same-ID mismatched result leaked new tool-specific detail %q:\n%s", unwanted, got)
+		}
+	}
+}
+
 func TestAppProgramStructuredNameOnlyToolResultsUseFIFO(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
@@ -1252,6 +1289,104 @@ func TestAppProgramStructuredToolUseRendersBeforeResult(t *testing.T) {
 	}
 	if !strings.Contains(after, "• workspace_list_files call\n  └ ok") {
 		t.Fatalf("tool result did not continue under invocation:\n%s", after)
+	}
+}
+
+func TestAppProgramStructuredToolUseStartMergesWithFinalToolUse(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{
+		ID:   "fetch-1",
+		Name: "web_fetch",
+	}})
+	started := ansi.Strip(strings.Join(m.activeActivityLines(), "\n"))
+	if !strings.Contains(started, "• Web fetch call") {
+		t.Fatalf("tool-use start did not render active generic row:\n%s", started)
+	}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:    "fetch-1",
+		Name:  "web_fetch",
+		Input: json.RawMessage(`{"url":"https://example.com/health"}`),
+	}})
+	updated := ansi.Strip(strings.Join(m.activeActivityLines(), "\n"))
+	if !strings.Contains(updated, "• Web fetch(https://example.com/health)") {
+		t.Fatalf("final tool-use did not update active row display:\n%s", updated)
+	}
+	if strings.Contains(updated, "Web fetch call\n") {
+		t.Fatalf("generic tool-use start row survived after final tool-use:\n%s", updated)
+	}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		ToolUseID: "fetch-1",
+		Name:      "web_fetch",
+		Content:   "URL: https://example.com/health\nStatus: 200\nTitle: Health",
+		Metadata: map[string]any{
+			model.MetadataWebStatusCode:   200,
+			model.MetadataWebContentBytes: 12,
+		},
+	}})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := countTranscriptLine(got, "• Web fetch(https://example.com/health)"); count != 1 {
+		t.Fatalf("merged web_fetch header count = %d, want 1:\n%s", count, got)
+	}
+	if !strings.Contains(got, "• Web fetch(https://example.com/health)\n  └ ok status=200 bytes=12\n  └ title: Health") {
+		t.Fatalf("merged web_fetch result did not stay under invocation:\n%s", got)
+	}
+	for _, unwanted := range []string{"Web fetch call\n", "Web fetch result"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("merged web_fetch transcript leaked %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestAppProgramStructuredCommandToolUseStartDoesNotCreateDuplicateCommandGroup(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+	command := "go test ./..."
+	input := json.RawMessage(`{"command":` + strconv.Quote(command) + `}`)
+
+	for _, event := range []memaxagent.Event{
+		{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{
+			ID:    "tool-run-1",
+			Name:  "run_command",
+			Input: input,
+		}},
+		{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+			ID:    "tool-run-1",
+			Name:  "run_command",
+			Input: input,
+		}},
+		{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+			ToolUseID: "tool-run-1",
+			Name:      "run_command",
+			Content:   "ok",
+			Metadata: map[string]any{
+				model.MetadataCommandOperation: "run",
+				model.MetadataCommandString:    command,
+				model.MetadataCommandExitCode:  0,
+			},
+		}},
+		{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
+			Operation: "run",
+			Command:   command,
+			ExitCode:  0,
+		}},
+	} {
+		m.appendEvent(event)
+	}
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if count := countTranscriptLine(got, "• Bash("+command+")"); count != 1 {
+		t.Fatalf("command tool-use start produced duplicate command headers = %d, want 1:\n%s", count, got)
+	}
+	if !strings.Contains(got, "• Bash("+command+")\n  └ done exit=0") {
+		t.Fatalf("command tool-use start result did not finalize grouped block:\n%s", got)
+	}
+	if len(m.pendingCommands) != 0 || len(m.pendingCommandFallback) != 0 {
+		t.Fatalf("command tool-use start left pending command state: commands=%d fallback=%d", len(m.pendingCommands), len(m.pendingCommandFallback))
 	}
 }
 
@@ -1437,6 +1572,75 @@ func TestAppProgramParallelWebFetchesCommitAsGroupedCells(t *testing.T) {
 	}
 }
 
+func TestAppProgramParallelWebFetchStartsStayGroupedByID(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	for _, id := range []string{"fetch-1", "fetch-2", "fetch-3"} {
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{
+			ID:   id,
+			Name: "web_fetch",
+		}})
+	}
+	for _, item := range []struct {
+		id  string
+		url string
+	}{
+		{"fetch-1", "https://example.com/a"},
+		{"fetch-2", "https://example.com/b"},
+		{"fetch-3", "https://example.com/c"},
+	} {
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+			ID:    item.id,
+			Name:  "web_fetch",
+			Input: json.RawMessage(`{"url":` + strconv.Quote(item.url) + `}`),
+		}})
+	}
+	live := ansi.Strip(strings.Join(m.activeActivityLines(), "\n"))
+	for _, url := range []string{"https://example.com/a", "https://example.com/b", "https://example.com/c"} {
+		if !strings.Contains(live, "• Web fetch("+url+")") {
+			t.Fatalf("active web_fetch group missing %q:\n%s", url, live)
+		}
+	}
+
+	for _, item := range []struct {
+		id     string
+		url    string
+		title  string
+		status int
+	}{
+		{"fetch-3", "https://example.com/c", "C", 203},
+		{"fetch-1", "https://example.com/a", "A", 201},
+		{"fetch-2", "https://example.com/b", "B", 202},
+	} {
+		m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+			ToolUseID: item.id,
+			Name:      "web_fetch",
+			Content:   "URL: " + item.url + "\nStatus: 200\nTitle: " + item.title,
+			Metadata: map[string]any{
+				model.MetadataWebStatusCode:   item.status,
+				model.MetadataWebContentBytes: len(item.title),
+			},
+		}})
+	}
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"• Web fetch(https://example.com/c)\n  └ ok status=203 bytes=1\n  └ title: C",
+		"• Web fetch(https://example.com/a)\n  └ ok status=201 bytes=1\n  └ title: A",
+		"• Web fetch(https://example.com/b)\n  └ ok status=202 bytes=1\n  └ title: B",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("parallel web_fetch grouped transcript missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"Web fetch call\n", "Web fetch result"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("parallel web_fetch start transcript leaked %q:\n%s", unwanted, got)
+		}
+	}
+}
+
 func TestAppProgramStructuredSubagentResultIsCompact(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
@@ -1563,13 +1767,16 @@ func TestAppProgramStructuredSubagentFlushedBeforeResultDoesNotDuplicateHeader(t
 	}
 	for _, want := range []string{
 		"error: stream warning while child is still running",
-		"• Subagent(explorer) inspect filesystem state result",
+		"• Subagent(explorer) inspect filesystem state",
 		"  └ done",
 		"  └ summary: found README and go.mod",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("subagent flushed transcript missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "Subagent(explorer) inspect filesystem state result") {
+		t.Fatalf("subagent result rendered detached continuation header:\n%s", got)
 	}
 }
 

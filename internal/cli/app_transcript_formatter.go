@@ -49,6 +49,8 @@ func (f *appTranscriptFormatter) appendEvent(event memaxagent.Event) {
 		if event.Message != nil {
 			f.appendAssistantText(event.Message.PlainText())
 		}
+	case memaxagent.EventToolUseStart:
+		f.appendToolUseStart(event.ToolUse)
 	case memaxagent.EventToolUse:
 		f.appendToolUse(event.ToolUse)
 	case memaxagent.EventToolResult:
@@ -91,9 +93,9 @@ func (f *appTranscriptFormatter) appendEvent(event memaxagent.Event) {
 		f.appendApprovalEvent("consumed", event.Approval)
 	case memaxagent.EventError:
 		if event.Err != nil {
-			f.appendLocalTranscriptLine("error", "error: "+event.Err.Error())
+			f.appendRuntimeErrorLine(event.Err.Error())
 		}
-	case memaxagent.EventSessionStarted, memaxagent.EventResult, memaxagent.EventUsage, memaxagent.EventToolUseStart, memaxagent.EventToolUseDelta:
+	case memaxagent.EventSessionStarted, memaxagent.EventResult, memaxagent.EventUsage, memaxagent.EventToolUseDelta:
 		// The app transcript renders assistant text, concrete tool execution,
 		// approvals, workspace updates, and errors. Session/result/usage/delta
 		// events are status metadata for this surface.
@@ -126,6 +128,28 @@ func (f *appTranscriptFormatter) appendActivityLine(line string) {
 	f.queuePrints(f.transcript.appendStandaloneLine(line))
 }
 
+func (f *appTranscriptFormatter) appendRuntimeErrorLine(text string) {
+	text = strings.TrimSpace(normalizeAppTranscriptText(text))
+	if text == "" {
+		return
+	}
+	if !f.liveCommandGroups {
+		f.flushPendingCommandGroups()
+	}
+	f.flushTranscriptPartial()
+	f.compactor.resetSection()
+	f.lastActivityCommandKey = ""
+	f.lastActivityToolKey = ""
+	f.queuePrints(f.transcript.appendStandaloneLine(compactAppProgramLocalLine("error", "error: "+text)))
+}
+
+func (f *appTranscriptFormatter) appendToolUseStart(toolUse *model.ToolUse) {
+	if toolUse == nil || appToolUseDefersToCommandLifecycle(toolUse.Name) {
+		return
+	}
+	f.appendToolUse(toolUse)
+}
+
 func (f *appTranscriptFormatter) appendToolUse(toolUse *model.ToolUse) {
 	if toolUse == nil {
 		return
@@ -142,7 +166,7 @@ func (f *appTranscriptFormatter) appendToolUse(toolUse *model.ToolUse) {
 		return
 	}
 	if f.toolUseUsesLiveGroup(toolUse.Name) {
-		f.pendingToolGroup(f.toolUseKey(toolUse), appToolUseDisplay(toolUse))
+		f.pendingToolGroup(f.toolUseKey(toolUse), toolUse.Name, appToolUseDisplay(toolUse))
 		return
 	}
 	f.printUnprintedCommandGroups()
@@ -1025,19 +1049,27 @@ func (f *appTranscriptFormatter) toolUseUsesLiveGroup(name string) bool {
 	return f.liveCommandGroups && !appToolUseDefersToCommandLifecycle(name)
 }
 
-func (f *appTranscriptFormatter) pendingToolGroup(key string, display string) *appProgramToolGroup {
+func (f *appTranscriptFormatter) pendingToolGroup(key, name, display string) *appProgramToolGroup {
 	if strings.TrimSpace(key) == "" {
 		return nil
 	}
+	name = strings.TrimSpace(name)
+	display = strings.TrimSpace(display)
 	if f.pendingToolGroups == nil {
 		f.pendingToolGroups = make(map[string]*appProgramToolGroup)
 	}
 	group := f.pendingToolGroups[key]
 	if group == nil {
-		group = &appProgramToolGroup{display: display}
+		group = &appProgramToolGroup{name: name, display: display}
 		f.pendingToolGroups[key] = group
 		f.pendingToolOrder = append(f.pendingToolOrder, key)
 		return group
+	}
+	if group.name == "" {
+		group.name = name
+	}
+	if display != "" && (name == "" || group.name == "" || group.name == name) {
+		group.display = display
 	}
 	return group
 }
@@ -1051,10 +1083,29 @@ func (f *appTranscriptFormatter) appendLiveToolResult(toolUse *model.ToolUse, re
 	if group == nil {
 		return false
 	}
-	group.appendChildren(appToolResultStatusLines(toolUse, result)...)
+	group.appendChildren(appToolResultStatusLinesForGroup(group, toolUse, result)...)
 	f.appendToolBlock(key, group.render()...)
 	f.deletePendingToolGroup(key)
 	return true
+}
+
+func appToolResultStatusLinesForGroup(group *appProgramToolGroup, toolUse *model.ToolUse, result *model.ToolResult) []string {
+	if group != nil && group.name != "" && result != nil && result.Name != "" && group.name != result.Name {
+		return appGenericToolResultStatusLines(result)
+	}
+	return appToolResultStatusLines(toolUse, result)
+}
+
+func appGenericToolResultStatusLines(result *model.ToolResult) []string {
+	if result == nil {
+		return nil
+	}
+	if result.IsError {
+		lines := []string{appProgramErrorStyle.Render("  └ error")}
+		lines = append(lines, appActivityTailLines("error", appProgramErrorStyle, result.Content)...)
+		return lines
+	}
+	return []string{appProgramDimStyle.Render("  └ ok")}
 }
 
 func (f *appTranscriptFormatter) flushPendingToolGroups() {
@@ -1116,6 +1167,7 @@ func (f *appTranscriptFormatter) toolResultKey(toolUse *model.ToolUse, resultID 
 }
 
 type appProgramToolGroup struct {
+	name     string
 	display  string
 	children []string
 }
