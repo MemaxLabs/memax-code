@@ -9,6 +9,7 @@ import (
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 )
 
@@ -22,6 +23,29 @@ func TestParseEventStreamMode(t *testing.T) {
 	}
 	if _, err := parseEventStreamMode("jsonl"); err == nil {
 		t.Fatal("parseEventStreamMode(jsonl) error = nil, want invalid mode")
+	}
+}
+
+func TestProjectStreamEventIncludesContextCompaction(t *testing.T) {
+	event := memaxagent.Event{
+		Kind: memaxagent.EventContextCompacted,
+		Compaction: &contextwindow.CompactionRecord{
+			Policy:             "SummarizingBudget",
+			Reason:             contextwindow.CompactionReasonBudget,
+			OriginalMessages:   20,
+			SentMessages:       8,
+			SummarizedMessages: 13,
+			RetainedMessages:   1,
+			ReplacedSummaries:  0,
+			SummaryHash:        "abc123",
+			SummaryPreview:     "older context",
+		},
+	}
+
+	projected := projectStreamEvent(event)
+	compaction, ok := projected.Compaction["summarized_messages"].(int)
+	if !ok || compaction != 13 {
+		t.Fatalf("compaction = %#v, want summarized_messages=13", projected.Compaction)
 	}
 }
 

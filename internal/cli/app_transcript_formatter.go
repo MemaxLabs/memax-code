@@ -56,6 +56,14 @@ func (f *appTranscriptFormatter) appendEvent(event memaxagent.Event) {
 		f.appendToolUse(event.ToolUse)
 	case memaxagent.EventToolResult:
 		f.appendToolResult(event.ToolResult)
+	case memaxagent.EventContextApplied:
+		if event.Context != nil {
+			f.appendActivityLine(appProgramDimStyle.Render(fmt.Sprintf("~ context selected messages=%d/%d", event.Context.SentMessages, event.Context.OriginalMessages)))
+		}
+	case memaxagent.EventContextCompacted:
+		if event.Compaction != nil {
+			f.appendActivityLine(appProgramDimStyle.Render(contextCompactionLine(event.Compaction.SummarizedMessages, event.Compaction.SentMessages)))
+		}
 	case memaxagent.EventWorkspaceCheckpoint:
 		if event.Workspace != nil {
 			f.appendActivityLine(appProgramDimStyle.Render("~ checkpoint " + event.Workspace.CheckpointID))

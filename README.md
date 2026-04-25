@@ -39,6 +39,7 @@ This repository is intentionally separate from the SDK:
 - bounded `web_fetch` for HTTP(S) pages with private-network protections
 - managed command sessions for long-running processes
 - bounded subagents for exploration, review, and isolated worker tasks
+- automatic context compaction with model-visible summaries for long sessions
 - JSONL-backed sessions with resume, listing, and transcript inspection
 - local diagnostics with `memax-code doctor`
 - interactive terminal shell with slash commands and prompt history recall
@@ -135,6 +136,9 @@ Example config:
   "profile": "balanced",
   "effort": "auto",
   "ui": "app",
+  "compaction": "auto",
+  "context_window": 128000,
+  "context_summary_tokens": 8192,
   "session_dir": "~/.memax-code/sessions",
   "history_file": "~/.memax-code/history.jsonl",
   "inherit_command_env": true,
@@ -161,6 +165,13 @@ flag > environment > config file > built-in default
 
 The default config file is optional. An explicitly supplied `--config` path
 must exist and decode as strict JSON.
+
+Long sessions compact automatically by default. `context_window` controls the
+approximate token budget used before compaction, and `context_summary_tokens`
+controls the summary budget. The local estimator is conservative because
+provider tokenizers differ; the runtime preserves headroom rather than risking
+a provider context-window error. Set `"compaction": "off"` or pass
+`--compaction off` to disable this behavior for debugging.
 
 ## Interactive shell
 

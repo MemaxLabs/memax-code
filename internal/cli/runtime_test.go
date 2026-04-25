@@ -138,6 +138,62 @@ func TestSanitizeTranscriptTextStripsANSISequences(t *testing.T) {
 	}
 }
 
+func TestBuildStackConfiguresAutomaticContextPolicies(t *testing.T) {
+	opts := options{
+		CWD:               repoRoot(t),
+		Provider:          providerOpenAI,
+		Model:             "gpt-5.4",
+		Profile:           "balanced",
+		Effort:            "auto",
+		Preset:            "interactive_dev",
+		SessionDir:        t.TempDir(),
+		InheritCommandEnv: true,
+		WebEnabled:        true,
+		WebFetchMaxBytes:  defaultWebFetchMaxBytes,
+		Compaction:        compactionModeAuto,
+		ContextWindow:     64000,
+		ContextSummary:    4096,
+	}
+	stack, err := buildStackWithModel(opts, &scriptedTextClient{text: "summary"})
+	if err != nil {
+		t.Fatalf("buildStackWithModel() error = %v", err)
+	}
+	agentOpts := stack.Options()
+	if agentOpts.Context == nil {
+		t.Fatal("Context = nil, want automatic context policy")
+	}
+	if agentOpts.ContextRetry == nil {
+		t.Fatal("ContextRetry = nil, want automatic retry policy")
+	}
+}
+
+func TestBuildStackCanDisableContextPolicies(t *testing.T) {
+	opts := options{
+		CWD:               repoRoot(t),
+		Provider:          providerOpenAI,
+		Model:             "gpt-5.4",
+		Profile:           "balanced",
+		Effort:            "auto",
+		Preset:            "interactive_dev",
+		SessionDir:        t.TempDir(),
+		InheritCommandEnv: true,
+		WebEnabled:        true,
+		WebFetchMaxBytes:  defaultWebFetchMaxBytes,
+		Compaction:        compactionModeOff,
+	}
+	stack, err := buildStackWithModel(opts, &scriptedTextClient{text: "summary"})
+	if err != nil {
+		t.Fatalf("buildStackWithModel() error = %v", err)
+	}
+	agentOpts := stack.Options()
+	if agentOpts.Context != nil {
+		t.Fatalf("Context = %#v, want nil when compaction is off", agentOpts.Context)
+	}
+	if agentOpts.ContextRetry != nil {
+		t.Fatalf("ContextRetry = %#v, want nil when compaction is off", agentOpts.ContextRetry)
+	}
+}
+
 func TestBuildStackEnablesCustomVerificationOutsideGoModule(t *testing.T) {
 	stack, err := buildStack(options{
 		CWD:            t.TempDir(),

@@ -38,6 +38,11 @@ func TestDryRunPrintsResolvedConfig(t *testing.T) {
 		"effort: auto",
 		"preset: safe_local",
 		"ui: auto",
+		"compaction: auto",
+		"context_window: 200000",
+		"context_summary_tokens: 8192",
+		"context_main_tokens: 160000",
+		"context_retry_tokens: 110000",
 		"session_dir: ",
 		"resume_session: <unset>",
 		"verification: go",
@@ -211,6 +216,138 @@ func TestParseEnablesWebByDefault(t *testing.T) {
 	}
 	if opts.WebFetchMaxBytes != defaultWebFetchMaxBytes {
 		t.Fatalf("WebFetchMaxBytes = %d, want %d", opts.WebFetchMaxBytes, defaultWebFetchMaxBytes)
+	}
+}
+
+func TestParseEnablesCompactionByDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MEMAX_CODE_COMPACTION", "")
+	t.Setenv("MEMAX_CODE_CONTEXT_WINDOW", "")
+	t.Setenv("MEMAX_CODE_CONTEXT_SUMMARY_TOKENS", "")
+
+	var stderr bytes.Buffer
+	opts, err := parseArgs([]string{"--dry-run", "--provider", "openai", "--model", "gpt-5.4"}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if opts.Compaction != compactionModeAuto {
+		t.Fatalf("Compaction = %q, want auto", opts.Compaction)
+	}
+	if got := effectiveContextWindow(opts); got != 128000 {
+		t.Fatalf("effectiveContextWindow() = %d, want 128000", got)
+	}
+	if got := effectiveContextSummaryTokens(opts, effectiveContextWindow(opts)); got != 8192 {
+		t.Fatalf("effectiveContextSummaryTokens() = %d, want 8192", got)
+	}
+	budgets := resolveContextBudgets(opts)
+	if budgets.WindowTokens != 128000 || budgets.SummaryTokens != 8192 || budgets.RetryTokens >= budgets.MainTokens {
+		t.Fatalf("resolveContextBudgets() = %+v, want resolved budgets with retry < main", budgets)
+	}
+}
+
+func TestResolveContextBudgetsClampsDryRunValues(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	var stderr bytes.Buffer
+	opts, err := parseArgs([]string{
+		"--dry-run",
+		"--context-window", "1000",
+		"--context-summary-tokens", "100000",
+	}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	budgets := resolveContextBudgets(opts)
+	if budgets.WindowTokens != minContextWindowTokens {
+		t.Fatalf("WindowTokens = %d, want %d", budgets.WindowTokens, minContextWindowTokens)
+	}
+	if budgets.SummaryTokens != minContextWindowTokens/4 {
+		t.Fatalf("SummaryTokens = %d, want %d", budgets.SummaryTokens, minContextWindowTokens/4)
+	}
+	if budgets.RetryTokens > budgets.MainTokens {
+		t.Fatalf("RetryTokens = %d, MainTokens = %d; retry must not exceed main", budgets.RetryTokens, budgets.MainTokens)
+	}
+}
+
+func TestEstimateApproxTokensIsConservative(t *testing.T) {
+	msg := model.Message{
+		Role: model.RoleUser,
+		Content: []model.ContentBlock{{
+			Type: model.ContentText,
+			Text: "1234567890",
+		}},
+	}
+	if got, want := estimateApproxTokens(msg), 4; got != want {
+		t.Fatalf("estimateApproxTokens() = %d, want %d", got, want)
+	}
+}
+
+func TestParseCanDisableCompactionAndOverrideContextBudget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	var stderr bytes.Buffer
+	opts, err := parseArgs([]string{
+		"--dry-run",
+		"--compaction", "off",
+		"--context-window", "64000",
+		"--context-summary-tokens", "4096",
+	}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if opts.Compaction != compactionModeOff {
+		t.Fatalf("Compaction = %q, want off", opts.Compaction)
+	}
+	if opts.ContextWindow != 64000 {
+		t.Fatalf("ContextWindow = %d, want 64000", opts.ContextWindow)
+	}
+	if opts.ContextSummary != 4096 {
+		t.Fatalf("ContextSummary = %d, want 4096", opts.ContextSummary)
+	}
+}
+
+func TestDryRunShowsDisabledContextBudgetsWhenCompactionOff(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--dry-run",
+		"--compaction", "off",
+		"--context-window", "64000",
+		"--context-summary-tokens", "4096",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"compaction: off",
+		"context_window: disabled",
+		"context_summary_tokens: disabled",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestParseCompactionConfigAndEnv(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"compaction": "off", "context_window": 32000, "context_summary_tokens": 2048}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("MEMAX_CODE_COMPACTION", "auto")
+
+	var stderr bytes.Buffer
+	opts, err := parseArgs([]string{"--dry-run", "--config", configPath}, &stderr)
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if opts.Compaction != compactionModeAuto {
+		t.Fatalf("Compaction = %q, want env override auto", opts.Compaction)
+	}
+	if opts.ContextWindow != 32000 || opts.ContextSummary != 2048 {
+		t.Fatalf("context budgets = %d/%d, want config values", opts.ContextWindow, opts.ContextSummary)
 	}
 }
 

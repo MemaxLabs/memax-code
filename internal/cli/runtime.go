@@ -15,6 +15,7 @@ import (
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/coding"
@@ -366,6 +367,7 @@ func buildStackWithModel(opts options, client model.Client) (coding.Stack, error
 	config.Command.Runner = runner
 	config.CommandSessions = commandSessions
 	config.CommandSessionStartInputMode = coding.CommandSessionStartInputShellCommand
+	config.Base.Context, config.Base.ContextRetry = contextPolicies(opts, client)
 	hasGoWorkspace := hasGoModule(opts.CWD)
 	if len(opts.VerifyCommands) > 0 {
 		config.Verifier.Verifier = verifier(runner, opts.VerifyCommands, hasGoWorkspace)
@@ -445,13 +447,13 @@ func codingSubagentTool(client model.Client, config coding.Config, taskStore tas
 		{
 			Name:        "explorer",
 			Description: "Read-only repository explorer for bounded investigation and evidence gathering.",
-			Options: subagentOptions(client, sessions, explorerTools(config), 8, 3, maxReadOnlySubagentRunDuration,
+			Options: subagentOptions(client, sessions, config.Base.Context, config.Base.ContextRetry, explorerTools(config), 8, 3, maxReadOnlySubagentRunDuration,
 				"You are the explorer subagent. Inspect only. Use read-only workspace tools to answer the delegated question with concise evidence. Do not edit files, run commands, or delegate further."),
 		},
 		{
 			Name:        "reviewer",
 			Description: "Read-only code reviewer for diffs, risks, regressions, and verification evidence.",
-			Options: subagentOptions(client, sessions, reviewerTools, 10, 3, maxReadOnlySubagentRunDuration,
+			Options: subagentOptions(client, sessions, config.Base.Context, config.Base.ContextRetry, reviewerTools, 10, 3, maxReadOnlySubagentRunDuration,
 				"You are the reviewer subagent. Review code and verification evidence. Prioritize correctness bugs, regressions, unsafe behavior, and missing tests. You may run the configured verification tool when useful, but do not edit files or delegate further."),
 		},
 		{
@@ -469,11 +471,13 @@ func codingSubagentTool(client model.Client, config coding.Config, taskStore tas
 	})
 }
 
-func subagentOptions(client model.Client, sessions session.Store, registry *tool.Registry, maxTurns, maxConcurrency int, maxRunDuration time.Duration, prompt string) memaxagent.Options {
+func subagentOptions(client model.Client, sessions session.Store, contextPolicy, contextRetryPolicy contextwindow.Policy, registry *tool.Registry, maxTurns, maxConcurrency int, maxRunDuration time.Duration, prompt string) memaxagent.Options {
 	return memaxagent.Options{
 		Model:              client,
 		Sessions:           sessions,
 		Tools:              registry,
+		Context:            contextPolicy,
+		ContextRetry:       contextRetryPolicy,
 		MaxTurns:           maxTurns,
 		MaxToolConcurrency: maxConcurrency,
 		MaxRunDuration:     maxRunDuration,

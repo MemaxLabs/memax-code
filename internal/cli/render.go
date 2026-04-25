@@ -262,6 +262,14 @@ func (s *tuiRenderState) Render(w io.Writer, event memaxagent.Event) error {
 				}
 			}
 		}
+	case memaxagent.EventContextApplied:
+		if event.Context != nil {
+			s.renderActivity(w, fmt.Sprintf("~ context selected messages=%d/%d", event.Context.SentMessages, event.Context.OriginalMessages))
+		}
+	case memaxagent.EventContextCompacted:
+		if event.Compaction != nil {
+			s.renderActivity(w, contextCompactionLine(event.Compaction.SummarizedMessages, event.Compaction.SentMessages))
+		}
 	case memaxagent.EventWorkspaceCheckpoint:
 		if event.Workspace != nil {
 			s.renderActivity(w, "~ checkpoint "+event.Workspace.CheckpointID)
@@ -611,6 +619,14 @@ func renderEvent(w io.Writer, event memaxagent.Event) error {
 		if event.Usage != nil {
 			fmt.Fprintf(w, "usage: input=%d output=%d total=%d\n", event.Usage.InputTokens, event.Usage.OutputTokens, event.Usage.TotalTokens)
 		}
+	case memaxagent.EventContextApplied:
+		if event.Context != nil {
+			fmt.Fprintf(w, "context: messages=%d/%d\n", event.Context.SentMessages, event.Context.OriginalMessages)
+		}
+	case memaxagent.EventContextCompacted:
+		if event.Compaction != nil {
+			fmt.Fprintf(w, "context_compacted: summarized=%d sent=%d policy=%s\n", event.Compaction.SummarizedMessages, event.Compaction.SentMessages, event.Compaction.Policy)
+		}
 	case memaxagent.EventResult:
 		if strings.TrimSpace(event.Result) != "" {
 			fmt.Fprintf(w, "\nresult: %s\n", event.Result)
@@ -622,6 +638,13 @@ func renderEvent(w io.Writer, event memaxagent.Event) error {
 		return event.Err
 	}
 	return nil
+}
+
+func contextCompactionLine(summarized, sent int) string {
+	if summarized > 0 && sent > 0 {
+		return fmt.Sprintf("~ context compacted summarized=%d sent=%d", summarized, sent)
+	}
+	return "~ context compacted"
 }
 
 func commandDisplay(event memaxagent.Event) string {

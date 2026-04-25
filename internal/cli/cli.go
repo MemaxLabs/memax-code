@@ -74,6 +74,9 @@ type options struct {
 	EventStream       eventStreamMode
 	ConfigPath        string
 	ConfigLoaded      bool
+	Compaction        compactionMode
+	ContextWindow     int
+	ContextSummary    int
 	SessionDir        string
 	HistoryFile       string
 	ResumeSessionID   string
@@ -106,6 +109,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	preset := fs.String("preset", "interactive_dev", "coding preset: safe_local, ci_repair, or interactive_dev")
 	uiRaw := fs.String("ui", string(renderModeAuto), "event renderer: auto, app, live, tui, or plain")
 	eventStreamRaw := fs.String("event-stream", "", "machine-readable event stream: json")
+	compactionRaw := fs.String("compaction", string(compactionModeAuto), "context compaction mode: auto or off")
+	contextWindow := fs.Int("context-window", 0, "approximate model token budget before auto-compaction; 0 infers from provider/model")
+	contextSummary := fs.Int("context-summary-tokens", 0, "approximate token budget for compacted context summaries; 0 chooses a default")
 	sessionDir := fs.String("session-dir", defaultSessionDir(), "directory for JSONL session transcripts")
 	historyFile := fs.String("history-file", defaultHistoryPath(), "path to interactive prompt history JSONL")
 	resumeSessionID := fs.String("resume", "", "resume an existing session id, or latest")
@@ -247,6 +253,28 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	if err != nil {
 		return options{}, err
 	}
+	compactionSetting := stringSetting(*compactionRaw, flagWasSet(fs, "compaction"), "MEMAX_CODE_COMPACTION", cfg.Compaction, string(compactionModeAuto))
+	compaction, err := parseCompactionMode(compactionSetting.Value)
+	if err != nil {
+		if compactionSetting.Source == settingSourceConfig {
+			return options{}, fmt.Errorf("invalid config %s compaction: %w", configPath, err)
+		}
+		return options{}, err
+	}
+	contextWindowValue, err := intSetting(*contextWindow, flagWasSet(fs, "context-window"), "MEMAX_CODE_CONTEXT_WINDOW", cfg.ContextWindow, 0)
+	if err != nil {
+		return options{}, err
+	}
+	if contextWindowValue < 0 {
+		return options{}, fmt.Errorf("context-window must be zero or greater")
+	}
+	contextSummaryValue, err := intSetting(*contextSummary, flagWasSet(fs, "context-summary-tokens"), "MEMAX_CODE_CONTEXT_SUMMARY_TOKENS", cfg.ContextSummary, 0)
+	if err != nil {
+		return options{}, err
+	}
+	if contextSummaryValue < 0 {
+		return options{}, fmt.Errorf("context-summary-tokens must be zero or greater")
+	}
 	inheritEnvFlagSet := flagWasSet(fs, "inherit-command-env")
 	noInheritEnvFlagSet := flagWasSet(fs, "no-inherit-command-env")
 	if inheritEnvFlagSet && noInheritEnvFlagSet {
@@ -301,6 +329,9 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		EventStream:       eventStreamMode,
 		ConfigPath:        configPath,
 		ConfigLoaded:      configLoaded,
+		Compaction:        compaction,
+		ContextWindow:     contextWindowValue,
+		ContextSummary:    contextSummaryValue,
 		SessionDir:        resolvedSessionDir,
 		HistoryFile:       resolvedHistoryFile,
 		ResumeSessionID:   strings.TrimSpace(*resumeSessionID),
@@ -401,6 +432,9 @@ type fileConfig struct {
 	Effort            string            `json:"effort,omitempty"`
 	Preset            string            `json:"preset,omitempty"`
 	UI                string            `json:"ui,omitempty"`
+	Compaction        string            `json:"compaction,omitempty"`
+	ContextWindow     *int              `json:"context_window,omitempty"`
+	ContextSummary    *int              `json:"context_summary_tokens,omitempty"`
 	SessionDir        string            `json:"session_dir,omitempty"`
 	HistoryFile       string            `json:"history_file,omitempty"`
 	InheritCommandEnv *bool             `json:"inherit_command_env,omitempty"`
@@ -698,6 +732,17 @@ func renderDryRun(w io.Writer, opts options) error {
 	fmt.Fprintf(w, "effort_description: %s\n", effort.Description())
 	fmt.Fprintf(w, "preset: %s\n", opts.Preset)
 	fmt.Fprintf(w, "ui: %s\n", opts.UI)
+	fmt.Fprintf(w, "compaction: %s\n", opts.Compaction)
+	if opts.Compaction == compactionModeOff {
+		fmt.Fprintln(w, "context_window: disabled")
+		fmt.Fprintln(w, "context_summary_tokens: disabled")
+	} else {
+		budgets := resolveContextBudgets(opts)
+		fmt.Fprintf(w, "context_window: %d\n", budgets.WindowTokens)
+		fmt.Fprintf(w, "context_summary_tokens: %d\n", budgets.SummaryTokens)
+		fmt.Fprintf(w, "context_main_tokens: %d\n", budgets.MainTokens)
+		fmt.Fprintf(w, "context_retry_tokens: %d\n", budgets.RetryTokens)
+	}
 	fmt.Fprintf(w, "config: %s\n", opts.ConfigPath)
 	fmt.Fprintf(w, "config_loaded: %t\n", opts.ConfigLoaded)
 	fmt.Fprintf(w, "cwd: %s\n", opts.CWD)

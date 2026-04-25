@@ -48,6 +48,9 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 	effort := fs.String("effort", defaultConfigEffort, "reasoning effort: auto, low, medium, high, or xhigh")
 	preset := fs.String("preset", defaultConfigPreset, "coding preset: safe_local, ci_repair, or interactive_dev")
 	uiRaw := fs.String("ui", defaultConfigUI, "event renderer: auto, app, live, tui, or plain")
+	compactionRaw := fs.String("compaction", string(compactionModeAuto), "context compaction mode: auto or off")
+	contextWindow := fs.Int("context-window", 0, "approximate model token budget before auto-compaction; 0 infers from provider/model")
+	contextSummary := fs.Int("context-summary-tokens", 0, "approximate token budget for compacted context summaries; 0 chooses a default")
 	sessionDir := fs.String("session-dir", defaultConfigSessionDir, "directory for JSONL session transcripts")
 	historyFile := fs.String("history-file", defaultConfigHistoryFile, "path to interactive prompt history JSONL")
 	inheritCommandEnv := fs.Bool("inherit-command-env", true, "let command tools inherit the host process environment")
@@ -91,6 +94,16 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	compactionValue, err := parseCompactionMode(*compactionRaw)
+	if err != nil {
+		return err
+	}
+	if *contextWindow < 0 {
+		return fmt.Errorf("context-window must be zero or greater")
+	}
+	if *contextSummary < 0 {
+		return fmt.Errorf("context-summary-tokens must be zero or greater")
+	}
 	if strings.TrimSpace(*sessionDir) == "" {
 		return fmt.Errorf("session-dir is required")
 	}
@@ -104,8 +117,15 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 		Effort:      effortValue.String(),
 		Preset:      string(presetValue),
 		UI:          string(uiValue),
+		Compaction:  string(compactionValue),
 		SessionDir:  strings.TrimSpace(*sessionDir),
 		HistoryFile: strings.TrimSpace(*historyFile),
+	}
+	if flagWasSet(fs, "context-window") {
+		cfg.ContextWindow = intPtr(*contextWindow)
+	}
+	if flagWasSet(fs, "context-summary-tokens") {
+		cfg.ContextSummary = intPtr(*contextSummary)
 	}
 	noInheritCommandEnvFlagSet := flagWasSet(fs, "no-inherit-command-env")
 	if flagWasSet(fs, "inherit-command-env") && noInheritCommandEnvFlagSet {
