@@ -2398,13 +2398,35 @@ func TestAppProgramComposerViewPaintsTrailingWhitespace(t *testing.T) {
 	}
 }
 
-func TestAppProgramComposerViewAvoidsFullWidthPaint(t *testing.T) {
+func TestAppProgramComposerViewAvoidsFullWidthPaintWhenEmpty(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	raw := model.composerView(120)
 	for _, line := range strings.Split(raw, "\n") {
 		if got := lipgloss.Width(line); got >= 119 {
 			t.Fatalf("composer line width = %d, want content-sized line below live region width:\n%q", got, raw)
 		}
+	}
+}
+
+func TestAppProgramComposerViewDocumentsFilledInputWidth(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.width = 121
+	model.input.SetValue(strings.Repeat("a", 200))
+	model.resize()
+
+	raw := model.composerView(120)
+	var widest int
+	for _, line := range strings.Split(raw, "\n") {
+		got := lipgloss.Width(line)
+		if got > widest {
+			widest = got
+		}
+		if got > 120 {
+			t.Fatalf("filled composer line width = %d, want no overflow beyond live region:\n%q", got, raw)
+		}
+	}
+	if widest < 119 {
+		t.Fatalf("filled composer widest line = %d, want test to document textarea-filled live-region width:\n%q", widest, raw)
 	}
 }
 
