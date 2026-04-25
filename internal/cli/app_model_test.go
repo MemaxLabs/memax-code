@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -2398,17 +2400,17 @@ func TestAppProgramComposerViewPaintsTrailingWhitespace(t *testing.T) {
 	}
 }
 
-func TestAppProgramComposerViewAvoidsFullWidthPaintWhenEmpty(t *testing.T) {
+func TestAppProgramComposerViewPaintsFullLiveRegionWidth(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	raw := model.composerView(120)
 	for _, line := range strings.Split(raw, "\n") {
-		if got := lipgloss.Width(line); got >= 119 {
-			t.Fatalf("composer line width = %d, want content-sized line below live region width:\n%q", got, raw)
+		if got := lipgloss.Width(line); got != 120 {
+			t.Fatalf("composer line width = %d, want full live region width:\n%q", got, raw)
 		}
 	}
 }
 
-func TestAppProgramComposerViewDocumentsFilledInputWidth(t *testing.T) {
+func TestAppProgramComposerViewFilledInputDoesNotOverflow(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.width = 121
 	model.input.SetValue(strings.Repeat("a", 200))
@@ -2425,8 +2427,73 @@ func TestAppProgramComposerViewDocumentsFilledInputWidth(t *testing.T) {
 			t.Fatalf("filled composer line width = %d, want no overflow beyond live region:\n%q", got, raw)
 		}
 	}
-	if widest < 119 {
-		t.Fatalf("filled composer widest line = %d, want test to document textarea-filled live-region width:\n%q", widest, raw)
+	if widest != 120 {
+		t.Fatalf("filled composer widest line = %d, want full live region width:\n%q", widest, raw)
+	}
+}
+
+func TestAppProgramCustomRendererReplaysTranscriptOnResize(t *testing.T) {
+	var out bytes.Buffer
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.output = &out
+	model.customRenderer = true
+	model.width = 100
+	model.height = 24
+	model.resize()
+	model.renderLiveRegion()
+	out.Reset()
+
+	updated, cmd := model.Update(tea.WindowSizeMsg{Width: 72, Height: 18})
+	if cmd != nil {
+		t.Fatalf("custom resize command = %T, want nil side-effect redraw", cmd)
+	}
+	model = updated.(*appProgramModel)
+	got := out.String()
+	for _, want := range []string{
+		"\x1b[2J\x1b[H",
+		"Welcome. Type a task or /help.",
+		"Memax Code",
+		"Ask Memax Code",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("custom resize redraw missing %q:\n%q", want, got)
+		}
+	}
+	if strings.Contains(got, "\x1b[?1049h") {
+		t.Fatalf("custom resize redraw entered alt screen:\n%q", got)
+	}
+}
+
+func TestAppProgramResizeReplayCapsWrappedPhysicalRows(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.customRenderer = true
+	model.width = 24
+	model.height = 8
+	model.resize()
+	model.transcript = appTranscriptTail{}
+	for i := range 10 {
+		model.appendLocalTranscriptLine("assistant", fmt.Sprintf("line-%02d %s", i, strings.Repeat("wrapped ", 10)))
+	}
+
+	lines := model.resizeTranscriptReplayLines()
+	if got, want := len(lines), model.resizeTranscriptReplayLimit(); got > want {
+		t.Fatalf("resize replay physical rows = %d, want <= %d:\n%s", got, want, strings.Join(lines, "\n"))
+	}
+	for _, line := range lines {
+		if got, want := lipgloss.Width(line), appProgramLiveRegionWidth(model.width); got > want {
+			t.Fatalf("resize replay line width = %d, want <= %d: %q", got, want, line)
+		}
+	}
+}
+
+func TestAppProgramLiveRegionRowsCountWrappedPhysicalRows(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.width = 12
+	model.resize()
+
+	got := model.liveRegionPhysicalRowsForView("abcdefghij klmnopqrst uvwxyz")
+	if want := 3; got != want {
+		t.Fatalf("live physical rows = %d, want %d", got, want)
 	}
 }
 

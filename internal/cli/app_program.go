@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
@@ -18,6 +21,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
+	"golang.org/x/term"
 )
 
 const (
@@ -72,24 +76,27 @@ type appProgramModel struct {
 	runPrompt interactivePromptRunner
 	runEvents interactiveEventPromptRunner
 	program   *tea.Program
+	output    io.Writer
 	history   persistentPromptHistory
 	composer  interactiveComposer
 	input     textarea.Model
 	runCancel context.CancelFunc
 	appTranscriptFormatter
-	width         int
-	height        int
-	sessionID     string
-	statusLine    string
-	lastError     string
-	runErrors     map[string]struct{}
-	running       bool
-	canceling     bool
-	showHelp      bool
-	firstErr      error
-	spinner       int
-	tickArmed     bool
-	turnStartedAt time.Time
+	width          int
+	height         int
+	sessionID      string
+	statusLine     string
+	lastError      string
+	runErrors      map[string]struct{}
+	running        bool
+	canceling      bool
+	showHelp       bool
+	firstErr       error
+	spinner        int
+	tickArmed      bool
+	turnStartedAt  time.Time
+	customRenderer bool
+	liveRows       int
 }
 
 func newAppProgramModel(ctx context.Context, opts options, runPrompt interactivePromptRunner) *appProgramModel {
@@ -152,15 +159,27 @@ func newAppProgramTextarea() textarea.Model {
 }
 
 func (m *appProgramModel) Init() tea.Cmd {
+	if m.customRenderer {
+		m.renderLiveRegion()
+		return textarea.Blink
+	}
 	return tea.Sequence(m.flushPrints(), textarea.Blink)
 }
 
 func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.customRenderer {
+		defer m.renderLiveRegion()
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resize()
+		if m.customRenderer {
+			m.drainPendingPrints()
+			m.redrawScreenAfterResize()
+			return m, nil
+		}
 	case tea.KeyMsg:
 		if cmd, handled := m.updateKey(msg); handled {
 			return m, m.withFlush(cmd)
@@ -502,7 +521,106 @@ func (m *appProgramModel) flushPrints() tea.Cmd {
 	if m.width > 0 {
 		lines = appProgramFitPrintedLines(lines, appProgramLiveRegionWidth(m.width))
 	}
+	if m.customRenderer {
+		m.printTranscriptLines(lines)
+		return nil
+	}
 	return tea.Println(strings.Join(lines, "\n"))
+}
+
+func (m *appProgramModel) printTranscriptLines(lines []string) {
+	if m.output == nil || len(lines) == 0 {
+		return
+	}
+	m.clearLiveRegion()
+	fmt.Fprintln(m.output, strings.Join(lines, "\n"))
+}
+
+func (m *appProgramModel) redrawScreenAfterResize() {
+	if m.output == nil {
+		return
+	}
+	m.liveRows = 0
+	fmt.Fprint(m.output, "\x1b[2J\x1b[H")
+	lines := m.resizeTranscriptReplayLines()
+	if len(lines) > 0 {
+		fmt.Fprintln(m.output, strings.Join(lines, "\n"))
+	}
+}
+
+func (m *appProgramModel) resizeTranscriptReplayLines() []string {
+	lines := m.transcript.lines(maxAppTranscriptLines)
+	width := m.liveRegionWidth()
+	if width > 0 {
+		lines = appProgramFitPrintedLines(lines, width)
+	}
+	limit := m.resizeTranscriptReplayLimit()
+	if limit <= 0 {
+		return nil
+	}
+	if len(lines) > limit {
+		lines = lines[len(lines)-limit:]
+	}
+	return lines
+}
+
+func (m *appProgramModel) resizeTranscriptReplayLimit() int {
+	if m.height <= 0 {
+		return maxAppTranscriptLines
+	}
+	liveRows := m.liveRegionPhysicalRows()
+	available := m.height - liveRows
+	if available <= 0 {
+		return 0
+	}
+	return min(maxAppTranscriptLines, available)
+}
+
+func (m *appProgramModel) clearLiveRegion() {
+	if m.output == nil || m.liveRows <= 0 {
+		return
+	}
+	fmt.Fprintf(m.output, "\x1b[%dA\r\x1b[J", m.liveRows)
+	m.liveRows = 0
+}
+
+func (m *appProgramModel) renderLiveRegion() {
+	if !m.customRenderer || m.output == nil {
+		return
+	}
+	m.clearLiveRegion()
+	view := m.View()
+	if view == "" {
+		return
+	}
+	fmt.Fprint(m.output, view)
+	fmt.Fprint(m.output, "\r\n")
+	m.liveRows = m.liveRegionPhysicalRowsForView(view)
+}
+
+func (m *appProgramModel) liveRegionPhysicalRows() int {
+	view := m.View()
+	return m.liveRegionPhysicalRowsForView(view)
+}
+
+func (m *appProgramModel) liveRegionPhysicalRowsForView(view string) int {
+	if view == "" {
+		return 0
+	}
+	width := m.liveRegionWidth()
+	lines := strings.Split(view, "\n")
+	if width > 0 {
+		lines = appProgramFitPrintedLines(lines, width)
+	}
+	return len(lines)
+}
+
+func (m *appProgramModel) liveRegionWidth() int {
+	width := m.width
+	if width <= 0 {
+		width = defaultAppShellWidth
+	}
+	return appProgramLiveRegionWidth(width)
 }
 
 func (m *appProgramModel) withFlush(cmd tea.Cmd) tea.Cmd {
@@ -701,12 +819,7 @@ func (m *appProgramModel) composerView(width int) string {
 	for i, line := range lines {
 		lines[i] = appProgramFitLine(line, contentWidth)
 	}
-	// Do not force the composer to paint to the full terminal width in inline
-	// mode. Previously-rendered full-width rows are reflowed by the terminal
-	// when the window becomes narrower, while Bubble Tea's inline renderer still
-	// tracks the old logical row count. Keeping the painted region content-sized
-	// prevents resize cycles from leaving stale gray bars in scrollback.
-	return appProgramComposerStyle.Render(strings.Join(lines, "\n"))
+	return appProgramComposerStyle.Width(width).Render(strings.Join(lines, "\n"))
 }
 
 func appProgramEmptyComposerLine(placeholder string) string {
@@ -2038,8 +2151,22 @@ func runInteractiveAppWithEvents(ctx context.Context, stdin io.Reader, stdout io
 		tea.WithOutput(stdout),
 		tea.WithContext(ctx),
 	}
+	if terminal, _, _ := terminalWriterInfo(stdout); terminal {
+		model.output = stdout
+		model.customRenderer = true
+		programOpts = append(programOpts, tea.WithoutRenderer())
+	}
 	program := tea.NewProgram(model, programOpts...)
 	model.program = program
+	var cleanup func()
+	var terminalErr error
+	if model.customRenderer {
+		cleanup, terminalErr = startAppProgramCustomTerminal(ctx, stdin, stdout, program)
+		if terminalErr != nil {
+			return terminalErr
+		}
+		defer cleanup()
+	}
 	finalModel, err := program.Run()
 	if err != nil {
 		return err
@@ -2048,4 +2175,50 @@ func runInteractiveAppWithEvents(ctx context.Context, stdin io.Reader, stdout io
 		return result.firstErr
 	}
 	return nil
+}
+
+func startAppProgramCustomTerminal(ctx context.Context, stdin io.Reader, stdout io.Writer, program *tea.Program) (func(), error) {
+	cleanup := func() {}
+	inputFile, inputOK := stdin.(*os.File)
+	if inputOK && term.IsTerminal(int(inputFile.Fd())) {
+		previous, err := term.MakeRaw(int(inputFile.Fd()))
+		if err != nil {
+			return nil, fmt.Errorf("enable raw terminal input: %w", err)
+		}
+		cleanup = func() {
+			_ = term.Restore(int(inputFile.Fd()), previous)
+		}
+	}
+	outputFile, outputOK := stdout.(*os.File)
+	if !outputOK || !term.IsTerminal(int(outputFile.Fd())) {
+		return cleanup, nil
+	}
+	resizeCtx, cancelResize := context.WithCancel(ctx)
+	previousCleanup := cleanup
+	cleanup = func() {
+		cancelResize()
+		previousCleanup()
+	}
+	resizeSignals := make(chan os.Signal, 1)
+	signal.Notify(resizeSignals, syscall.SIGWINCH)
+	go func() {
+		defer signal.Stop(resizeSignals)
+		sendSize := func() {
+			width, height, err := term.GetSize(int(outputFile.Fd()))
+			if err != nil || width <= 0 || height <= 0 {
+				return
+			}
+			program.Send(tea.WindowSizeMsg{Width: width, Height: height})
+		}
+		sendSize()
+		for {
+			select {
+			case <-resizeCtx.Done():
+				return
+			case <-resizeSignals:
+				sendSize()
+			}
+		}
+	}()
+	return cleanup, nil
 }
