@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
@@ -595,7 +596,7 @@ func appToolResultStatusLines(toolUse *model.ToolUse, result *model.ToolResult) 
 		lines = append(lines, appActivityTailLines("error", appProgramErrorStyle, result.Content)...)
 		return lines
 	}
-	lines := []string{appProgramDimStyle.Render("  └ ok")}
+	lines := []string{appProgramDimStyle.Render(appToolResultSuccessLine(result))}
 	if appToolShowsResultTail(result.Name) {
 		lines = append(lines, appActivityTailLines("output", appProgramDimStyle, result.Content)...)
 	}
@@ -770,6 +771,68 @@ func appToolMetadataString(metadata map[string]any, key string) string {
 	default:
 		return strings.TrimSpace(fmt.Sprint(typed))
 	}
+}
+
+func appToolMetadataInt(metadata map[string]any, key string) (int, bool) {
+	if len(metadata) == 0 {
+		return 0, false
+	}
+	value, ok := metadata[key]
+	if !ok || value == nil {
+		return 0, false
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int8:
+		return int(typed), true
+	case int16:
+		return int(typed), true
+	case int32:
+		return int(typed), true
+	case int64:
+		return int(typed), true
+	case uint:
+		return int(typed), true
+	case uint8:
+		return int(typed), true
+	case uint16:
+		return int(typed), true
+	case uint32:
+		return int(typed), true
+	case uint64:
+		return int(typed), true
+	case float32:
+		return int(typed), true
+	case float64:
+		return int(typed), true
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(typed))
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
+}
+
+func appToolMetadataBool(metadata map[string]any, key string) (bool, bool) {
+	if len(metadata) == 0 {
+		return false, false
+	}
+	value, ok := metadata[key]
+	if !ok || value == nil {
+		return false, false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return false, false
 }
 
 func appShortDisplayID(id string) string {
@@ -1105,7 +1168,116 @@ func appGenericToolResultStatusLines(result *model.ToolResult) []string {
 		lines = append(lines, appActivityTailLines("error", appProgramErrorStyle, result.Content)...)
 		return lines
 	}
-	return []string{appProgramDimStyle.Render("  └ ok")}
+	return []string{appProgramDimStyle.Render(appToolResultSuccessLine(result))}
+}
+
+func appToolResultSuccessLine(result *model.ToolResult) string {
+	if result == nil {
+		return "  └ ok"
+	}
+	if command := appCommandMetadataResultSummary(result.Metadata); command != "" {
+		return "  └ " + command
+	}
+	if summary := appToolResultContentSummary(result.Content); summary != "" {
+		return "  └ ok: " + summary
+	}
+	return "  └ ok"
+}
+
+func appCommandMetadataResultSummary(metadata map[string]any) string {
+	exitCode, hasExit := appToolMetadataInt(metadata, model.MetadataCommandExitCode)
+	timedOut, hasTimedOut := appToolMetadataBool(metadata, model.MetadataCommandTimedOut)
+	durationMS, hasDuration := appToolMetadataInt(metadata, model.MetadataCommandDurationMS)
+	stdoutBytes, hasStdout := appToolMetadataInt(metadata, model.MetadataCommandStdoutBytes)
+	stderrBytes, hasStderr := appToolMetadataInt(metadata, model.MetadataCommandStderrBytes)
+	truncated, hasTruncated := appToolMetadataBool(metadata, model.MetadataCommandOutputTruncated)
+	if !hasExit && !hasTimedOut && !hasDuration && !hasStdout && !hasStderr && !hasTruncated {
+		return ""
+	}
+	status := "done"
+	if exitCode != 0 || timedOut {
+		status = "failed"
+	}
+	parts := []string{status}
+	if hasExit {
+		parts = append(parts, fmt.Sprintf("exit=%d", exitCode))
+	}
+	parts = append(parts, appCommandRuntimeSummaryParts(durationMS, hasDuration, stdoutBytes, hasStdout, stderrBytes, hasStderr, truncated, hasTruncated)...)
+	if timedOut {
+		parts = append(parts, "timeout=true")
+	}
+	return strings.Join(parts, " ")
+}
+
+func appToolResultContentSummary(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	lower := strings.ToLower(content)
+	switch lower {
+	case "ok", "done", "success", "true":
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	nonEmpty := 0
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			nonEmpty++
+		}
+	}
+	if nonEmpty == 0 {
+		return ""
+	}
+	if nonEmpty == 1 {
+		return appInlineSnippet(content, 120)
+	}
+	return fmt.Sprintf("%d lines, %s", nonEmpty, appFormatBytes(len(content)))
+}
+
+func appCommandRuntimeSummaryParts(durationMS int, hasDuration bool, stdoutBytes int, hasStdout bool, stderrBytes int, hasStderr bool, truncated bool, hasTruncated bool) []string {
+	parts := make([]string, 0, 4)
+	if hasDuration && durationMS > 0 {
+		parts = append(parts, "duration="+appFormatDurationMS(durationMS))
+	}
+	if hasStdout && stdoutBytes > 0 {
+		parts = append(parts, "stdout="+appFormatBytes(stdoutBytes))
+	}
+	if hasStderr && stderrBytes > 0 {
+		parts = append(parts, "stderr="+appFormatBytes(stderrBytes))
+	}
+	if hasTruncated && truncated {
+		parts = append(parts, "truncated=true")
+	}
+	return parts
+}
+
+func appFormatDurationMS(ms int) string {
+	if ms <= 0 {
+		return "0ms"
+	}
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	if ms%1000 == 0 {
+		return fmt.Sprintf("%ds", ms/1000)
+	}
+	return fmt.Sprintf("%.1fs", float64(ms)/1000)
+}
+
+func appFormatBytes(bytes int) string {
+	if bytes < 0 {
+		bytes = 0
+	}
+	const kb = 1024
+	const mb = kb * 1024
+	if bytes < kb {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	if bytes < mb {
+		return fmt.Sprintf("%.1fKB", float64(bytes)/kb)
+	}
+	return fmt.Sprintf("%.1fMB", float64(bytes)/mb)
 }
 
 func (f *appTranscriptFormatter) flushPendingToolGroups() {
@@ -1420,6 +1592,7 @@ func appCommandTerminalChildLine(event memaxagent.Event) (string, lipgloss.Style
 			parts = append(parts, "id="+command.CommandID)
 		}
 		parts = append(parts, fmt.Sprintf("exit=%d", command.ExitCode))
+		parts = append(parts, appCommandRuntimeSummaryParts(command.DurationMS, command.DurationMS != 0, command.StdoutBytes, command.StdoutBytes != 0, command.StderrBytes, command.StderrBytes != 0, command.OutputTruncated, command.OutputTruncated)...)
 		if command.TimedOut {
 			parts = append(parts, "timeout=true")
 		}

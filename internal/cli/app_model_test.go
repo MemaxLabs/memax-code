@@ -493,6 +493,32 @@ func TestAppProgramStructuredRunCommandRendersBeforeResult(t *testing.T) {
 	}
 }
 
+func TestAppProgramStructuredCommandResultSummarizesRuntime(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:    "tool-run-1",
+		Name:  "run_command",
+		Input: json.RawMessage(`{"command":"go test ./..."}`),
+	}})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
+		Operation:       "run",
+		Command:         "go test ./...",
+		ExitCode:        0,
+		DurationMS:      1234,
+		StdoutBytes:     2048,
+		StderrBytes:     12,
+		OutputTruncated: true,
+	}})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	want := "• Bash(go test ./...)\n  └ done exit=0 duration=1.2s stdout=2.0KB stderr=12B truncated=true"
+	if !strings.Contains(got, want) {
+		t.Fatalf("command result summary missing:\nwant %q\n%s", want, got)
+	}
+}
+
 func TestAppProgramStructuredRunCommandFinishWithoutCommandStaysGrouped(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
@@ -1290,6 +1316,28 @@ func TestAppProgramStructuredToolUseRendersBeforeResult(t *testing.T) {
 	}
 	if !strings.Contains(after, "• Read file(README.md)\n  └ ok") {
 		t.Fatalf("tool result did not continue under invocation:\n%s", after)
+	}
+}
+
+func TestAppProgramStructuredToolResultSummarizesContent(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:    "tool-1",
+		Name:  "workspace_list_files",
+		Input: json.RawMessage(`{"prefix":"."}`),
+	}})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		ToolUseID: "tool-1",
+		Name:      "workspace_list_files",
+		Content:   "README.md\ngo.mod\ncmd/",
+	}})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	want := "• List files(.)\n  └ ok: 3 lines,"
+	if !strings.Contains(got, want) {
+		t.Fatalf("tool result summary missing:\nwant prefix %q\n%s", want, got)
 	}
 }
 
