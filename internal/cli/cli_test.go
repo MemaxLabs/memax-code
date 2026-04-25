@@ -334,6 +334,18 @@ func TestInferredContextWindowHonorsGatewayModelFamily(t *testing.T) {
 			modelName: "gateway/custom-model",
 			want:      200000,
 		},
+		{
+			name:      "known openai family unknown model keeps openai default",
+			provider:  providerAnthropic,
+			modelName: "openai/custom-model",
+			want:      defaultContextWindowTokens,
+		},
+		{
+			name:      "known anthropic family unknown model keeps anthropic default",
+			provider:  providerOpenAI,
+			modelName: "anthropic/future-model",
+			want:      200000,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
