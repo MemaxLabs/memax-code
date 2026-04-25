@@ -563,6 +563,9 @@ func appToolResultStatusLines(toolUse *model.ToolUse, result *model.ToolResult) 
 	if result.Name == "run_subagent" {
 		return appSubagentResultStatusLines(toolUse, result)
 	}
+	if result.Name == "web_fetch" {
+		return appWebFetchResultStatusLines(result)
+	}
 	if result.IsError {
 		lines := []string{appProgramErrorStyle.Render("  └ error")}
 		lines = append(lines, appActivityTailLines("error", appProgramErrorStyle, result.Content)...)
@@ -573,6 +576,54 @@ func appToolResultStatusLines(toolUse *model.ToolUse, result *model.ToolResult) 
 		lines = append(lines, appActivityTailLines("output", appProgramDimStyle, result.Content)...)
 	}
 	return lines
+}
+
+func appWebFetchResultStatusLines(result *model.ToolResult) []string {
+	if result == nil {
+		return nil
+	}
+	if result.IsError {
+		lines := []string{appProgramErrorStyle.Render("  └ error")}
+		lines = append(lines, appActivityTailLines("error", appProgramErrorStyle, result.Content)...)
+		return lines
+	}
+	var parts []string
+	if status := appToolMetadataString(result.Metadata, model.MetadataWebStatusCode); status != "" {
+		parts = append(parts, "status="+status)
+	}
+	if bytes := appToolMetadataString(result.Metadata, model.MetadataWebContentBytes); bytes != "" {
+		parts = append(parts, "bytes="+bytes)
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "ok")
+	} else {
+		parts = append([]string{"ok"}, parts...)
+	}
+	lines := []string{appProgramSuccessStyle.Render("  └ " + strings.Join(parts, " "))}
+	if title := appWebFetchContentField(result.Content, "Title"); title != "" {
+		lines = append(lines, appProgramDimStyle.Render(appActivityChildLine("title: "+appInlineSnippet(title, 120))))
+	}
+	if finalURL := appToolMetadataString(result.Metadata, model.MetadataWebFinalURL); finalURL != "" {
+		lines = append(lines, appProgramDimStyle.Render(appActivityChildLine("final: "+appInlineSnippet(finalURL, 120))))
+	}
+	return lines
+}
+
+func appWebFetchContentField(content, field string) string {
+	// webtools currently emits response fields before the blank-line body
+	// separator. Keep transcript summaries on that metadata header instead of
+	// scanning fetched page content.
+	prefix := field + ":"
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if value, ok := strings.CutPrefix(line, prefix); ok {
+			return strings.TrimSpace(value)
+		}
+		if line == "" {
+			return ""
+		}
+	}
+	return ""
 }
 
 func appSubagentResultStatusLines(toolUse *model.ToolUse, result *model.ToolResult) []string {
@@ -971,7 +1022,7 @@ func (f *appTranscriptFormatter) activeActivityLines() []string {
 }
 
 func (f *appTranscriptFormatter) toolUseUsesLiveGroup(name string) bool {
-	return f.liveCommandGroups && name == "run_subagent"
+	return f.liveCommandGroups && !appToolUseDefersToCommandLifecycle(name)
 }
 
 func (f *appTranscriptFormatter) pendingToolGroup(key string, display string) *appProgramToolGroup {
@@ -987,9 +1038,6 @@ func (f *appTranscriptFormatter) pendingToolGroup(key string, display string) *a
 		f.pendingToolGroups[key] = group
 		f.pendingToolOrder = append(f.pendingToolOrder, key)
 		return group
-	}
-	if strings.TrimSpace(display) != "" {
-		group.display = display
 	}
 	return group
 }

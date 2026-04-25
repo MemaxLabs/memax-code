@@ -1144,14 +1144,13 @@ func TestAppProgramStructuredReplacingToolUseIDKeepsOriginalRenderedDisplay(t *t
 	for _, want := range []string{
 		"• read_file call",
 		"~ checkpoint checkpoint-1",
-		"• read_file result",
 		"  └ ok",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("same-ID replacement transcript missing %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "• Apply patch result") {
+	if strings.Contains(got, "• Apply patch") {
 		t.Fatalf("same-ID replacement changed visible tool name:\n%s", got)
 	}
 }
@@ -1176,9 +1175,6 @@ func TestAppProgramStructuredNameOnlyToolResultsUseFIFO(t *testing.T) {
 	if count := strings.Count(got, "  └ ok"); count != 2 {
 		t.Fatalf("read_file ok count = %d, want 2:\n%s", count, got)
 	}
-	if count := countTranscriptLine(got, "• read_file result"); count != 2 {
-		t.Fatalf("read_file continuation count = %d, want 2:\n%s", count, got)
-	}
 }
 
 func TestAppProgramStructuredToolUseRendersBeforeResult(t *testing.T) {
@@ -1190,9 +1186,9 @@ func TestAppProgramStructuredToolUseRendersBeforeResult(t *testing.T) {
 		Name: "workspace_list_files",
 	}})
 
-	before := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	before := ansi.Strip(strings.Join(m.activeActivityLines(), "\n"))
 	if !strings.Contains(before, "• workspace_list_files call") {
-		t.Fatalf("tool invocation did not render before result:\n%s", before)
+		t.Fatalf("tool invocation did not render in live activity before result:\n%s", before)
 	}
 	if strings.Contains(before, "  └ ok") {
 		t.Fatalf("tool result rendered before completion:\n%s", before)
@@ -1210,6 +1206,26 @@ func TestAppProgramStructuredToolUseRendersBeforeResult(t *testing.T) {
 	}
 	if !strings.Contains(after, "• workspace_list_files call\n  └ ok") {
 		t.Fatalf("tool result did not continue under invocation:\n%s", after)
+	}
+}
+
+func TestAppProgramViewKeepsThinkingStatusWithActiveTool(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+	m.width = 100
+	m.running = true
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:   "tool-1",
+		Name: "workspace_list_files",
+	}})
+
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "• workspace_list_files call") {
+		t.Fatalf("running view missing active tool cell:\n%s", view)
+	}
+	if !strings.Contains(view, "thinking") {
+		t.Fatalf("running view with active tool should keep thinking status:\n%s", view)
 	}
 }
 
@@ -1236,7 +1252,6 @@ func TestAppProgramStructuredToolResultAfterInterveningActivityKeepsContext(t *t
 	for _, want := range []string{
 		"• workspace_list_files call",
 		"~ checkpoint checkpoint-1",
-		"• workspace_list_files result",
 		"  └ ok",
 	} {
 		if !strings.Contains(got, want) {
@@ -1272,7 +1287,6 @@ func TestAppProgramStructuredToolErrorAfterInterveningActivityKeepsContext(t *te
 	for _, want := range []string{
 		"• read_file call",
 		"~ checkpoint checkpoint-1",
-		"• read_file error",
 		"  └ error",
 		"  └ error: permission denied",
 	} {
@@ -1282,6 +1296,59 @@ func TestAppProgramStructuredToolErrorAfterInterveningActivityKeepsContext(t *te
 	}
 	if strings.Contains(got, "• read_file result\n  └ error") {
 		t.Fatalf("tool error continuation used neutral result label:\n%s", got)
+	}
+}
+
+func TestAppProgramParallelWebFetchesCommitAsGroupedCells(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	for _, event := range []memaxagent.Event{
+		{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+			ID:    "fetch-1",
+			Name:  "web_fetch",
+			Input: json.RawMessage(`{"url":"https://example.com/a"}`),
+		}},
+		{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+			ID:    "fetch-2",
+			Name:  "web_fetch",
+			Input: json.RawMessage(`{"url":"https://example.com/b"}`),
+		}},
+		{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+			ToolUseID: "fetch-2",
+			Name:      "web_fetch",
+			Content:   "URL: https://example.com/b\nStatus: 200\nTitle: B",
+			Metadata: map[string]any{
+				model.MetadataWebStatusCode:   200,
+				model.MetadataWebContentBytes: 42,
+			},
+		}},
+		{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+			ToolUseID: "fetch-1",
+			Name:      "web_fetch",
+			Content:   "URL: https://example.com/a\nStatus: 200\nTitle: A",
+			Metadata: map[string]any{
+				model.MetadataWebStatusCode:   200,
+				model.MetadataWebContentBytes: 21,
+			},
+		}},
+	} {
+		m.appendEvent(event)
+	}
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"• Web fetch(https://example.com/b)\n  └ ok status=200 bytes=42\n  └ title: B",
+		"• Web fetch(https://example.com/a)\n  └ ok status=200 bytes=21\n  └ title: A",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("parallel web fetch transcript missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"web_fetch result", "web_fetch call"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("parallel web fetch transcript leaked raw %q:\n%s", unwanted, got)
+		}
 	}
 }
 
@@ -1784,8 +1851,9 @@ func TestAppProgramViewUsesQuietIdleStatus(t *testing.T) {
 			break
 		}
 	}
-	if promptAt != 2 || rows[promptAt-1] != "" || rows[promptAt-2] != "" {
-		t.Fatalf("idle view should use one outside margin plus composer padding before prompt:\n%s", view)
+	expectedPromptAt := appProgramBottomInset + 1 + appProgramBottomInset + 1
+	if promptAt != expectedPromptAt || rows[promptAt-1] != "" || rows[promptAt-2] != "" || rows[promptAt-3] != "" || rows[promptAt-4] != "" {
+		t.Fatalf("idle view should reserve a stable hidden activity slot above the composer:\n%s", view)
 	}
 }
 
@@ -1998,8 +2066,8 @@ func TestAppProgramViewCompactsWhenActivityHides(t *testing.T) {
 	model.statusLine = "idle"
 	idleRows := strippedViewRows(ansi.Strip(model.View()))
 
-	if got, want := len(runningRows)-len(idleRows), 2; got != want {
-		t.Fatalf("idle view reclaimed %d rows, want %d: idle=%d running=%d\nidle:\n%s\nrunning:\n%s", got, want, len(idleRows), len(runningRows), strings.Join(idleRows, "\n"), strings.Join(runningRows, "\n"))
+	if got, want := len(runningRows)-len(idleRows), 0; got != want {
+		t.Fatalf("idle view changed by %d rows, want stable height %d: idle=%d running=%d\nidle:\n%s\nrunning:\n%s", got, want, len(idleRows), len(runningRows), strings.Join(idleRows, "\n"), strings.Join(runningRows, "\n"))
 	}
 	for _, row := range idleRows {
 		if strings.Contains(row, "thinking") {
@@ -2236,6 +2304,64 @@ func TestAppProgramTranscriptRendersAssistantHeadingsAcrossChunks(t *testing.T) 
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("assistant heading markdown leaked %q:\n%s", unwanted, got)
 		}
+	}
+}
+
+func TestAppProgramTranscriptRendersAssistantMarkdownTables(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{}
+
+	model.appendTranscript("[assistant]\n| Area | Status |\n| --- | --- |\n| UI | **better** |\n")
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"•   │ Area │ Status │",
+		"  ├────┼──────┤",
+		"  │ UI   │ better │",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("markdown table transcript missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"| Area | Status |", "| --- | --- |", "**better**"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("markdown table transcript leaked raw marker %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestAppProgramTranscriptRendersAssistantMarkdownTableEmptyCells(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{}
+
+	model.appendTranscript("[assistant]\n| A | B | C |\n| --- | --- | --- |\n| a | | c |\n")
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(got, "  │ a │   │ c │") {
+		t.Fatalf("markdown table empty cell was not preserved:\n%s", got)
+	}
+}
+
+func TestAppProgramTranscriptDoesNotRenderProsePipesAsTables(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{}
+
+	model.appendTranscript("[assistant]\nRun `grep foo | head` to filter.\nUse --flag yes|no for that.\n")
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, want := range []string{
+		"• Run grep foo | head to filter.",
+		"  Use --flag yes|no for that.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("assistant prose pipe line missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "│") || strings.Contains(got, "├") {
+		t.Fatalf("assistant prose pipe line rendered as table:\n%s", got)
 	}
 }
 

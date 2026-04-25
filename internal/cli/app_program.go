@@ -452,14 +452,23 @@ func (m *appProgramModel) View() string {
 		width = defaultAppShellWidth
 	}
 
-	rows := make([]string, 0, 6)
-	if active := m.activeRuntimeActivityView(); active != "" {
+	rows := make([]string, 0, 8)
+	active := m.activeRuntimeActivityView()
+	activity := m.activityStatusView()
+	if active != "" {
 		rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 		rows = append(rows, active)
 	}
-	if activity := m.activityStatusView(); activity != "" {
+	if activity != "" {
 		rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 		rows = append(rows, activity)
+	}
+	if active == "" && activity == "" {
+		// Keep the bottom live region height stable when transient activity
+		// clears. Inline Bubble Tea rendering otherwise shrinks the view and can
+		// leave a stale blank row below the status bar in terminal scrollback.
+		rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
+		rows = append(rows, "")
 	}
 	rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 	rows = append(rows, m.composerView(width))
@@ -583,6 +592,7 @@ type appProgramTranscriptCompactor struct {
 	assistantHasContent     bool
 	assistantAtLineBoundary bool
 	assistantLineBuffer     string
+	assistantTableWidths    []int
 	outputHasOpenLine       bool
 	lastActivityTool        string
 	activityDetail          *appProgramActivityDetail
@@ -731,6 +741,7 @@ func (c *appProgramTranscriptCompactor) compactLine(line string, completeLine bo
 		c.section = section
 		c.skipActivityDetail = false
 		c.assistantInCodeBlock = false
+		c.assistantTableWidths = nil
 		if label != "" {
 			out = append(out, label)
 		}
@@ -802,18 +813,26 @@ func (c *appProgramTranscriptCompactor) compactAssistantLine(line string) string
 	}
 	prefix := c.assistantLinePrefix()
 	if strings.HasPrefix(trimmed, "```") {
+		c.assistantTableWidths = nil
 		c.assistantInCodeBlock = !c.assistantInCodeBlock
 		return prefix + appProgramCodeStyle.Render(trimmed)
 	}
 	if c.assistantInCodeBlock {
+		c.assistantTableWidths = nil
 		return prefix + appProgramCodeStyle.Render(strings.TrimRight(trimmedRight, "\t "))
 	}
 	if heading, ok := appMarkdownHeading(trimmed); ok {
+		c.assistantTableWidths = nil
 		return prefix + appProgramHeadingStyle.Render(appStripMarkdownDelimiters(heading))
 	}
 	if strings.HasPrefix(trimmed, ">") && !strings.HasPrefix(trimmed, "> tool ") {
+		c.assistantTableWidths = nil
 		return prefix + appProgramQuoteStyle.Render("│ "+appStripMarkdownDelimiters(strings.TrimSpace(strings.TrimPrefix(trimmed, ">"))))
 	}
+	if table, ok := c.compactAssistantTableLine(trimmedRight); ok {
+		return prefix + table
+	}
+	c.assistantTableWidths = nil
 	if indent, bullet, rest, ok := appMarkdownBulletLine(trimmedRight); ok {
 		if !c.assistantHasContent && indent == "" && bullet == "•" {
 			return prefix + appRenderInlineMarkdown(rest)
@@ -824,6 +843,42 @@ func (c *appProgramTranscriptCompactor) compactAssistantLine(line string) string
 		return prefix + appProgramCodeStyle.Render(strings.TrimRight(trimmedRight, "\t "))
 	}
 	return prefix + appRenderInlineMarkdown(trimmedRight)
+}
+
+func (c *appProgramTranscriptCompactor) compactAssistantTableLine(line string) (string, bool) {
+	cells, ok := appMarkdownTableCells(line)
+	if !ok || len(cells) < 2 {
+		return "", false
+	}
+	if appMarkdownTableSeparator(cells) {
+		widths := c.assistantTableWidths
+		if len(widths) != len(cells) {
+			widths = appMarkdownTableCellWidths(cells)
+		}
+		segments := make([]string, len(widths))
+		for i, width := range widths {
+			segments[i] = strings.Repeat("─", max(3, width))
+		}
+		return appProgramDimStyle.Render("  ├" + strings.Join(segments, "┼") + "┤"), true
+	}
+
+	rendered := make([]string, len(cells))
+	for i, cell := range cells {
+		rendered[i] = appRenderInlineMarkdown(strings.TrimSpace(cell))
+	}
+	widths := c.assistantTableWidths
+	if len(widths) != len(rendered) {
+		widths = make([]int, len(rendered))
+	}
+	for i, cell := range rendered {
+		widths[i] = max(widths[i], lipgloss.Width(cell))
+	}
+	c.assistantTableWidths = widths
+
+	for i, cell := range rendered {
+		rendered[i] = appPadRenderedRight(cell, widths[i])
+	}
+	return appProgramMarkdownStyle.Render("  │ ") + strings.Join(rendered, appProgramDimStyle.Render(" │ ")) + appProgramMarkdownStyle.Render(" │"), true
 }
 
 func (c *appProgramTranscriptCompactor) assistantLinePrefix() string {
@@ -948,6 +1003,48 @@ func appMarkdownBulletLine(line string) (indent, bullet, rest string, ok bool) {
 		return "", "", "", false
 	}
 	return indent, bullet, rest, true
+}
+
+func appMarkdownTableCells(line string) ([]string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "|") || !strings.HasSuffix(trimmed, "|") {
+		return nil, false
+	}
+	line = strings.TrimSuffix(strings.TrimPrefix(trimmed, "|"), "|")
+	raw := strings.Split(line, "|")
+	cells := make([]string, len(raw))
+	for i, cell := range raw {
+		cells[i] = strings.TrimSpace(cell)
+	}
+	return cells, true
+}
+
+func appMarkdownTableCellWidths(cells []string) []int {
+	widths := make([]int, len(cells))
+	for i, cell := range cells {
+		widths[i] = max(3, lipgloss.Width(appRenderInlineMarkdown(strings.TrimSpace(cell))))
+	}
+	return widths
+}
+
+func appMarkdownTableSeparator(cells []string) bool {
+	if len(cells) == 0 {
+		return false
+	}
+	for _, cell := range cells {
+		cell = strings.Trim(cell, " :-")
+		if cell != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func appPadRenderedRight(text string, width int) string {
+	if pad := width - lipgloss.Width(text); pad > 0 {
+		return text + strings.Repeat(" ", pad)
+	}
+	return text
 }
 
 func appMarkdownIndentPrefix(line string) (width int, indent, content string) {
@@ -1128,6 +1225,10 @@ func appToolDisplayName(name string) string {
 		return "Apply patch"
 	case "run_subagent":
 		return "Subagent"
+	case "web_fetch":
+		return "Web fetch"
+	case "web_search":
+		return "Web search"
 	default:
 		return statusValue(name)
 	}
@@ -1151,6 +1252,11 @@ func appToolUseDisplay(toolUse *model.ToolUse) string {
 		}
 		return display
 	}
+	if toolUse.Name == "web_fetch" {
+		if url := appToolUseWebFetchURL(toolUse); url != "" {
+			return name + "(" + appInlineSnippet(url, 96) + ")"
+		}
+	}
 	return name + " call"
 }
 
@@ -1170,6 +1276,19 @@ func appToolUseCommand(toolUse *model.ToolUse) string {
 		return ""
 	}
 	return strings.TrimSpace(input.Command)
+}
+
+func appToolUseWebFetchURL(toolUse *model.ToolUse) string {
+	if toolUse == nil || toolUse.Name != "web_fetch" {
+		return ""
+	}
+	var input struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(toolUse.Input, &input); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(input.URL)
 }
 
 func appToolUseSubagent(toolUse *model.ToolUse) string {
