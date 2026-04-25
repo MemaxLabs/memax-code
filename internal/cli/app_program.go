@@ -1126,6 +1126,8 @@ func appToolDisplayName(name string) string {
 		return "Resize command terminal"
 	case "workspace_apply_patch":
 		return "Apply patch"
+	case "run_subagent":
+		return "Subagent"
 	default:
 		return statusValue(name)
 	}
@@ -1141,6 +1143,9 @@ func appToolUseDisplay(toolUse *model.ToolUse) string {
 	}
 	if command := appToolUseCommand(toolUse); command != "" {
 		return name + "(" + command + ")"
+	}
+	if agent := appToolUseSubagent(toolUse); agent != "" {
+		return name + "(" + agent + ")"
 	}
 	return name + " call"
 }
@@ -1163,9 +1168,22 @@ func appToolUseCommand(toolUse *model.ToolUse) string {
 	return strings.TrimSpace(input.Command)
 }
 
+func appToolUseSubagent(toolUse *model.ToolUse) string {
+	if toolUse == nil || toolUse.Name != "run_subagent" {
+		return ""
+	}
+	var input struct {
+		Agent string `json:"agent"`
+	}
+	if err := json.Unmarshal(toolUse.Input, &input); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(input.Agent)
+}
+
 func appToolShowsResultTail(name string) bool {
 	switch name {
-	case "read_command_output", "wait_command_output", "write_command_input":
+	case "read_command_output", "wait_command_output", "write_command_input", "run_subagent":
 		return true
 	default:
 		return false

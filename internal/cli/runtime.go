@@ -18,17 +18,23 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/coding"
+	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/workspace"
 	"github.com/charmbracelet/x/ansi"
 )
 
 const (
-	maxVerificationOutputBytes = 16 * 1024
-	resumeLatest               = "latest"
-	maxSessionTitleRunes       = 80
+	maxVerificationOutputBytes     = 16 * 1024
+	maxSubagentResultBytes         = 16 * 1024
+	maxReadOnlySubagentRunDuration = 2 * time.Minute
+	maxWorkerSubagentRunDuration   = 15 * time.Minute
+	resumeLatest                   = "latest"
+	maxSessionTitleRunes           = 80
 )
 
 func runPrompt(ctx context.Context, stdout io.Writer, opts options) error {
@@ -49,7 +55,7 @@ func runPromptWithEvents(ctx context.Context, opts options, observe func(memaxag
 		return "", err
 	}
 
-	stack, err := buildStack(opts)
+	stack, err := buildStackWithModel(opts, client)
 	if err != nil {
 		return "", err
 	}
@@ -84,7 +90,7 @@ func runPromptWithEventsRendered(ctx context.Context, stdout io.Writer, opts opt
 		return "", err
 	}
 
-	stack, err := buildStack(opts)
+	stack, err := buildStackWithModel(opts, client)
 	if err != nil {
 		return "", err
 	}
@@ -319,6 +325,10 @@ func latestSessionID(ctx context.Context, store *session.JSONLStore, dir string)
 }
 
 func buildStack(opts options) (coding.Stack, error) {
+	return buildStackWithModel(opts, nil)
+}
+
+func buildStackWithModel(opts options, client model.Client) (coding.Stack, error) {
 	preset, err := parsePreset(opts.Preset)
 	if err != nil {
 		return coding.Stack{}, err
@@ -347,14 +357,14 @@ func buildStack(opts options) (coding.Stack, error) {
 		return coding.Stack{}, fmt.Errorf("create command session manager: %w", err)
 	}
 
+	taskStore := tasktools.NewMemoryStore(nil)
 	config.Workspace = ws
 	config.WorkspacePatchInputMode = coding.WorkspacePatchInputUnifiedDiff
 	config.Sessions = session.NewJSONLStore(opts.SessionDir)
-	config.Tasks = tasktools.NewMemoryStore(nil)
+	config.Tasks = taskStore
 	config.Command.Runner = runner
 	config.CommandSessions = commandSessions
 	config.CommandSessionStartInputMode = coding.CommandSessionStartInputShellCommand
-	config.Base.AppendSystemPrompt = appendPromptSection(config.Base.AppendSystemPrompt, cliToolContractGuidance)
 	hasGoWorkspace := hasGoModule(opts.CWD)
 	if len(opts.VerifyCommands) > 0 {
 		config.Verifier.Verifier = verifier(runner, opts.VerifyCommands, hasGoWorkspace)
@@ -366,11 +376,126 @@ func buildStack(opts options) (coding.Stack, error) {
 		config.Policies.RequireVerificationBeforeFinal = false
 		config.Policies.RecommendRollbackOnFailedVerification = false
 	}
+	delegate, err := codingSubagentTool(client, config, taskStore)
+	if err != nil {
+		return coding.Stack{}, err
+	}
+	baseRegistry := config.Base.Tools
+	if baseRegistry == nil {
+		baseRegistry = tool.NewRegistry()
+	} else {
+		baseRegistry = baseRegistry.Clone()
+	}
+	if err := baseRegistry.Register(delegate); err != nil {
+		return coding.Stack{}, fmt.Errorf("configure subagents: %w", err)
+	}
+	config.Base.Tools = baseRegistry
+	config.Base.AppendSystemPrompt = appendPromptSection(config.Base.AppendSystemPrompt, cliToolContractGuidance)
+	config.Base.AppendSystemPrompt = appendPromptSection(config.Base.AppendSystemPrompt, cliSubagentGuidance)
 	stack, err := coding.New(config)
 	if err != nil {
 		return coding.Stack{}, fmt.Errorf("configure runtime: %w", userFacingError(err))
 	}
 	return stack, nil
+}
+
+func codingSubagentTool(client model.Client, config coding.Config, taskStore tasktools.Store) (tool.Tool, error) {
+	sessions := config.Sessions
+	reviewerTools, err := reviewerTools(config)
+	if err != nil {
+		return nil, err
+	}
+	workerOptions, err := workerSubagentOptions(client, config)
+	if err != nil {
+		return nil, err
+	}
+	agents := []subagents.Agent{
+		{
+			Name:        "explorer",
+			Description: "Read-only repository explorer for bounded investigation and evidence gathering.",
+			Options: subagentOptions(client, sessions, explorerTools(config), 8, 3, maxReadOnlySubagentRunDuration,
+				"You are the explorer subagent. Inspect only. Use read-only workspace tools to answer the delegated question with concise evidence. Do not edit files, run commands, or delegate further."),
+		},
+		{
+			Name:        "reviewer",
+			Description: "Read-only code reviewer for diffs, risks, regressions, and verification evidence.",
+			Options: subagentOptions(client, sessions, reviewerTools, 10, 3, maxReadOnlySubagentRunDuration,
+				"You are the reviewer subagent. Review code and verification evidence. Prioritize correctness bugs, regressions, unsafe behavior, and missing tests. You may run the configured verification tool when useful, but do not edit files or delegate further."),
+		},
+		{
+			Name:        "worker",
+			Description: "Bounded implementation worker for isolated edits, commands, and verification.",
+			Options:     workerOptions,
+		},
+	}
+	return subagents.NewTool(subagents.Config{
+		Description:    "Run a bounded coding subagent in a child session. Use for parallel exploration, review, or isolated implementation work.",
+		Agents:         agents,
+		PlanSource:     tasktools.SubagentPlanner(taskStore),
+		ResultHandler:  tasktools.NewSubagentProgressHandler(taskStore),
+		MaxResultBytes: maxSubagentResultBytes,
+	})
+}
+
+func subagentOptions(client model.Client, sessions session.Store, registry *tool.Registry, maxTurns, maxConcurrency int, maxRunDuration time.Duration, prompt string) memaxagent.Options {
+	return memaxagent.Options{
+		Model:              client,
+		Sessions:           sessions,
+		Tools:              registry,
+		MaxTurns:           maxTurns,
+		MaxToolConcurrency: maxConcurrency,
+		MaxRunDuration:     maxRunDuration,
+		AppendSystemPrompt: prompt,
+	}
+}
+
+func cliSubagentProfiles() []string {
+	return []string{"explorer", "reviewer", "worker"}
+}
+
+func explorerTools(config coding.Config) *tool.Registry {
+	return tool.NewRegistry(
+		workspacetools.NewReadTool(config.Workspace),
+		workspacetools.NewListTool(config.Workspace),
+		workspacetools.NewDiffTool(config.Workspace),
+	)
+}
+
+func reviewerTools(config coding.Config) (*tool.Registry, error) {
+	registry := explorerTools(config)
+	if config.Verifier.Verifier != nil {
+		verifyConfig := config.Verifier
+		if config.Tasks != nil && !config.DisableVerificationProgress {
+			verifyConfig.Verifier = tasktools.NewVerificationProgressVerifier(
+				config.Tasks,
+				verifyConfig.Verifier,
+				config.VerificationProgressOptions...,
+			)
+		}
+		if err := registry.Register(verifytools.NewTool(verifyConfig)); err != nil {
+			return nil, err
+		}
+	}
+	return registry, nil
+}
+
+func workerSubagentOptions(client model.Client, config coding.Config) (memaxagent.Options, error) {
+	child := config
+	// Worker profiles intentionally receive the CLI-owned coding toolset, not
+	// arbitrary parent Base.Tools, so delegation stays bounded and cannot
+	// accidentally regain run_subagent or host-specific tools.
+	child.Base.Tools = nil
+	child.Base.MaxTurns = 12
+	child.Base.MaxToolConcurrency = 4
+	child.Base.MaxRunDuration = maxWorkerSubagentRunDuration
+	child.Base.AppendSystemPrompt = appendPromptSection(child.Base.AppendSystemPrompt, cliToolContractGuidance)
+	child.Base.AppendSystemPrompt = appendPromptSection(child.Base.AppendSystemPrompt, `You are the worker subagent. Own only the delegated task. Inspect before editing, keep changes scoped, use task_id when provided to connect verification evidence to the delegated work, obey checkpoint, command, approval, and verification gates, report changed files and evidence, and do not delegate further.`)
+
+	stack, err := coding.New(child)
+	if err != nil {
+		return memaxagent.Options{}, fmt.Errorf("configure worker subagent: %w", err)
+	}
+	return stack.WithModel(client), nil
 }
 
 // cliToolContractGuidance intentionally names the fixed default tool names
@@ -381,6 +506,14 @@ const cliToolContractGuidance = `CLI tool contract:
 - Use start_command with command as one shell command string for long-running processes such as dev servers, test watchers, and REPLs.
 - Use workspace_apply_patch with exactly one unified_diff string. Do not provide structured patch operations.
 - If a tool schema error says a field has the wrong type, retry with the contract above before changing strategy.`
+
+const cliSubagentGuidance = `Subagent delegation:
+- Use run_subagent for bounded parallel work when a task can be handed to an explorer, reviewer, or worker with a clear prompt.
+- Use explorer for read-only investigation, reviewer for code-review risk checks, and worker for isolated implementation tasks that can safely run under normal coding policy gates.
+- Keep subagent prompts scoped. Include the files, question, expected evidence, stop condition, and task_id when delegating a tracked task.
+- Prefer parallel explorer or reviewer calls for read-only work. Avoid running multiple worker subagents against the same files or commands unless the work is clearly disjoint.
+- Do not delegate urgent work whose result you need before your next immediate step; do that work yourself.
+- Integrate child results in the parent before finalizing.`
 
 func appendPromptSection(base, section string) string {
 	base = strings.TrimSpace(base)

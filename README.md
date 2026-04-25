@@ -16,6 +16,7 @@ Foundation. The first slice provides a runnable non-interactive CLI with:
 - root-confined workspace tools
 - root-confined command execution tools
 - managed command sessions for long-running processes
+- bounded subagents for parallel exploration, review, and isolated worker tasks
 - JSONL-backed conversation sessions with resume, `latest`, activity listing,
   and transcript inspection
 - dry-run configuration inspection
@@ -105,6 +106,30 @@ memax-code --config .memax-code/config.json --dry-run "inspect this repository"
 Configuration precedence is `flag > environment > config file > built-in
 default`. The default config file is optional; an explicitly supplied
 `--config` path must exist and decode as strict JSON.
+
+Memax Code registers a built-in `run_subagent` tool. Parent agents can delegate
+bounded work to three child profiles:
+
+- `explorer`: read-only repository investigation with workspace read/list/diff
+  tools.
+- `reviewer`: read-only workspace review focused on bugs, regressions,
+  configured verification evidence, and missing tests. It may run the
+  configured verification tool.
+- `worker`: isolated implementation work with workspace edit, command,
+  verification, and task-state tools. Worker children are assembled through the
+  same coding stack policy path as the parent, so checkpoint, command,
+  approval, and verification gates still apply. Worker children use the
+  CLI-owned coding toolset, not arbitrary parent custom tools.
+
+Child runs use the same provider/model selection and session store as the
+parent, persist their own child session, and return parent/child session
+metadata in the tool result. Child profiles do not receive `run_subagent`, so
+delegation is bounded and cannot recurse accidentally. Pass `task_id` when
+delegating tracked work so subagent verification evidence can update the same
+task record. Parent event streams include the `run_subagent` tool result and
+child session metadata; wrappers can read the child session transcript for the
+full child event stream. Explorer and reviewer runs are capped at 2 minutes;
+worker runs are capped at 15 minutes.
 
 Check local setup without calling a model:
 

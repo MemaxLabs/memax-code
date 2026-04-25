@@ -1,12 +1,17 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
 )
@@ -216,6 +221,185 @@ func TestBuildStackUsesModelFriendlyToolContracts(t *testing.T) {
 	}
 }
 
+func TestBuildStackRegistersCLIManagedSubagents(t *testing.T) {
+	stack, err := buildStack(options{
+		CWD:        t.TempDir(),
+		Preset:     "interactive_dev",
+		SessionDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("buildStack() error = %v", err)
+	}
+
+	spec, ok := toolSpec(stack.Registry(), subagents.ToolName)
+	if !ok {
+		t.Fatalf("registry missing %q", subagents.ToolName)
+	}
+	if !spec.ConcurrencySafe {
+		t.Fatalf("%s should be concurrency-safe for parallel bounded delegation", spec.Name)
+	}
+	if !spec.Destructive {
+		t.Fatalf("%s should be marked destructive because worker subagents can edit", spec.Name)
+	}
+	if spec.MaxResultBytes != maxSubagentResultBytes {
+		t.Fatalf("MaxResultBytes = %d, want %d", spec.MaxResultBytes, maxSubagentResultBytes)
+	}
+
+	properties := schemaProperties(t, spec)
+	agent, ok := properties["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("subagent schema agent = %#v, want object", properties["agent"])
+	}
+	values, ok := agent["enum"].([]any)
+	if !ok {
+		t.Fatalf("subagent schema agent enum = %#v, want enum", agent["enum"])
+	}
+	for _, want := range []string{"explorer", "reviewer", "worker"} {
+		if !containsAnyString(values, want) {
+			t.Fatalf("subagent enum = %#v, missing %q", values, want)
+		}
+	}
+
+	prompt := stack.Options().AppendSystemPrompt
+	for _, want := range []string{
+		"Subagent delegation:",
+		"Use run_subagent for bounded parallel work",
+		"Use explorer for read-only investigation",
+		"reviewer for code-review risk checks",
+		"worker for isolated implementation tasks",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("AppendSystemPrompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestBuildStackSubagentExecutesChildSession(t *testing.T) {
+	client := &scriptedTextClient{text: "child result"}
+	sessionDir := t.TempDir()
+	stack, err := buildStackWithModel(options{
+		CWD:        t.TempDir(),
+		Preset:     "interactive_dev",
+		SessionDir: sessionDir,
+	}, client)
+	if err != nil {
+		t.Fatalf("buildStackWithModel() error = %v", err)
+	}
+	delegate, ok := stack.Registry().Get(subagents.ToolName)
+	if !ok {
+		t.Fatalf("registry missing %q", subagents.ToolName)
+	}
+
+	result, err := delegate.Execute(context.Background(), tool.Call{
+		Use: model.ToolUse{
+			ID:    "delegate-1",
+			Name:  subagents.ToolName,
+			Input: json.RawMessage(`{"agent":"explorer","prompt":"inspect README and report evidence"}`),
+		},
+		Runtime: tool.Runtime{
+			SessionID: "00000000-0000-7000-8000-000000000001",
+			Sessions:  session.NewJSONLStore(sessionDir),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result IsError = true: %s", result.Content)
+	}
+	if result.Content != "child result" {
+		t.Fatalf("result content = %q, want child result", result.Content)
+	}
+	if result.Metadata["parent_session_id"] != "00000000-0000-7000-8000-000000000001" {
+		t.Fatalf("metadata = %#v, want parent_session_id", result.Metadata)
+	}
+	childSessionID, ok := result.Metadata["child_session_id"].(string)
+	if !ok || childSessionID == "" {
+		t.Fatalf("metadata = %#v, want child_session_id", result.Metadata)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("model requests = %d, want 1", len(client.requests))
+	}
+	req := client.requests[0]
+	if req.ParentSessionID != "00000000-0000-7000-8000-000000000001" {
+		t.Fatalf("ParentSessionID = %q, want parent session", req.ParentSessionID)
+	}
+	if req.SessionID != childSessionID {
+		t.Fatalf("request SessionID = %q, want child session %q", req.SessionID, childSessionID)
+	}
+	if hasTool(req.Tools, subagents.ToolName) {
+		t.Fatalf("child tool list unexpectedly includes recursive %q", subagents.ToolName)
+	}
+	if !hasTool(req.Tools, workspacetools.ReadToolName) || !hasTool(req.Tools, workspacetools.ListToolName) {
+		t.Fatalf("child tools = %#v, want read/list workspace tools", toolNames(req.Tools))
+	}
+	if hasTool(req.Tools, workspacetools.ApplyPatchToolName) || hasTool(req.Tools, commandtools.ToolName) {
+		t.Fatalf("explorer child tools = %#v, want read-only tools", toolNames(req.Tools))
+	}
+
+	result, err = delegate.Execute(context.Background(), tool.Call{
+		Use: model.ToolUse{
+			ID:    "delegate-2",
+			Name:  subagents.ToolName,
+			Input: json.RawMessage(`{"agent":"worker","prompt":"make a scoped edit and verify it"}`),
+		},
+		Runtime: tool.Runtime{
+			SessionID: "00000000-0000-7000-8000-000000000001",
+			Sessions:  session.NewJSONLStore(sessionDir),
+		},
+	})
+	if err != nil {
+		t.Fatalf("worker Execute() error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("worker result IsError = true: %s", result.Content)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("model requests = %d, want 2", len(client.requests))
+	}
+	req = client.requests[1]
+	for _, want := range []string{
+		workspacetools.ApplyPatchToolName,
+		workspacetools.CheckpointToolName,
+		workspacetools.RestoreToolName,
+		commandtools.ToolName,
+		commandtools.StartToolName,
+		tasktools.UpsertToolName,
+	} {
+		if !hasTool(req.Tools, want) {
+			t.Fatalf("worker child tools = %#v, missing %q", toolNames(req.Tools), want)
+		}
+	}
+	if hasTool(req.Tools, subagents.ToolName) {
+		t.Fatalf("worker child tool list unexpectedly includes recursive %q", subagents.ToolName)
+	}
+	workerPrompt := req.SystemPrompt + "\n" + req.AppendSystemPrompt
+	for _, want := range []string{
+		"CLI tool contract:",
+		"Use run_command with command as one shell command string",
+		"Use workspace_apply_patch with exactly one unified_diff string",
+		"obey checkpoint, command, approval, and verification gates",
+	} {
+		if !strings.Contains(workerPrompt, want) {
+			t.Fatalf("worker prompt missing %q:\n%s", want, workerPrompt)
+		}
+	}
+}
+
+func TestAppToolUseDisplaySubagentProfile(t *testing.T) {
+	got := appToolUseDisplay(&model.ToolUse{
+		ID:    "delegate-1",
+		Name:  subagents.ToolName,
+		Input: json.RawMessage(`{"agent":"reviewer","prompt":"review the diff"}`),
+	})
+	if got != "Subagent(reviewer)" {
+		t.Fatalf("appToolUseDisplay() = %q, want Subagent(reviewer)", got)
+	}
+	if !appToolShowsResultTail(subagents.ToolName) {
+		t.Fatalf("subagent results should render a compact result tail")
+	}
+}
+
 func TestAppendPromptSection(t *testing.T) {
 	t.Parallel()
 
@@ -228,6 +412,60 @@ func TestAppendPromptSection(t *testing.T) {
 	if got := appendPromptSection("base", ""); got != "base" {
 		t.Fatalf("appendPromptSection(empty section) = %q, want base", got)
 	}
+}
+
+func containsAnyString(values []any, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTool(specs []model.ToolSpec, name string) bool {
+	for _, spec := range specs {
+		if spec.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func toolNames(specs []model.ToolSpec) []string {
+	names := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		names = append(names, spec.Name)
+	}
+	return names
+}
+
+type scriptedTextClient struct {
+	text     string
+	requests []model.Request
+}
+
+func (c *scriptedTextClient) Stream(_ context.Context, req model.Request) (model.Stream, error) {
+	c.requests = append(c.requests, req)
+	return &scriptedTextStream{events: []model.StreamEvent{{Kind: model.StreamText, Text: c.text}}}, nil
+}
+
+type scriptedTextStream struct {
+	events []model.StreamEvent
+	index  int
+}
+
+func (s *scriptedTextStream) Recv() (model.StreamEvent, error) {
+	if s.index >= len(s.events) {
+		return model.StreamEvent{}, model.ErrEndOfStream
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
+func (s *scriptedTextStream) Close() error {
+	return nil
 }
 
 func toolSpec(registry *tool.Registry, name string) (model.ToolSpec, bool) {

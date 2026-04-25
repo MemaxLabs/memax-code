@@ -41,6 +41,7 @@ func TestDryRunPrintsResolvedConfig(t *testing.T) {
 		"session_dir: ",
 		"resume_session: <unset>",
 		"verification: go",
+		"subagents: explorer, reviewer, worker",
 		"prompt: fix tests",
 	} {
 		if !strings.Contains(out, want) {

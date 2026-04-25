@@ -112,6 +112,9 @@ func projectStreamEvent(event memaxagent.Event) streamEvent {
 				"content":     event.ToolResult.Content,
 				"is_error":    event.ToolResult.IsError,
 			}
+			if len(event.ToolResult.Metadata) > 0 {
+				out.ToolResult["metadata"] = event.ToolResult.Metadata
+			}
 		}
 	case memaxagent.EventUsage:
 		if event.Usage != nil {

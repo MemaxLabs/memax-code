@@ -658,6 +658,7 @@ func renderDryRun(w io.Writer, opts options) error {
 	fmt.Fprintf(w, "history_file: %s\n", opts.HistoryFile)
 	fmt.Fprintf(w, "resume_session: %s\n", valueOrUnset(opts.ResumeSessionID))
 	fmt.Fprintf(w, "verification: %s\n", verificationMode(opts.CWD, opts.VerifyCommands))
+	fmt.Fprintf(w, "subagents: %s\n", strings.Join(cliSubagentProfiles(), ", "))
 	if len(opts.VerifyCommands) > 0 {
 		for _, name := range sortedMapKeys(opts.VerifyCommands) {
 			fmt.Fprintf(w, "verify_command.%s: %s\n", name, opts.VerifyCommands[name])

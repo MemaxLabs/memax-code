@@ -82,6 +82,30 @@ func TestRenderEventStreamObservedJSON(t *testing.T) {
 	}
 }
 
+func TestProjectStreamEventIncludesToolResultMetadata(t *testing.T) {
+	event := memaxagent.Event{
+		Kind: memaxagent.EventToolResult,
+		ToolResult: &model.ToolResult{
+			ToolUseID: "delegate-1",
+			Name:      "run_subagent",
+			Content:   "child result",
+			Metadata: map[string]any{
+				"parent_session_id": "00000000-0000-7000-8000-000000000001",
+				"child_session_id":  "00000000-0000-7000-8000-000000000002",
+			},
+		},
+	}
+
+	projected := projectStreamEvent(event)
+	metadata, ok := projected.ToolResult["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool result metadata = %#v, want map", projected.ToolResult["metadata"])
+	}
+	if metadata["child_session_id"] != "00000000-0000-7000-8000-000000000002" {
+		t.Fatalf("metadata = %#v, want child session id", metadata)
+	}
+}
+
 func TestRunRejectsInteractiveEventStream(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := RunWithIO(context.Background(), []string{
