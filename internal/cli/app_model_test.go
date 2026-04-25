@@ -1314,6 +1314,11 @@ func TestAppProgramStructuredWorkspaceToolLabelsIncludeInputs(t *testing.T) {
 			use:  model.ToolUse{ID: "tool-1", Name: "workspace_apply_patch", Input: json.RawMessage(`{"dry_run":true,"unified_diff":"diff --git a/README.md b/README.md"}`)},
 			want: "• Review patch(unified diff)",
 		},
+		{
+			name: "diff base",
+			use:  model.ToolUse{ID: "tool-1", Name: "workspace_diff", Input: json.RawMessage(`{"base_id":"checkpoint-1234"}`)},
+			want: "• Show diff(base checkpoint-1234)",
+		},
 	}
 
 	for _, tt := range tests {
@@ -2435,7 +2440,7 @@ func TestAppProgramViewShowsActivityOnlyWhileRunning(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.width = 100
 	model.running = true
-	model.turnStartedAt = time.Now().Add(-13 * time.Second)
+	model.turnStartedAt = time.Now().Add(-13*time.Second - 100*time.Millisecond)
 	view := ansi.Strip(model.View())
 
 	if !strings.Contains(view, "thinking") {
@@ -2768,6 +2773,32 @@ func TestAppProgramTranscriptWrapsWideAssistantMarkdownTables(t *testing.T) {
 	for _, want := range []string{"Tool System", "Workspace read/write/diff", "shell commands", "unified diffs"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("wrapped table missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestAppProgramTranscriptWrapsDelimitedMarkdownTableCells(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{width: 54}
+
+	model.appendTranscript("[assistant]\n| Area | Details |\n| --- | --- |\n| UI | **bold spans words** and `code spans words` should wrap cleanly |\n")
+	model.flushTranscriptPartial()
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "│") && lipgloss.Width(line) > 54 {
+			t.Fatalf("table line width = %d, want <= 54:\n%s\nfull:\n%s", lipgloss.Width(line), line, got)
+		}
+	}
+	for _, want := range []string{"bold spans words", "code spans words", "wrap cleanly"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("wrapped delimited table missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"**", "`"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("markdown delimiter leaked into table via %q:\n%s", unwanted, got)
 		}
 	}
 }

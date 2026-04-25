@@ -595,7 +595,7 @@ func (m *appProgramModel) turnElapsed() string {
 	if m.turnStartedAt.IsZero() {
 		return ""
 	}
-	elapsed := time.Since(m.turnStartedAt).Round(time.Second)
+	elapsed := time.Since(m.turnStartedAt).Truncate(time.Second)
 	if elapsed < time.Second {
 		elapsed = time.Second
 	}
@@ -1042,7 +1042,7 @@ func (c *appProgramTranscriptCompactor) appMarkdownTableWidths(rows []appMarkdow
 			continue
 		}
 		for i, cell := range cells {
-			widths[i] = max(widths[i], lipgloss.Width(appStripMarkdownDelimiters(strings.TrimSpace(cell))))
+			widths[i] = max(widths[i], lipgloss.Width(appMarkdownTableCellText(cell)))
 		}
 	}
 	for i, width := range widths {
@@ -1087,6 +1087,8 @@ func (c *appProgramTranscriptCompactor) markdownTableContentWidth(cols int) int 
 	}
 	available := width - 10 - max(0, cols-1)*3
 	if available < cols*3 {
+		// Keep a readable floor for pathologically narrow terminals. The table may
+		// still overflow, but columns do not collapse to zero-width fragments.
 		return cols * 3
 	}
 	return available
@@ -1134,7 +1136,7 @@ func appRenderMarkdownTableRow(cells []string, widths []int) []string {
 }
 
 func appWrapMarkdownTableCell(cell string, width int) []string {
-	cell = strings.Join(strings.Fields(strings.TrimSpace(cell)), " ")
+	cell = strings.Join(strings.Fields(appMarkdownTableCellText(cell)), " ")
 	if cell == "" {
 		return []string{""}
 	}
@@ -1145,7 +1147,7 @@ func appWrapMarkdownTableCell(cell string, width int) []string {
 	var lines []string
 	current := ""
 	for _, word := range words {
-		if lipgloss.Width(appStripMarkdownDelimiters(word)) > width {
+		if lipgloss.Width(word) > width {
 			if current != "" {
 				lines = append(lines, current)
 				current = ""
@@ -1157,7 +1159,7 @@ func appWrapMarkdownTableCell(cell string, width int) []string {
 			current = word
 			continue
 		}
-		if lipgloss.Width(appStripMarkdownDelimiters(current))+1+lipgloss.Width(appStripMarkdownDelimiters(word)) <= width {
+		if lipgloss.Width(current)+1+lipgloss.Width(word) <= width {
 			current += " " + word
 			continue
 		}
@@ -1173,6 +1175,10 @@ func appWrapMarkdownTableCell(cell string, width int) []string {
 	return lines
 }
 
+func appMarkdownTableCellText(cell string) string {
+	return strings.TrimSpace(appStripMarkdownDelimiters(cell))
+}
+
 func appSplitLongTableWord(word string, width int) []string {
 	if width <= 0 {
 		return []string{word}
@@ -1182,7 +1188,7 @@ func appSplitLongTableWord(word string, width int) []string {
 	currentWidth := 0
 	for _, r := range word {
 		part := string(r)
-		partWidth := lipgloss.Width(appStripMarkdownDelimiters(part))
+		partWidth := lipgloss.Width(part)
 		if currentWidth > 0 && currentWidth+partWidth > width {
 			lines = append(lines, current.String())
 			current.Reset()
@@ -1655,6 +1661,14 @@ func appWorkspaceToolUseDisplay(toolUse *model.ToolUse, displayName string) stri
 			return prefix + "(unified diff)"
 		}
 		return prefix
+	case "workspace_diff":
+		var input struct {
+			BaseID string `json:"base_id"`
+		}
+		if err := json.Unmarshal(toolUse.Input, &input); err == nil && strings.TrimSpace(input.BaseID) != "" {
+			return displayName + "(base " + appInlineSnippet(strings.TrimSpace(input.BaseID), 32) + ")"
+		}
+		return displayName
 	default:
 		return ""
 	}
