@@ -44,7 +44,7 @@ func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T)
 		"[assistant]",
 		"working on it",
 		"[activity]",
-		"> tool run_command call",
+		"> tool run_command",
 		"< tool run_command ok",
 		"  result: line one",
 		"  line two",
@@ -66,7 +66,7 @@ func TestCompactAppProgramTranscriptTextCompactsStructuredSections(t *testing.T)
 
 	for _, want := range []string{
 		"working on it",
-		"• Bash call",
+		"• Bash",
 		"! Bash error",
 		"• Bash(go test ./...) started id=cmd-1",
 		"✓ done exit=0",
@@ -254,7 +254,7 @@ func TestAppProgramStructuredEventsStartNewAssistantBlocksAfterActivity(t *testi
 	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
 	for _, want := range []string{
 		"• first reply",
-		"• workspace_list_files call",
+		"• List files",
 		"• second reply",
 	} {
 		if !strings.Contains(got, want) {
@@ -402,7 +402,7 @@ func TestAppProgramStructuredEventsTailCommandOutputToolResults(t *testing.T) {
 
 	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
 	for _, want := range []string{
-		"• Wait for command output call",
+		"• Wait for command output",
 		"└ ok",
 		"output tail:",
 		"line 2",
@@ -854,7 +854,7 @@ func TestAppProgramStructuredLiveCommandStaysGroupedAcrossToolResult(t *testing.
 	}
 
 	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
-	toolIndex := strings.Index(got, "• read_file call")
+	toolIndex := strings.Index(got, "• read_file")
 	commandIndex := strings.Index(got, "• Bash(go test ./...)")
 	if commandIndex < 0 || toolIndex < 0 {
 		t.Fatalf("command/tool transcript missing block:\n%s", got)
@@ -862,7 +862,7 @@ func TestAppProgramStructuredLiveCommandStaysGroupedAcrossToolResult(t *testing.
 	for _, want := range []string{
 		"• Bash(go test ./...)",
 		"  └ output chunks=1 next_seq=2",
-		"• read_file call",
+		"• read_file",
 		"  └ ok",
 		"  └ done exit=0",
 	} {
@@ -1158,7 +1158,7 @@ func TestAppProgramStructuredReplacingToolUseIDRemovesStaleNameQueueEntry(t *tes
 		t.Fatalf("stale ID entry remained: %#v", toolUse)
 	}
 	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
-	if count := countTranscriptLine(got, "• read_file call"); count != 1 {
+	if count := countTranscriptLine(got, "• read_file"); count != 1 {
 		t.Fatalf("replacement rendered duplicate pending tool header count = %d, want 1:\n%s", count, got)
 	}
 }
@@ -1188,7 +1188,7 @@ func TestAppProgramStructuredReplacingToolUseIDKeepsOriginalRenderedDisplay(t *t
 
 	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
 	for _, want := range []string{
-		"• read_file call",
+		"• read_file",
 		"~ checkpoint checkpoint-1",
 		"  └ ok",
 	} {
@@ -1228,7 +1228,7 @@ func TestAppProgramStructuredReplacingToolUseIDUsesGenericMismatchedResult(t *te
 	}
 
 	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
-	if !strings.Contains(got, "• read_file call\n  └ ok") {
+	if !strings.Contains(got, "• read_file\n  └ ok") {
 		t.Fatalf("same-ID mismatched result did not stay generic under original header:\n%s", got)
 	}
 	for _, unwanted := range []string{"Subagent(worker)", "summary: found README"} {
@@ -1252,7 +1252,7 @@ func TestAppProgramStructuredNameOnlyToolResultsUseFIFO(t *testing.T) {
 	}
 
 	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
-	if count := strings.Count(got, "• read_file call"); count != 2 {
+	if count := strings.Count(got, "• read_file"); count != 2 {
 		t.Fatalf("read_file header count = %d, want 2:\n%s", count, got)
 	}
 	if count := strings.Count(got, "  └ ok"); count != 2 {
@@ -1265,12 +1265,13 @@ func TestAppProgramStructuredToolUseRendersBeforeResult(t *testing.T) {
 	m.transcript = appTranscriptTail{}
 
 	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
-		ID:   "tool-1",
-		Name: "workspace_list_files",
+		ID:    "tool-1",
+		Name:  "workspace_read_file",
+		Input: json.RawMessage(`{"path":"README.md"}`),
 	}})
 
 	before := ansi.Strip(strings.Join(m.activeActivityLines(), "\n"))
-	if !strings.Contains(before, "• workspace_list_files call") {
+	if !strings.Contains(before, "• Read file(README.md)") {
 		t.Fatalf("tool invocation did not render in live activity before result:\n%s", before)
 	}
 	if strings.Contains(before, "  └ ok") {
@@ -1279,16 +1280,54 @@ func TestAppProgramStructuredToolUseRendersBeforeResult(t *testing.T) {
 
 	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
 		ToolUseID: "tool-1",
-		Name:      "workspace_list_files",
+		Name:      "workspace_read_file",
 		Content:   "ok",
 	}})
 
 	after := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
-	if count := countTranscriptLine(after, "• workspace_list_files call"); count != 1 {
+	if count := countTranscriptLine(after, "• Read file(README.md)"); count != 1 {
 		t.Fatalf("tool header count = %d, want 1:\n%s", count, after)
 	}
-	if !strings.Contains(after, "• workspace_list_files call\n  └ ok") {
+	if !strings.Contains(after, "• Read file(README.md)\n  └ ok") {
 		t.Fatalf("tool result did not continue under invocation:\n%s", after)
+	}
+}
+
+func TestAppProgramStructuredWorkspaceToolLabelsIncludeInputs(t *testing.T) {
+	tests := []struct {
+		name string
+		use  model.ToolUse
+		want string
+	}{
+		{
+			name: "list prefix",
+			use:  model.ToolUse{ID: "tool-1", Name: "workspace_list_files", Input: json.RawMessage(`{"prefix":"internal/cli"}`)},
+			want: "• List files(internal/cli)",
+		},
+		{
+			name: "patch file",
+			use:  model.ToolUse{ID: "tool-1", Name: "workspace_apply_patch", Input: json.RawMessage(`{"operations":[{"path":"README.md"}]}`)},
+			want: "• Apply patch(README.md)",
+		},
+		{
+			name: "dry run patch",
+			use:  model.ToolUse{ID: "tool-1", Name: "workspace_apply_patch", Input: json.RawMessage(`{"dry_run":true,"unified_diff":"diff --git a/README.md b/README.md"}`)},
+			want: "• Review patch(unified diff)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+			m.transcript = appTranscriptTail{}
+			use := tt.use
+			m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &use})
+
+			got := ansi.Strip(strings.Join(m.activeActivityLines(), "\n"))
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("workspace tool label missing %q:\n%s", tt.want, got)
+			}
+		})
 	}
 }
 
@@ -1301,7 +1340,7 @@ func TestAppProgramStructuredToolUseStartMergesWithFinalToolUse(t *testing.T) {
 		Name: "web_fetch",
 	}})
 	started := ansi.Strip(strings.Join(m.activeActivityLines(), "\n"))
-	if !strings.Contains(started, "• Web fetch call") {
+	if !strings.Contains(started, "• Web fetch") {
 		t.Fatalf("tool-use start did not render active generic row:\n%s", started)
 	}
 
@@ -1314,7 +1353,7 @@ func TestAppProgramStructuredToolUseStartMergesWithFinalToolUse(t *testing.T) {
 	if !strings.Contains(updated, "• Web fetch(https://example.com/health)") {
 		t.Fatalf("final tool-use did not update active row display:\n%s", updated)
 	}
-	if strings.Contains(updated, "Web fetch call\n") {
+	if strings.Contains(updated, "Web fetch\n") {
 		t.Fatalf("generic tool-use start row survived after final tool-use:\n%s", updated)
 	}
 
@@ -1335,7 +1374,7 @@ func TestAppProgramStructuredToolUseStartMergesWithFinalToolUse(t *testing.T) {
 	if !strings.Contains(got, "• Web fetch(https://example.com/health)\n  └ ok status=200 bytes=12\n  └ title: Health") {
 		t.Fatalf("merged web_fetch result did not stay under invocation:\n%s", got)
 	}
-	for _, unwanted := range []string{"Web fetch call\n", "Web fetch result"} {
+	for _, unwanted := range []string{"Web fetch\n", "Web fetch result"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("merged web_fetch transcript leaked %q:\n%s", unwanted, got)
 		}
@@ -1402,7 +1441,7 @@ func TestAppProgramViewKeepsThinkingStatusWithActiveTool(t *testing.T) {
 	}})
 
 	view := ansi.Strip(m.View())
-	if !strings.Contains(view, "• workspace_list_files call") {
+	if !strings.Contains(view, "• List files") {
 		t.Fatalf("running view missing active tool cell:\n%s", view)
 	}
 	if !strings.Contains(view, "thinking") {
@@ -1431,7 +1470,7 @@ func TestAppProgramStructuredToolResultAfterInterveningActivityKeepsContext(t *t
 
 	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
 	for _, want := range []string{
-		"• workspace_list_files call",
+		"• List files",
 		"~ checkpoint checkpoint-1",
 		"  └ ok",
 	} {
@@ -1466,7 +1505,7 @@ func TestAppProgramStructuredToolErrorAfterInterveningActivityKeepsContext(t *te
 
 	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
 	for _, want := range []string{
-		"• read_file call",
+		"• read_file",
 		"~ checkpoint checkpoint-1",
 		"  └ error",
 		"  └ error: permission denied",
@@ -1704,7 +1743,7 @@ func TestAppProgramParallelWebFetchStartsStayGroupedByID(t *testing.T) {
 			t.Fatalf("parallel web_fetch grouped transcript missing %q:\n%s", want, got)
 		}
 	}
-	for _, unwanted := range []string{"Web fetch call\n", "Web fetch result"} {
+	for _, unwanted := range []string{"Web fetch\n", "Web fetch result"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("parallel web_fetch start transcript leaked %q:\n%s", unwanted, got)
 		}
@@ -2291,10 +2330,10 @@ func TestAppProgramToolCallsHaveSpacing(t *testing.T) {
 
 	got := ansi.Strip(strings.Join(app.transcript.lines(maxAppTranscriptLines), "\n"))
 	want := strings.Join([]string{
-		"• read_file call",
+		"• read_file",
 		"  └ ok",
 		"",
-		"• workspace_list_files call",
+		"• List files",
 		"  └ ok",
 	}, "\n")
 	if !strings.Contains(got, want) {
@@ -2347,7 +2386,7 @@ func TestAppProgramAssistantAfterToolCallHasSpacing(t *testing.T) {
 
 	got := ansi.Strip(strings.Join(app.transcript.lines(maxAppTranscriptLines), "\n"))
 	want := strings.Join([]string{
-		"• read_file call",
+		"• read_file",
 		"  └ ok",
 		"",
 		"• Done reading.",
@@ -2396,10 +2435,14 @@ func TestAppProgramViewShowsActivityOnlyWhileRunning(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.width = 100
 	model.running = true
+	model.turnStartedAt = time.Now().Add(-13 * time.Second)
 	view := ansi.Strip(model.View())
 
 	if !strings.Contains(view, "thinking") {
 		t.Fatalf("running view missing thinking activity:\n%s", view)
+	}
+	if !strings.Contains(view, "running 13s") {
+		t.Fatalf("running view missing elapsed turn time:\n%s", view)
 	}
 	rows := strippedViewRows(view)
 	statusAt, promptAt := -1, -1
@@ -2489,7 +2532,7 @@ func TestCompactAppProgramTranscriptTextDoesNotRewriteAssistantContent(t *testin
 		"[assistant]",
 		"id: 42",
 		"memax> do the thing",
-		"> tool run_command call",
+		"> tool run_command",
 		"$ command id=cmd-1",
 		"[memax-app:error] should remain assistant text",
 	}, "\n"))
@@ -2497,7 +2540,7 @@ func TestCompactAppProgramTranscriptTextDoesNotRewriteAssistantContent(t *testin
 	for _, want := range []string{
 		"id: 42",
 		"memax> do the thing",
-		"> tool run_command call",
+		"> tool run_command",
 		"$ command id=cmd-1",
 		"[memax-app:error] should remain assistant text",
 	} {
@@ -2508,7 +2551,7 @@ func TestCompactAppProgramTranscriptTextDoesNotRewriteAssistantContent(t *testin
 	for _, unwanted := range []string{
 		"session 42",
 		"› do the thing",
-		"• tool run_command call",
+		"• tool run_command",
 		"• command id=cmd-1",
 		"! should remain assistant text",
 	} {
@@ -2705,6 +2748,27 @@ func TestAppProgramTranscriptRendersAssistantMarkdownTableEmptyCells(t *testing.
 	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
 	if !strings.Contains(got, "  │ a   │     │ c   │") {
 		t.Fatalf("markdown table empty cell was not preserved:\n%s", got)
+	}
+}
+
+func TestAppProgramTranscriptWrapsWideAssistantMarkdownTables(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+	model.compactor = appProgramTranscriptCompactor{width: 72}
+
+	model.appendTranscript("[assistant]\n| Area | Details |\n| --- | --- |\n| Tool System | Workspace read/write/diff, shell commands, managed sessions, web fetch, and patch application through unified diffs |\n")
+	model.flushTranscriptPartial()
+
+	got := ansi.Strip(strings.Join(model.transcript.lines(maxAppTranscriptLines), "\n"))
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "│") && lipgloss.Width(line) > 72 {
+			t.Fatalf("table line width = %d, want <= 72:\n%s\nfull:\n%s", lipgloss.Width(line), line, got)
+		}
+	}
+	for _, want := range []string{"Tool System", "Workspace read/write/diff", "shell commands", "unified diffs"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("wrapped table missing %q:\n%s", want, got)
+		}
 	}
 }
 
@@ -3001,7 +3065,7 @@ func TestCompactAppProgramTranscriptTextTailsToolErrors(t *testing.T) {
 		"  line five",
 		"  line six",
 		"  line seven",
-		"> tool read_file call",
+		"> tool read_file",
 	}, "\n")))
 
 	for _, want := range []string{
@@ -3012,7 +3076,7 @@ func TestCompactAppProgramTranscriptTextTailsToolErrors(t *testing.T) {
 		"line five",
 		"line six",
 		"line seven",
-		"• read_file call",
+		"• read_file",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("error tail missing %q:\n%s", want, got)
@@ -3028,7 +3092,7 @@ func TestCompactAppProgramTranscriptTextTailsToolErrors(t *testing.T) {
 func TestCompactAppProgramTranscriptTextTailsCommandOutputResults(t *testing.T) {
 	got := ansi.Strip(compactAppProgramTranscriptText(strings.Join([]string{
 		"[activity]",
-		"> tool wait_command_output call",
+		"> tool wait_command_output",
 		"< tool wait_command_output ok",
 		"  result: command output for cmd-1: npm test -- --watch",
 		"  status: running",
@@ -3036,14 +3100,14 @@ func TestCompactAppProgramTranscriptTextTailsCommandOutputResults(t *testing.T) 
 		"  resume_after_seq: 3",
 		"  [stdout #3]",
 		"  PASS widget.test.ts",
-		"> tool run_command call",
+		"> tool run_command",
 		"< tool run_command ok",
 		"  result: command succeeded: go test ./...",
 		"  verbose output that should stay collapsed",
 	}, "\n")))
 
 	for _, want := range []string{
-		"• Wait for command output call",
+		"• Wait for command output",
 		"  Wait for command output ok",
 		"  Wait for command output ok\n  output tail:",
 		"output tail:",
@@ -3051,7 +3115,7 @@ func TestCompactAppProgramTranscriptTextTailsCommandOutputResults(t *testing.T) 
 		"resume_after_seq: 3",
 		"[stdout #3]",
 		"PASS widget.test.ts",
-		"• Bash call",
+		"• Bash",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("command output transcript missing %q:\n%s", want, got)
@@ -3073,7 +3137,7 @@ func TestCompactAppProgramTranscriptTextTailsCommandOutputResults(t *testing.T) 
 func TestCompactAppProgramTranscriptTextFlushesConsecutiveResultDetails(t *testing.T) {
 	got := ansi.Strip(compactAppProgramTranscriptText(strings.Join([]string{
 		"[activity]",
-		"> tool wait_command_output call",
+		"> tool wait_command_output",
 		"< tool wait_command_output ok",
 		"  result: command output for cmd-1",
 		"  next_seq: 5",
@@ -3095,7 +3159,7 @@ func TestCompactAppProgramTranscriptTextFlushDoesNotMergeOpenLine(t *testing.T) 
 	var compactor appProgramTranscriptCompactor
 	got := ansi.Strip(compactor.compact(strings.Join([]string{
 		"[activity]",
-		"> tool wait_command_output call",
+		"> tool wait_command_output",
 		"< tool wait_command_output ok",
 		"  result: command output for cmd-1",
 		"  next_seq: 5",
@@ -3110,7 +3174,7 @@ func TestAppProgramTranscriptCompactorPreservesOpenLineAcrossBufferedDetail(t *t
 	var compactor appProgramTranscriptCompactor
 	got := ansi.Strip(compactor.compact(strings.Join([]string{
 		"[activity]",
-		"> tool wait_command_output call",
+		"> tool wait_command_output",
 		"< tool wait_command_output ok",
 	}, "\n")))
 	got += ansi.Strip(compactor.compact("  result: command output for cmd-1\n  next_seq: 5\n"))
@@ -3125,7 +3189,7 @@ func TestAppProgramTranscriptCompactorPreservesOpenLineAcrossWhitespaceChunk(t *
 	var compactor appProgramTranscriptCompactor
 	got := ansi.Strip(compactor.compact(strings.Join([]string{
 		"[activity]",
-		"> tool wait_command_output call",
+		"> tool wait_command_output",
 		"< tool wait_command_output ok",
 	}, "\n")))
 	got += ansi.Strip(compactor.compact("   "))
@@ -3146,7 +3210,7 @@ func TestAppProgramTranscriptCompactorStreamsToolErrorTail(t *testing.T) {
 		"  error: line one\n",
 		"  line two\n",
 		"  line three\n",
-		"> tool read_file call\n",
+		"> tool read_file\n",
 	} {
 		out.WriteString(compactor.compact(chunk))
 	}
@@ -3159,7 +3223,7 @@ func TestAppProgramTranscriptCompactorStreamsToolErrorTail(t *testing.T) {
 		"line one",
 		"line two",
 		"line three",
-		"• read_file call",
+		"• read_file",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("streamed error tail missing %q:\n%s", want, got)

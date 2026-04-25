@@ -541,7 +541,7 @@ func appToolUseDisplayOrName(toolUse *model.ToolUse, fallback string) string {
 	if strings.TrimSpace(fallback) == "" {
 		return "tool"
 	}
-	return fallback + " call"
+	return fallback
 }
 
 func appToolContinuationDisplay(display string, isError bool) string {

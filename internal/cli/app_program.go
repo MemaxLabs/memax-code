@@ -76,18 +76,19 @@ type appProgramModel struct {
 	input     textarea.Model
 	runCancel context.CancelFunc
 	appTranscriptFormatter
-	width      int
-	height     int
-	sessionID  string
-	statusLine string
-	lastError  string
-	runErrors  map[string]struct{}
-	running    bool
-	canceling  bool
-	showHelp   bool
-	firstErr   error
-	spinner    int
-	tickArmed  bool
+	width         int
+	height        int
+	sessionID     string
+	statusLine    string
+	lastError     string
+	runErrors     map[string]struct{}
+	running       bool
+	canceling     bool
+	showHelp      bool
+	firstErr      error
+	spinner       int
+	tickArmed     bool
+	turnStartedAt time.Time
 }
 
 func newAppProgramModel(ctx context.Context, opts options, runPrompt interactivePromptRunner) *appProgramModel {
@@ -320,6 +321,7 @@ func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
 	m.lastError = ""
 	m.runErrors = nil
 	m.statusLine = "running"
+	m.turnStartedAt = time.Now()
 	m.appendLocalTranscriptLine("user", "› "+strings.ReplaceAll(strings.TrimSpace(prompt), "\n", " "))
 	m.input.Reset()
 	m.composer.cancel()
@@ -355,6 +357,7 @@ func (m *appProgramModel) startPrompt(prompt string) tea.Cmd {
 func (m *appProgramModel) finishPrompt(msg appProgramPromptDoneMsg) {
 	m.running = false
 	m.canceling = false
+	m.turnStartedAt = time.Time{}
 	if m.runCancel != nil {
 		m.runCancel()
 		m.runCancel = nil
@@ -524,6 +527,7 @@ func (m *appProgramModel) resize() {
 	if width <= 0 {
 		width = defaultAppShellWidth
 	}
+	m.compactor.width = width
 	composerHeight := max(appProgramMinComposer, min(8, strings.Count(m.input.Value(), "\n")+1))
 	m.input.SetWidth(appProgramComposerContentWidth(width))
 	m.input.SetHeight(composerHeight)
@@ -576,12 +580,26 @@ func (m *appProgramModel) activityStatusView() string {
 			label = "canceling"
 		}
 		frame := liveStatusFrames[m.spinner%len(liveStatusFrames)]
+		if elapsed := m.turnElapsed(); elapsed != "" {
+			return appProgramAccentStyle.Render(frame+" "+label) + appProgramDimStyle.Render(" · "+elapsed)
+		}
 		return appProgramAccentStyle.Render(frame + " " + label)
 	}
 	if m.lastError != "" {
 		return appProgramErrorStyle.Render("! " + m.lastError)
 	}
 	return ""
+}
+
+func (m *appProgramModel) turnElapsed() string {
+	if m.turnStartedAt.IsZero() {
+		return ""
+	}
+	elapsed := time.Since(m.turnStartedAt).Round(time.Second)
+	if elapsed < time.Second {
+		elapsed = time.Second
+	}
+	return "running " + elapsed.String()
 }
 
 func (m *appProgramModel) activeRuntimeActivityView() string {
@@ -664,11 +682,12 @@ func appProgramComposerContentWidth(width int) int {
 }
 
 func compactAppProgramTranscriptText(text string) string {
-	var compactor appProgramTranscriptCompactor
+	compactor := appProgramTranscriptCompactor{width: defaultAppShellWidth}
 	return strings.ReplaceAll(compactor.compact(text)+compactor.flush(), appTranscriptBlankLine, "")
 }
 
 type appProgramTranscriptCompactor struct {
+	width                   int
 	section                 string
 	skipActivityDetail      bool
 	assistantInCodeBlock    bool
@@ -973,8 +992,8 @@ func (c *appProgramTranscriptCompactor) flushAssistantTable() []string {
 	if !appMarkdownTableRowsContainSeparator(rows) {
 		return c.flushAssistantTableRowsAsText(rows)
 	}
-	widths := appMarkdownTableWidths(rows)
-	out := make([]string, 0, len(rows))
+	widths := c.appMarkdownTableWidths(rows)
+	out := make([]string, 0, len(rows)*2)
 	hadContent := c.assistantHasContent
 	for _, row := range rows {
 		prefix := "  "
@@ -982,7 +1001,10 @@ func (c *appProgramTranscriptCompactor) flushAssistantTable() []string {
 			prefix = appProgramMarkdownStyle.Render("• ")
 			hadContent = true
 		}
-		out = append(out, prefix+appRenderMarkdownTableRow(row.cells, widths))
+		for _, line := range appRenderMarkdownTableRow(row.cells, widths) {
+			out = append(out, prefix+line)
+			prefix = "  "
+		}
 	}
 	c.assistantHasContent = true
 	return out
@@ -1006,7 +1028,7 @@ func appMarkdownTableRowsContainSeparator(rows []appMarkdownTableRow) bool {
 	return false
 }
 
-func appMarkdownTableWidths(rows []appMarkdownTableRow) []int {
+func (c *appProgramTranscriptCompactor) appMarkdownTableWidths(rows []appMarkdownTableRow) []int {
 	var widths []int
 	for _, row := range rows {
 		cells := row.cells
@@ -1020,31 +1042,162 @@ func appMarkdownTableWidths(rows []appMarkdownTableRow) []int {
 			continue
 		}
 		for i, cell := range cells {
-			widths[i] = max(widths[i], lipgloss.Width(appRenderInlineMarkdown(strings.TrimSpace(cell))))
+			widths[i] = max(widths[i], lipgloss.Width(appStripMarkdownDelimiters(strings.TrimSpace(cell))))
 		}
 	}
 	for i, width := range widths {
 		widths[i] = max(3, width)
 	}
+	c.shrinkMarkdownTableWidths(widths)
 	return widths
 }
 
-func appRenderMarkdownTableRow(cells []string, widths []int) string {
+func (c *appProgramTranscriptCompactor) shrinkMarkdownTableWidths(widths []int) {
+	if len(widths) == 0 {
+		return
+	}
+	available := c.markdownTableContentWidth(len(widths))
+	total := appMarkdownTableContentWidth(widths)
+	minWidth := 6
+	if len(widths) >= 4 {
+		minWidth = 4
+	}
+	for total > available {
+		idx := -1
+		for i, width := range widths {
+			if width <= minWidth {
+				continue
+			}
+			if idx < 0 || width > widths[idx] {
+				idx = i
+			}
+		}
+		if idx < 0 {
+			return
+		}
+		widths[idx]--
+		total--
+	}
+}
+
+func (c *appProgramTranscriptCompactor) markdownTableContentWidth(cols int) int {
+	width := c.width
+	if width <= 0 {
+		width = defaultAppShellWidth
+	}
+	available := width - 10 - max(0, cols-1)*3
+	if available < cols*3 {
+		return cols * 3
+	}
+	return available
+}
+
+func appMarkdownTableContentWidth(widths []int) int {
+	total := 0
+	for _, width := range widths {
+		total += width
+	}
+	return total
+}
+
+func appRenderMarkdownTableRow(cells []string, widths []int) []string {
 	if appMarkdownTableSeparator(cells) {
 		segments := make([]string, len(widths))
 		for i, width := range widths {
 			segments[i] = strings.Repeat("─", width)
 		}
-		return appProgramDimStyle.Render("  ├" + strings.Join(segments, "┼") + "┤")
+		return []string{appProgramDimStyle.Render("  ├" + strings.Join(segments, "┼") + "┤")}
 	}
-	rendered := make([]string, len(cells))
-	for i, cell := range cells {
-		rendered[i] = appRenderInlineMarkdown(strings.TrimSpace(cell))
+	wrapped := make([][]string, len(widths))
+	maxLines := 1
+	for i := range widths {
+		cell := ""
+		if i < len(cells) {
+			cell = cells[i]
+		}
+		wrapped[i] = appWrapMarkdownTableCell(cell, widths[i])
+		maxLines = max(maxLines, len(wrapped[i]))
 	}
-	for i, cell := range rendered {
-		rendered[i] = appPadRenderedRight(cell, widths[i])
+	out := make([]string, 0, maxLines)
+	for rowLine := 0; rowLine < maxLines; rowLine++ {
+		rendered := make([]string, len(widths))
+		for i := range widths {
+			cell := ""
+			if rowLine < len(wrapped[i]) {
+				cell = wrapped[i][rowLine]
+			}
+			rendered[i] = appPadRenderedRight(appRenderInlineMarkdown(strings.TrimSpace(cell)), widths[i])
+		}
+		out = append(out, appProgramMarkdownStyle.Render("  │ ")+strings.Join(rendered, appProgramDimStyle.Render(" │ "))+appProgramMarkdownStyle.Render(" │"))
 	}
-	return appProgramMarkdownStyle.Render("  │ ") + strings.Join(rendered, appProgramDimStyle.Render(" │ ")) + appProgramMarkdownStyle.Render(" │")
+	return out
+}
+
+func appWrapMarkdownTableCell(cell string, width int) []string {
+	cell = strings.Join(strings.Fields(strings.TrimSpace(cell)), " ")
+	if cell == "" {
+		return []string{""}
+	}
+	if width <= 0 {
+		return []string{cell}
+	}
+	words := strings.Fields(cell)
+	var lines []string
+	current := ""
+	for _, word := range words {
+		if lipgloss.Width(appStripMarkdownDelimiters(word)) > width {
+			if current != "" {
+				lines = append(lines, current)
+				current = ""
+			}
+			lines = append(lines, appSplitLongTableWord(word, width)...)
+			continue
+		}
+		if current == "" {
+			current = word
+			continue
+		}
+		if lipgloss.Width(appStripMarkdownDelimiters(current))+1+lipgloss.Width(appStripMarkdownDelimiters(word)) <= width {
+			current += " " + word
+			continue
+		}
+		lines = append(lines, current)
+		current = word
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
+}
+
+func appSplitLongTableWord(word string, width int) []string {
+	if width <= 0 {
+		return []string{word}
+	}
+	var lines []string
+	var current strings.Builder
+	currentWidth := 0
+	for _, r := range word {
+		part := string(r)
+		partWidth := lipgloss.Width(appStripMarkdownDelimiters(part))
+		if currentWidth > 0 && currentWidth+partWidth > width {
+			lines = append(lines, current.String())
+			current.Reset()
+			currentWidth = 0
+		}
+		current.WriteString(part)
+		currentWidth += partWidth
+	}
+	if current.Len() > 0 {
+		lines = append(lines, current.String())
+	}
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
 }
 
 func (c *appProgramTranscriptCompactor) assistantLinePrefix() string {
@@ -1385,7 +1538,11 @@ func appFormatToolLine(line string) string {
 	}
 	name := appToolDisplayName(fields[1])
 	if len(fields) > 2 {
-		return name + " " + strings.Join(fields[2:], " ")
+		rest := strings.Join(fields[2:], " ")
+		if rest == "call" {
+			return name
+		}
+		return name + " " + rest
 	}
 	return name
 }
@@ -1406,6 +1563,12 @@ func appToolDisplayName(name string) string {
 		return "Resize command terminal"
 	case "workspace_apply_patch":
 		return "Apply patch"
+	case "workspace_read_file":
+		return "Read file"
+	case "workspace_list_files":
+		return "List files"
+	case "workspace_diff":
+		return "Show diff"
 	case "run_subagent":
 		return "Subagent"
 	case "web_fetch":
@@ -1440,7 +1603,61 @@ func appToolUseDisplay(toolUse *model.ToolUse) string {
 			return name + "(" + appInlineSnippet(url, 96) + ")"
 		}
 	}
-	return name + " call"
+	if display := appWorkspaceToolUseDisplay(toolUse, name); display != "" {
+		return display
+	}
+	return name
+}
+
+func appWorkspaceToolUseDisplay(toolUse *model.ToolUse, displayName string) string {
+	if toolUse == nil {
+		return ""
+	}
+	switch toolUse.Name {
+	case "workspace_read_file":
+		var input struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal(toolUse.Input, &input); err == nil && strings.TrimSpace(input.Path) != "" {
+			return displayName + "(" + appInlineSnippet(strings.TrimSpace(input.Path), 96) + ")"
+		}
+		return displayName
+	case "workspace_list_files":
+		var input struct {
+			Prefix string `json:"prefix"`
+		}
+		if err := json.Unmarshal(toolUse.Input, &input); err == nil && strings.TrimSpace(input.Prefix) != "" {
+			return displayName + "(" + appInlineSnippet(strings.TrimSpace(input.Prefix), 96) + ")"
+		}
+		return displayName
+	case "workspace_apply_patch":
+		var input struct {
+			Operations []struct {
+				Path string `json:"path"`
+			} `json:"operations"`
+			UnifiedDiff string `json:"unified_diff"`
+			DryRun      bool   `json:"dry_run"`
+		}
+		if err := json.Unmarshal(toolUse.Input, &input); err != nil {
+			return displayName
+		}
+		prefix := displayName
+		if input.DryRun {
+			prefix = "Review patch"
+		}
+		if len(input.Operations) == 1 && strings.TrimSpace(input.Operations[0].Path) != "" {
+			return prefix + "(" + appInlineSnippet(strings.TrimSpace(input.Operations[0].Path), 96) + ")"
+		}
+		if len(input.Operations) > 1 {
+			return fmt.Sprintf("%s(%d files)", prefix, len(input.Operations))
+		}
+		if strings.TrimSpace(input.UnifiedDiff) != "" {
+			return prefix + "(unified diff)"
+		}
+		return prefix
+	default:
+		return ""
+	}
 }
 
 func appToolUseCommand(toolUse *model.ToolUse) string {
