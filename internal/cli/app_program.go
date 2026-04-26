@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
@@ -18,6 +19,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
+	"golang.org/x/term"
 )
 
 const (
@@ -68,6 +70,7 @@ type appProgramModel struct {
 	runPrompt interactivePromptRunner
 	runEvents interactiveEventPromptRunner
 	program   *tea.Program
+	output    io.Writer
 	plainOut  io.Writer
 	history   persistentPromptHistory
 	composer  interactiveComposer
@@ -88,6 +91,11 @@ type appProgramModel struct {
 	spinner       int
 	tickArmed     bool
 	turnStartedAt time.Time
+	liveRows      int
+	liveWidth     int
+	liveLines     []string
+	cursorHidden  bool
+	renderMu      sync.Mutex
 }
 
 func newAppProgramModel(ctx context.Context, opts options, runPrompt interactivePromptRunner) *appProgramModel {
@@ -150,7 +158,7 @@ func newAppProgramTextarea() textarea.Model {
 }
 
 func (m *appProgramModel) Init() tea.Cmd {
-	return tea.Batch(m.flushPrints(), textarea.Blink)
+	return tea.Batch(m.withRender(nil), textarea.Blink)
 }
 
 func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -161,24 +169,24 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 	case tea.KeyMsg:
 		if cmd, handled := m.updateKey(msg); handled {
-			return m, m.withFlush(cmd)
+			return m, m.withRender(cmd)
 		}
 	case appProgramTranscriptMsg:
 		m.appendTranscript(msg.text)
-		return m, m.flushPrints()
+		return m, m.withRender(nil)
 	case appProgramEventMsg:
 		m.appendEvent(msg.event)
-		return m, m.flushPrints()
+		return m, m.withRender(nil)
 	case appProgramPromptDoneMsg:
 		m.finishPrompt(msg)
-		return m, m.flushPrints()
+		return m, m.withRender(nil)
 	case appProgramTickMsg:
 		m.tickArmed = false
 		if !m.running {
 			return m, nil
 		}
 		m.spinner++
-		return m, m.tick()
+		return m, m.withRender(m.tick())
 	}
 
 	beforeInput := m.input.Value()
@@ -189,7 +197,7 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.composer.history.ResetTraversal()
 		m.resize()
 	}
-	return m, m.withFlush(cmd)
+	return m, m.withRender(cmd)
 }
 
 func (m *appProgramModel) updateKey(msg tea.KeyMsg) (tea.Cmd, bool) {
@@ -505,7 +513,25 @@ func (m *appProgramModel) flushPrints() tea.Cmd {
 		}
 		return nil
 	}
+	if m.output != nil {
+		m.renderMu.Lock()
+		defer m.renderMu.Unlock()
+		m.clearLiveRegionLocked(m.renderWidth())
+		for _, line := range lines {
+			fmt.Fprint(m.output, line, "\r\n")
+		}
+		return nil
+	}
 	return tea.Println(strings.Join(lines, "\n"))
+}
+
+func (m *appProgramModel) withRender(cmd tea.Cmd) tea.Cmd {
+	if m.output != nil {
+		_ = m.flushPrints()
+		m.renderLiveRegion()
+		return cmd
+	}
+	return m.withFlush(cmd)
 }
 
 func (m *appProgramModel) withFlush(cmd tea.Cmd) tea.Cmd {
@@ -517,6 +543,137 @@ func (m *appProgramModel) withFlush(cmd tea.Cmd) tea.Cmd {
 		return flush
 	}
 	return tea.Sequence(flush, cmd)
+}
+
+func (m *appProgramModel) renderWidth() int {
+	width := m.width
+	if width <= 0 {
+		width = defaultAppShellWidth
+	}
+	return appProgramLiveRegionWidth(width)
+}
+
+func (m *appProgramModel) renderLiveRegion() {
+	if m.output == nil || m.quitting {
+		return
+	}
+	width := m.renderWidth()
+	view := m.fitLiveRegionView(m.View(), width)
+	m.renderMu.Lock()
+	defer m.renderMu.Unlock()
+	m.clearLiveRegionLocked(width)
+	if view == "" {
+		return
+	}
+	if !m.cursorHidden {
+		fmt.Fprint(m.output, xansi.HideCursor)
+		m.cursorHidden = true
+	}
+	// The live renderer always leaves the terminal cursor at column 0 of the
+	// bottom physical row. Re-assert that invariant before every paint so the
+	// first render and any resize-triggered repaint start from the same place.
+	fmt.Fprint(m.output, "\r")
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
+		if i > 0 {
+			fmt.Fprint(m.output, "\r\n")
+		}
+		fmt.Fprint(m.output, line)
+	}
+	fmt.Fprint(m.output, xansi.ResetStyle)
+	fmt.Fprint(m.output, "\r")
+	m.liveLines = append(m.liveLines[:0], lines...)
+	m.liveWidth = width
+	m.liveRows = appProgramPhysicalRows(lines, width)
+}
+
+func (m *appProgramModel) fitLiveRegionView(view string, width int) string {
+	if view == "" || m.height <= 0 {
+		return view
+	}
+	maxRows := max(1, m.height-1)
+	lines := strings.Split(view, "\n")
+	if appProgramPhysicalRows(lines, width) <= maxRows {
+		return view
+	}
+	start := len(lines)
+	used := 0
+	for i := len(lines) - 1; i >= 0; i-- {
+		lineRows := appProgramPhysicalRows([]string{lines[i]}, width)
+		if used > 0 && used+lineRows > maxRows {
+			break
+		}
+		used += lineRows
+		start = i
+		if used >= maxRows {
+			break
+		}
+	}
+	if start >= len(lines) {
+		start = len(lines) - 1
+	}
+	return strings.Join(lines[start:], "\n")
+}
+
+func (m *appProgramModel) clearLiveRegionLocked(width int) {
+	if m.output == nil || m.liveRows <= 0 {
+		return
+	}
+	if width <= 0 {
+		width = m.liveWidth
+	}
+	rows := appProgramPhysicalRows(m.liveLines, width)
+	if width > 0 && m.liveWidth > 0 && width < m.liveWidth {
+		// Terminal reflow after narrowing can make the already-painted live
+		// region occupy more physical rows than it did at paint time. Clear the
+		// larger of the recorded and reflowed heights so prompt/status ghosts do
+		// not remain in scrollback. When widening, use the reflowed height to
+		// avoid erasing transcript rows above the live region.
+		rows = max(m.liveRows, rows)
+	}
+	if rows <= 0 {
+		rows = m.liveRows
+	}
+	if rows <= 0 {
+		return
+	}
+	fmt.Fprint(m.output, xansi.ResetStyle)
+	fmt.Fprint(m.output, "\r")
+	if rows > 1 {
+		fmt.Fprint(m.output, xansi.CursorUp(rows-1))
+	}
+	for i := 0; i < rows; i++ {
+		fmt.Fprint(m.output, xansi.EraseEntireLine)
+		if i < rows-1 {
+			fmt.Fprint(m.output, "\r\n")
+		}
+	}
+	if rows > 1 {
+		fmt.Fprint(m.output, xansi.CursorUp(rows-1))
+	}
+	fmt.Fprint(m.output, "\r")
+	m.liveRows = 0
+	m.liveWidth = 0
+	m.liveLines = nil
+}
+
+func appProgramPhysicalRows(lines []string, width int) int {
+	if len(lines) == 0 {
+		return 0
+	}
+	if width <= 0 {
+		return len(lines)
+	}
+	rows := 0
+	for _, line := range lines {
+		lineWidth := xansi.StringWidth(line)
+		if lineWidth <= 0 {
+			rows++
+			continue
+		}
+		rows += (lineWidth + width - 1) / width
+	}
+	return rows
 }
 
 func (m *appProgramModel) tick() tea.Cmd {
@@ -2023,6 +2180,31 @@ func runInteractiveAppWithEvents(ctx context.Context, stdin io.Reader, stdout io
 	model := newAppProgramModelWithEvents(ctx, opts, runPrompt, runEvents)
 	terminal, terminalWidth, terminalHeight := terminalWriterInfo(stdout)
 	if terminal {
+		var rawState *term.State
+		rawFD := -1
+		if fd, ok := stdin.(interface{ Fd() uintptr }); ok {
+			rawFD = int(fd.Fd())
+			if term.IsTerminal(rawFD) {
+				state, err := term.MakeRaw(rawFD)
+				if err != nil {
+					return fmt.Errorf("enter raw terminal mode: %w", err)
+				}
+				rawState = state
+			}
+		}
+		model.output = stdout
+		fmt.Fprint(stdout, xansi.SetBracketedPasteMode)
+		defer func() {
+			model.renderMu.Lock()
+			defer model.renderMu.Unlock()
+			model.clearLiveRegionLocked(model.renderWidth())
+			fmt.Fprint(stdout, xansi.ResetStyle)
+			fmt.Fprint(stdout, xansi.ResetBracketedPasteMode)
+			fmt.Fprint(stdout, xansi.ShowCursor)
+			if rawState != nil && rawFD >= 0 {
+				_ = term.Restore(rawFD, rawState)
+			}
+		}()
 		// terminalWriterInfo reserves one physical column for terminal wrapping.
 		// appProgramModel.width stores the real terminal width and applies its
 		// own width reserve when wrapping printed transcript lines.
@@ -2044,12 +2226,15 @@ func runInteractiveAppWithEvents(ctx context.Context, stdin io.Reader, stdout io
 		tea.WithInput(stdin),
 		tea.WithOutput(stdout),
 		tea.WithContext(ctx),
-	}
-	if !terminal {
-		programOpts = append(programOpts, tea.WithoutRenderer())
+		tea.WithoutRenderer(),
 	}
 	program := tea.NewProgram(model, programOpts...)
 	model.program = program
+	stopResizeWatcher := func() {}
+	if terminal {
+		stopResizeWatcher = startAppProgramResizeWatcher(ctx, program, stdout)
+	}
+	defer stopResizeWatcher()
 	finalModel, err := program.Run()
 	if err != nil {
 		return err

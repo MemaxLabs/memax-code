@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -120,6 +121,44 @@ func TestAppProgramComposerShrinksAfterDeletion(t *testing.T) {
 	}
 	if got, want := model.input.Height(), 1; got != want {
 		t.Fatalf("shrunk input height = %d, want %d", got, want)
+	}
+}
+
+func TestAppProgramClearLiveRegionAccountsForResizeReflow(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	var out bytes.Buffer
+	model.output = &out
+	model.liveLines = []string{strings.Repeat("x", 119)}
+	model.liveRows = 1
+	model.liveWidth = 119
+
+	model.clearLiveRegionLocked(40)
+
+	got := out.String()
+	if !strings.Contains(got, ansi.CursorUp(2)) {
+		t.Fatalf("clear did not move over reflowed physical rows; output = %q", got)
+	}
+	if model.liveRows != 0 || model.liveWidth != 0 || model.liveLines != nil {
+		t.Fatalf("clear did not reset live region state: rows=%d width=%d lines=%v", model.liveRows, model.liveWidth, model.liveLines)
+	}
+}
+
+func TestAppProgramClearLiveRegionDoesNotOverEraseAfterWiden(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	var out bytes.Buffer
+	model.output = &out
+	model.liveLines = []string{strings.Repeat("x", 119)}
+	model.liveRows = 3
+	model.liveWidth = 40
+
+	model.clearLiveRegionLocked(120)
+
+	got := out.String()
+	if strings.Contains(got, ansi.CursorUp(2)) {
+		t.Fatalf("clear over-erased widened live region; output = %q", got)
+	}
+	if !strings.Contains(got, ansi.EraseEntireLine) {
+		t.Fatalf("clear did not erase widened live region; output = %q", got)
 	}
 }
 

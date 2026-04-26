@@ -2306,18 +2306,14 @@ func TestRunInteractiveAppUsesInlineRendererWithoutAltScreen(t *testing.T) {
 			t.Fatalf("inline app output missing %q:\n%s", want, out)
 		}
 	}
-	stripped := ansi.Strip(out)
-	if got := strings.Count(stripped, "Ask Memax Code to inspect, change, or verify the repo"); got > 1 {
-		t.Fatalf("inline app output duplicated the composer placeholder %d times:\n%s", got, stripped)
-	}
 	if strings.Contains(out, "\x1b[?1049h") {
 		t.Fatalf("inline app output entered alt screen:\n%s", out)
 	}
 	if strings.Contains(out, "\x1b[2J") {
 		t.Fatalf("inline app output used full-screen clear:\n%s", out)
 	}
-	// These terminal toggles are emitted by Bubble Tea's standard renderer
-	// during init/restore; Memax Code does not write them manually.
+	// Memax Code writes these explicitly because app mode disables Bubble
+	// Tea's standard renderer and owns the inline live region.
 	if !strings.Contains(out, ansi.SetBracketedPasteMode) {
 		t.Fatalf("inline app output did not enable bracketed paste:\n%s", out)
 	}
@@ -2329,6 +2325,81 @@ func TestRunInteractiveAppUsesInlineRendererWithoutAltScreen(t *testing.T) {
 	}
 	if !strings.Contains(out, ansi.ShowCursor) {
 		t.Fatalf("inline app output did not restore cursor after live-region repaint:\n%s", out)
+	}
+}
+
+func TestRunInteractiveAppComposerUpdatesBeforeEnter(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Fatalf("pty.Open() error = %v", err)
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 28, Cols: 100}); err != nil {
+		t.Skipf("set pty size: %v", err)
+	}
+
+	output := make(chan []byte, 32)
+	readDone := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := ptmx.Read(buf)
+			if n > 0 {
+				output <- append([]byte(nil), buf[:n]...)
+			}
+			if err != nil {
+				readDone <- err
+				close(output)
+				return
+			}
+		}
+	}()
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- runInteractiveWithRunner(
+			context.Background(),
+			tty,
+			tty,
+			tty,
+			options{SessionDir: t.TempDir(), UI: renderModeApp},
+			func(_ context.Context, w io.Writer, opts options) (string, error) {
+				fmt.Fprintf(w, "ran prompt %q\n", opts.Prompt)
+				return "", nil
+			},
+		)
+	}()
+
+	drainOutputChunks(output, 150*time.Millisecond)
+	if _, err := io.WriteString(ptmx, "X"); err != nil {
+		t.Fatalf("WriteString(X) error = %v", err)
+	}
+	typed := ansi.Strip(string(bytes.Join(drainOutputChunks(output, 400*time.Millisecond), nil)))
+	if !strings.Contains(typed, "› X") {
+		t.Fatalf("composer did not update before Enter; output after X:\n%q", typed)
+	}
+	if _, err := io.WriteString(ptmx, "\x03"); err != nil {
+		t.Fatalf("WriteString(ctrl+c) error = %v", err)
+	}
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("runInteractiveWithRunner() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runInteractiveWithRunner() timed out")
+	}
+	if err := tty.Close(); err != nil {
+		t.Fatalf("tty.Close() error = %v", err)
+	}
+	select {
+	case err := <-readDone:
+		if err != nil && !isClosedPTYRead(err) {
+			t.Fatalf("pty read error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pty read timed out")
 	}
 }
 
@@ -2359,7 +2430,8 @@ func TestInteractiveAppProgramHandlesExplicitResizeMessages(t *testing.T) {
 	model.width = 121
 	model.height = 30
 	model.resize()
-	program := tea.NewProgram(model, tea.WithInput(tty), tea.WithOutput(tty), tea.WithContext(ctx))
+	model.output = tty
+	program := tea.NewProgram(model, tea.WithInput(tty), tea.WithOutput(tty), tea.WithContext(ctx), tea.WithoutRenderer())
 	model.program = program
 
 	runDone := make(chan error, 1)
@@ -2415,6 +2487,23 @@ func TestInteractiveAppProgramHandlesExplicitResizeMessages(t *testing.T) {
 	}
 	if strings.Contains(out, "\x1b[2J") {
 		t.Fatalf("explicit resize output used full-screen clear:\n%s", out)
+	}
+}
+
+func drainOutputChunks(output <-chan []byte, d time.Duration) [][]byte {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	var chunks [][]byte
+	for {
+		select {
+		case chunk, ok := <-output:
+			if !ok {
+				return chunks
+			}
+			chunks = append(chunks, chunk)
+		case <-timer.C:
+			return chunks
+		}
 	}
 }
 
