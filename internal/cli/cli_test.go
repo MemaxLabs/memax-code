@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -2488,6 +2489,88 @@ func TestInteractiveAppProgramHandlesExplicitResizeMessages(t *testing.T) {
 	if strings.Contains(out, "\x1b[2J") {
 		t.Fatalf("explicit resize output used full-screen clear:\n%s", out)
 	}
+}
+
+func TestInteractiveAppTmuxResizeVisiblePaneDoesNotGhostPrompt(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping tmux integration smoke in short mode")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skipf("tmux not available: %v", err)
+	}
+
+	sessionName := fmt.Sprintf("memax-code-resize-%d", time.Now().UnixNano())
+	repo := repoRoot(t)
+	sessionDir := t.TempDir()
+	historyFile := filepath.Join(t.TempDir(), "history.jsonl")
+	binaryPath := filepath.Join(t.TempDir(), "memax-code-test")
+	build := exec.Command("go", "build", "-o", binaryPath, "./cmd/memax-code")
+	build.Dir = repo
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build memax-code: %v\n%s", err, out)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+	})
+	start := exec.Command("tmux", "new-session", "-d", "-s", sessionName, "-x", "120", "-y", "34",
+		fmt.Sprintf("cd %s && %s --provider openai --model test-model --session-dir %s --history-file %s",
+			shellQuote(repo), shellQuote(binaryPath), shellQuote(sessionDir), shellQuote(historyFile)))
+	if out, err := start.CombinedOutput(); err != nil {
+		t.Fatalf("start tmux: %v\n%s", err, out)
+	}
+
+	if _, err := waitForTmuxPaneContains(sessionName, "Ask Memax Code", 15*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range [][2]string{
+		{"70", "22"},
+		{"42", "28"},
+		{"120", "34"},
+		{"36", "30"},
+		{"100", "24"},
+		{"58", "18"},
+		{"150", "40"},
+		{"44", "28"},
+		{"100", "24"},
+	} {
+		cmd := exec.Command("tmux", "resize-window", "-t", sessionName, "-x", size[0], "-y", size[1])
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("resize tmux to %sx%s: %v\n%s", size[0], size[1], err, out)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	time.Sleep(500 * time.Millisecond)
+	capture, err := captureTmuxPane(sessionName)
+	if err != nil {
+		t.Fatalf("capture tmux pane: %v\n%s", err, capture)
+	}
+	out := string(capture)
+	if count := strings.Count(out, "Ask Memax Code"); count != 1 {
+		t.Fatalf("visible pane has %d prompt placeholders, want 1:\n%s", count, out)
+	}
+	if count := strings.Count(out, "F1 help"); count != 1 {
+		t.Fatalf("visible pane has %d status help rows, want 1:\n%s", count, out)
+	}
+}
+
+func waitForTmuxPaneContains(sessionName, needle string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	var last string
+	for time.Now().Before(deadline) {
+		capture, err := captureTmuxPane(sessionName)
+		if err == nil {
+			last = string(capture)
+			if strings.Contains(last, needle) {
+				return last, nil
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return last, fmt.Errorf("tmux pane did not contain %q before timeout:\n%s", needle, last)
+}
+
+func captureTmuxPane(sessionName string) ([]byte, error) {
+	return exec.Command("tmux", "capture-pane", "-t", sessionName, "-p").CombinedOutput()
 }
 
 func drainOutputChunks(output <-chan []byte, d time.Duration) [][]byte {

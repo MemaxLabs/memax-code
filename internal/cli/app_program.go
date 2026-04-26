@@ -711,9 +711,13 @@ func (m *appProgramModel) composerView(width int) string {
 		lines[i] = appProgramFitLine(line, contentWidth)
 	}
 	// The caller passes the live-region width, which is already one physical
-	// column narrower than the terminal. Rendering to exactly this width keeps
-	// the gray prompt band visually full-width while avoiding terminal auto-wrap.
-	return appProgramComposerStyle.Width(width).Render(strings.Join(lines, "\n"))
+	// column narrower than the terminal. The DECAWM guard prevents full-width
+	// background padding from creating terminal-reflow ghost rows on resize.
+	return appProgramNoWrap(appProgramComposerStyle.Width(width).Render(strings.Join(lines, "\n")))
+}
+
+func appProgramNoWrap(s string) string {
+	return xansi.ResetModeAutoWrap + s + xansi.SetModeAutoWrap
 }
 
 func appProgramEmptyComposerLine(placeholder string) string {
@@ -2036,6 +2040,7 @@ func runInteractiveAppWithEvents(ctx context.Context, stdin io.Reader, stdout io
 	model := newAppProgramModelWithEvents(ctx, opts, runPrompt, runEvents)
 	terminal, terminalWidth, terminalHeight := terminalWriterInfo(stdout)
 	if terminal {
+		defer fmt.Fprint(stdout, xansi.SetModeAutoWrap)
 		// terminalWriterInfo reserves one physical column for terminal wrapping.
 		// appProgramModel.width stores the real terminal width and applies its
 		// own width reserve when wrapping printed transcript lines.
