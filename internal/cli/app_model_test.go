@@ -162,6 +162,58 @@ func TestAppProgramClearLiveRegionDoesNotOverEraseAfterWiden(t *testing.T) {
 	}
 }
 
+func TestAppProgramResizeDoesNotRepaintIdleLiveRegion(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	var out bytes.Buffer
+	model.output = &out
+
+	if cmd := model.Init(); cmd != nil {
+		_ = cmd()
+	}
+	if got := ansi.Strip(out.String()); strings.Count(got, "Ask Memax Code") != 1 {
+		t.Fatalf("initial render should paint one composer, got:\n%s", got)
+	}
+	out.Reset()
+
+	sizes := []tea.WindowSizeMsg{
+		{Width: 42, Height: 20},
+		{Width: 120, Height: 34},
+		{Width: 36, Height: 18},
+		{Width: 96, Height: 28},
+		{Width: 58, Height: 22},
+	}
+	for _, size := range sizes {
+		updated, cmd := model.Update(size)
+		if cmd != nil {
+			_ = cmd()
+		}
+		model = updated.(*appProgramModel)
+	}
+
+	if got := out.String(); got != "" {
+		t.Fatalf("idle resizes repainted live region:\n%q", got)
+	}
+	last := sizes[len(sizes)-1]
+	if model.width != last.Width || model.height != last.Height {
+		t.Fatalf("resize did not update dimensions: width=%d height=%d", model.width, model.height)
+	}
+
+	model.appendLocalTranscriptLine("assistant", "after resize")
+	if cmd := model.withRender(nil); cmd != nil {
+		_ = cmd()
+	}
+	got := out.String()
+	if !strings.Contains(got, ansi.EraseEntireLine) {
+		t.Fatalf("post-resize render did not clear old live region:\n%q", got)
+	}
+	if count := strings.Count(ansi.Strip(got), "Ask Memax Code"); count != 1 {
+		t.Fatalf("post-resize render should paint one composer, got %d:\n%s", count, ansi.Strip(got))
+	}
+	if !strings.Contains(ansi.Strip(got), "after resize") {
+		t.Fatalf("post-resize render missing transcript line:\n%s", ansi.Strip(got))
+	}
+}
+
 func TestAppProgramComposerHistoryUsesUpDownAtInputBoundaries(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.composer.loadHistory([]string{"first prompt", "second prompt"})

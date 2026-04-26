@@ -2482,6 +2482,9 @@ func TestInteractiveAppProgramHandlesExplicitResizeMessages(t *testing.T) {
 			t.Fatalf("explicit resize output missing %q:\n%s", want, out)
 		}
 	}
+	if count := strings.Count(ansi.Strip(out), "Ask Memax Code"); count > 2 {
+		t.Fatalf("explicit resize repainted idle composer %d times:\n%s", count, out)
+	}
 	if strings.Contains(out, "\x1b[?1049h") {
 		t.Fatalf("explicit resize output entered alt screen:\n%s", out)
 	}

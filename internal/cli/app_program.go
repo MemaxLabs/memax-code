@@ -15,6 +15,7 @@ import (
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -94,7 +95,6 @@ type appProgramModel struct {
 	liveRows      int
 	liveWidth     int
 	liveLines     []string
-	cursorHidden  bool
 	renderMu      sync.Mutex
 }
 
@@ -147,6 +147,7 @@ func newAppProgramTextarea() textarea.Model {
 	input.BlurredStyle.EndOfBuffer = lipgloss.NewStyle().Background(appProgramComposerBackground)
 	input.Cursor.Style = input.Cursor.Style.Background(appProgramComposerBackground)
 	input.Cursor.TextStyle = input.Cursor.TextStyle.Background(appProgramComposerBackground)
+	input.Cursor.SetMode(cursor.CursorStatic)
 	input.SetPromptFunc(2, func(lineIdx int) string {
 		if lineIdx == 0 {
 			return "› "
@@ -158,7 +159,7 @@ func newAppProgramTextarea() textarea.Model {
 }
 
 func (m *appProgramModel) Init() tea.Cmd {
-	return tea.Batch(m.withRender(nil), textarea.Blink)
+	return m.withRender(nil)
 }
 
 func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -167,6 +168,15 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resize()
+		if m.output != nil {
+			// In inline scrollback mode, a pure resize has already caused the
+			// terminal to reflow previously-painted prompt/status rows. Repainting
+			// immediately on every WindowSizeMsg can leave gray ghosts while the
+			// user drags the terminal size. Treat resize as a layout-state update;
+			// input, transcript, tool events, and running ticks repaint with the
+			// latest dimensions.
+			return m, nil
+		}
 	case tea.KeyMsg:
 		if cmd, handled := m.updateKey(msg); handled {
 			return m, m.withRender(cmd)
@@ -565,10 +575,7 @@ func (m *appProgramModel) renderLiveRegion() {
 	if view == "" {
 		return
 	}
-	if !m.cursorHidden {
-		fmt.Fprint(m.output, xansi.HideCursor)
-		m.cursorHidden = true
-	}
+	fmt.Fprint(m.output, xansi.HideCursor)
 	// The live renderer always leaves the terminal cursor at column 0 of the
 	// bottom physical row. Re-assert that invariant before every paint so the
 	// first render and any resize-triggered repaint start from the same place.
