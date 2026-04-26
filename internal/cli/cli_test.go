@@ -1844,7 +1844,7 @@ func TestRunWithoutPromptStartsAppOnTerminalIO(t *testing.T) {
 	for _, want := range []string{
 		"Welcome. Type a task or /help.",
 		"Memax Code",
-		"session none",
+		"F1 help",
 		"bye",
 	} {
 		if !strings.Contains(out, want) {
@@ -2224,8 +2224,7 @@ func TestRunInteractiveAppFlagUsesInlineApp(t *testing.T) {
 	for _, want := range []string{
 		"Welcome. Type a task or /help.",
 		"Memax Code",
-		"session none",
-		"input draft: inactive",
+		"F1 help",
 		"slash commands:",
 		"/quit              exit",
 		"bye",
@@ -2301,7 +2300,7 @@ func TestRunInteractiveAppUsesInlineRendererWithoutAltScreen(t *testing.T) {
 	}
 
 	out := output.String()
-	for _, want := range []string{"Welcome. Type a task or /help.", "Memax Code", "session none", "bye"} {
+	for _, want := range []string{"Welcome. Type a task or /help.", "Memax Code", "F1 help", "bye"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("inline app output missing %q:\n%s", want, out)
 		}
@@ -2522,6 +2521,12 @@ func TestInteractiveAppTmuxResizeVisiblePaneDoesNotGhostPrompt(t *testing.T) {
 	if _, err := waitForTmuxPaneContains(sessionName, "Ask Memax Code", 15*time.Second); err != nil {
 		t.Fatal(err)
 	}
+	if out, err := exec.Command("tmux", "send-keys", "-t", sessionName, "/status", "Enter").CombinedOutput(); err != nil {
+		t.Fatalf("send tmux status command: %v\n%s", err, out)
+	}
+	if _, err := waitForTmuxPaneContains(sessionName, "status:", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
 	for _, size := range [][2]string{
 		{"70", "22"},
 		{"42", "28"},
@@ -2537,20 +2542,49 @@ func TestInteractiveAppTmuxResizeVisiblePaneDoesNotGhostPrompt(t *testing.T) {
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("resize tmux to %sx%s: %v\n%s", size[0], size[1], err, out)
 		}
-		time.Sleep(200 * time.Millisecond)
+		waitForTmuxPaneStableSingleLivePrompt(t, sessionName, 2*time.Second)
 	}
-	time.Sleep(500 * time.Millisecond)
+	waitForTmuxPaneStableSingleLivePrompt(t, sessionName, 2*time.Second)
+}
+
+func waitForTmuxPaneStableSingleLivePrompt(t *testing.T, sessionName string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	stable := 0
+	var last string
+	for time.Now().Before(deadline) {
+		ok, out := tmuxPaneHasSingleLivePrompt(t, sessionName)
+		last = out
+		if ok {
+			stable++
+			if stable >= 2 {
+				return
+			}
+		} else {
+			stable = 0
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("visible pane did not settle to a single live prompt:\n%s", last)
+}
+
+func tmuxPaneHasSingleLivePrompt(t *testing.T, sessionName string) (bool, string) {
+	t.Helper()
 	capture, err := captureTmuxPane(sessionName)
 	if err != nil {
 		t.Fatalf("capture tmux pane: %v\n%s", err, capture)
 	}
 	out := string(capture)
 	if count := strings.Count(out, "Ask Memax Code"); count != 1 {
-		t.Fatalf("visible pane has %d prompt placeholders, want 1:\n%s", count, out)
+		return false, out
 	}
 	if count := strings.Count(out, "F1 help"); count != 1 {
-		t.Fatalf("visible pane has %d status help rows, want 1:\n%s", count, out)
+		return false, out
 	}
+	if count := strings.Count(out, "status:"); count > 1 {
+		return false, out
+	}
+	return true, out
 }
 
 func waitForTmuxPaneContains(sessionName, needle string, timeout time.Duration) (string, error) {

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -43,8 +42,12 @@ var (
 	appProgramCodeStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("188")).Background(lipgloss.Color("236")).Padding(0, 1)
 	appProgramInlineCodeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("188"))
 	appProgramQuoteStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Italic(true)
-	appProgramComposerStyle      = lipgloss.NewStyle().Background(appProgramComposerBackground).Padding(1, 1)
 	appProgramStatusMetaStyle    = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("242"))
+)
+
+const (
+	appProgramComposerBackgroundSGR = "\x1b[48;5;235m"
+	appProgramResetSGR              = "\x1b[0m"
 )
 
 type appProgramTranscriptMsg struct {
@@ -123,7 +126,7 @@ func newAppProgramModelWithEvents(ctx context.Context, opts options, runPrompt i
 func newAppProgramTextarea() textarea.Model {
 	input := textarea.New()
 	input.Prompt = "› "
-	input.Placeholder = "Ask Memax Code to inspect, change, or verify the repo"
+	input.Placeholder = "Ask Memax Code"
 	input.ShowLineNumbers = false
 	input.SetHeight(appProgramMinComposer)
 	input.FocusedStyle.Base = lipgloss.NewStyle().Background(appProgramComposerBackground)
@@ -508,7 +511,17 @@ func (m *appProgramModel) flushPrints() tea.Cmd {
 		}
 		return nil
 	}
+	lines = appProgramClearBelowAfterPrint(lines)
 	return tea.Println(strings.Join(lines, "\n"))
+}
+
+func appProgramClearBelowAfterPrint(lines []string) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	out := append([]string(nil), lines...)
+	out[len(out)-1] += appProgramResetSGR + xansi.EraseScreenBelow
+	return out
 }
 
 func (m *appProgramModel) withRender(cmd tea.Cmd) tea.Cmd {
@@ -572,13 +585,10 @@ func (m *appProgramModel) View() string {
 	rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 	rows = append(rows, m.composerView(renderWidth))
 	rows = append(rows, m.bottomStatusView(renderWidth))
-	if m.height <= 0 || len(rows) < m.height {
-		rows = append(rows, "")
-	}
 	if m.showHelp {
 		rows = append(rows, m.helpView(renderWidth))
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+	return appProgramNoWrap(appProgramJoinRows(rows))
 }
 
 func appendAppProgramBlankRows(rows []string, count int) []string {
@@ -586,6 +596,13 @@ func appendAppProgramBlankRows(rows []string, count int) []string {
 		rows = append(rows, "")
 	}
 	return rows
+}
+
+func appProgramJoinRows(rows []string) string {
+	// lipgloss.JoinVertical pads shorter rows with literal spaces. In inline
+	// app mode those cells can survive terminal resizes as stale background
+	// paint, so keep row joining byte-for-byte.
+	return strings.Join(rows, "\n")
 }
 
 func (m *appProgramModel) activityStatusView(width int) string {
@@ -633,55 +650,21 @@ func (m *appProgramModel) activeRuntimeActivityView(width int) string {
 }
 
 func (m *appProgramModel) bottomStatusView(width int) string {
-	primary := []string{
-		appProgramBrandStyle.Render("Memax Code"),
-		m.phaseLabel(),
-	}
-	contextParts := []string{
-		appProgramStatusPart("session", nonEmptyOr(shortSessionID(m.sessionID), "none")),
-		appProgramStatusPart("workspace", filepath.Base(m.opts.CWD)),
-	}
-	if m.opts.Model != "" {
-		contextParts = append(contextParts, appProgramStatusMetaStyle.Render(m.opts.Model))
-	}
-	if m.opts.Effort != "" && m.opts.Effort != "auto" {
-		contextParts = append(contextParts, appProgramStatusPart("effort", m.opts.Effort))
-	}
-	secondary := []string{
-		appProgramStatusPart("input", m.composer.statusLine()),
-		appProgramStatusMetaStyle.Render("F1 help"),
-	}
-	parts := append(append([]string{}, primary...), contextParts...)
-	parts = append(parts, secondary...)
-	line := appProgramStatusLine(parts)
-	for width > 0 && lipgloss.Width(line) > width && len(contextParts) > 0 {
-		contextParts = contextParts[:len(contextParts)-1]
-		parts = append(append([]string{}, primary...), contextParts...)
-		parts = append(parts, secondary...)
-		line = appProgramStatusLine(parts)
-	}
-	for _, compactParts := range [][]string{
-		append([]string{m.phaseLabel()}, secondary...),
+	for _, parts := range [][]string{
+		{appProgramBrandStyle.Render("Memax Code"), m.phaseLabel(), appProgramStatusMetaStyle.Render("F1 help")},
 		{m.phaseLabel(), appProgramStatusMetaStyle.Render("F1 help")},
 		{m.phaseLabel()},
 	} {
-		compactLine := appProgramStatusLine(compactParts)
-		if width <= 0 || lipgloss.Width(line) <= width || lipgloss.Width(compactLine) <= width {
-			if width > 0 && lipgloss.Width(line) > width {
-				line = compactLine
-			}
-			break
+		line := appProgramStatusLine(parts)
+		if width <= 0 || lipgloss.Width(line) <= width {
+			return appProgramResetSGR + appProgramFitLine(line, width)
 		}
 	}
-	return appProgramFitLine(line, width)
+	return appProgramResetSGR + appProgramFitLine(m.phaseLabel(), width)
 }
 
 func appProgramStatusLine(parts []string) string {
 	return lipgloss.NewStyle().PaddingLeft(appProgramStatusInset).Render(strings.Join(parts, appProgramDimStyle.Render("  ·  ")))
-}
-
-func appProgramStatusPart(label, value string) string {
-	return appProgramStatusMetaStyle.Render(label + " " + value)
 }
 
 func (m *appProgramModel) phaseLabel() string {
@@ -708,16 +691,32 @@ func (m *appProgramModel) composerView(width int) string {
 		lines = []string{appProgramEmptyComposerLine(m.input.Placeholder)}
 	}
 	for i, line := range lines {
-		lines[i] = appProgramFitLine(line, contentWidth)
+		lines[i] = appProgramComposerContentLine(appProgramFitLine(line, contentWidth))
 	}
-	// The caller passes the live-region width, which is already one physical
-	// column narrower than the terminal. The DECAWM guard prevents full-width
-	// background padding from creating terminal-reflow ghost rows on resize.
-	return appProgramNoWrap(appProgramComposerStyle.Width(width).Render(strings.Join(lines, "\n")))
+	// The live prompt must look like a full-width gray band, but literal
+	// trailing spaces reflow into ghost rows when terminals are resized.
+	// Keeping the background active until Bubble Tea's end-of-line erase lets
+	// the terminal paint the band without inserting reflowable cells.
+	rows := make([]string, 0, len(lines)+2)
+	rows = append(rows, appProgramComposerFillLine())
+	rows = append(rows, lines...)
+	rows = append(rows, appProgramComposerFillLine())
+	return strings.Join(rows, "\n")
 }
 
 func appProgramNoWrap(s string) string {
 	return xansi.ResetModeAutoWrap + s + xansi.SetModeAutoWrap
+}
+
+func appProgramComposerFillLine() string {
+	// Bubble Tea's standard renderer fills the rest of short lines with
+	// erase-line-right. Leaving the background SGR active here makes that
+	// renderer fill paint the visual prompt band without literal spaces.
+	return appProgramComposerBackgroundSGR
+}
+
+func appProgramComposerContentLine(line string) string {
+	return appProgramComposerBackgroundSGR + " " + line + appProgramComposerBackgroundSGR + " "
 }
 
 func appProgramEmptyComposerLine(placeholder string) string {

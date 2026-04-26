@@ -2364,7 +2364,7 @@ func TestAppProgramViewUsesQuietIdleStatus(t *testing.T) {
 	if strings.Contains(view, "Ctrl+C") || strings.Contains(view, "Enter/Ctrl+S") {
 		t.Fatalf("idle view leaked verbose key help:\n%s", view)
 	}
-	if !strings.Contains(view, "Memax Code") || !strings.Contains(view, "input draft: inactive") {
+	if !strings.Contains(view, "Memax Code") || !strings.Contains(view, "idle") {
 		t.Fatalf("idle status missing expected compact status:\n%s", view)
 	}
 	if !strings.Contains(view, "F1 help") {
@@ -2415,20 +2415,31 @@ func TestAppProgramComposerViewPaintsTrailingWhitespace(t *testing.T) {
 	if strings.Contains(raw, "\x1b[0m  \x1b[0m") {
 		t.Fatalf("composer rendered unpainted trailing whitespace gap:\n%q", raw)
 	}
+	if regexp.MustCompile(`\x1b\[0m[ \t]+\x1b\[48;5;235m`).MatchString(raw) {
+		t.Fatalf("composer reset background before trailing spacer:\n%q", raw)
+	}
 	if strings.Contains(raw, "\x1b[7") {
 		t.Fatalf("empty composer placeholder rendered inverse cursor block:\n%q", raw)
 	}
 	if !strings.Contains(raw, "\x1b[48;5;235m") {
 		t.Fatalf("composer missing expected background color:\n%q", raw)
 	}
+	lines := strings.Split(raw, "\n")
+	for _, line := range lines {
+		if !strings.HasSuffix(line, appProgramComposerBackgroundSGR) && !strings.HasSuffix(line, appProgramComposerBackgroundSGR+" ") {
+			t.Fatalf("composer line should leave background active for renderer erase-line-right fill:\n%q", raw)
+		}
+	}
 }
 
-func TestAppProgramComposerViewPaintsFullLiveRegionWidth(t *testing.T) {
+func TestAppProgramComposerViewAvoidsReflowableFullWidthRows(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
-	raw := model.composerView(120)
+	model.width = 120
+	model.resize()
+	raw := model.View()
 	for _, line := range strings.Split(raw, "\n") {
-		if got := lipgloss.Width(line); got != 120 {
-			t.Fatalf("composer line width = %d, want full live region width:\n%q", got, raw)
+		if got := lipgloss.Width(line); got >= 120 {
+			t.Fatalf("view line width = %d, want below terminal width to prevent reflow:\n%q", got, raw)
 		}
 	}
 }
@@ -2654,7 +2665,7 @@ func TestAppProgramFitPrintedLinesPreservesANSIStyledText(t *testing.T) {
 	}
 }
 
-func TestAppProgramBottomStatusDimsMetadata(t *testing.T) {
+func TestAppProgramBottomStatusRendersCompactFooter(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.ANSI256)
 	defer lipgloss.SetColorProfile(previousProfile)
@@ -2668,9 +2679,23 @@ func TestAppProgramBottomStatusDimsMetadata(t *testing.T) {
 	if !strings.HasPrefix(stripped, strings.Repeat(" ", appProgramStatusInset)+"Memax Code") {
 		t.Fatalf("bottom status missing left padding:\n%q", stripped)
 	}
-	for _, want := range []string{"Memax Code", "session none", "workspace .", "gpt-5.4", "input draft: inactive"} {
+	for _, want := range []string{"Memax Code", "idle", "F1 help"} {
 		if !strings.Contains(stripped, want) {
 			t.Fatalf("bottom status missing %q:\n%s", want, stripped)
+		}
+	}
+
+	for _, width := range []int{12, 20} {
+		raw := model.bottomStatusView(width)
+		stripped := ansi.Strip(raw)
+		if strings.Contains(stripped, "\n") {
+			t.Fatalf("narrow bottom status rendered multiple rows for width %d:\n%q", width, stripped)
+		}
+		if got := ansi.StringWidth(stripped); got > width {
+			t.Fatalf("narrow bottom status width = %d, want <= %d:\n%q", got, width, stripped)
+		}
+		if !strings.Contains(stripped, "idle") {
+			t.Fatalf("narrow bottom status missing phase for width %d:\n%q", width, stripped)
 		}
 	}
 }
@@ -2700,14 +2725,14 @@ func TestAppProgramViewFitsAfterTerminalResize(t *testing.T) {
 	model = updated.(*appProgramModel)
 	view := model.View()
 	stripped := ansi.Strip(view)
-	for _, want := range []string{"Web fetch(", "title: wide status", "input draft: inactive", "F1 help"} {
+	for _, want := range []string{"Web fetch(", "title: wide status", "working", "F1 help"} {
 		if !strings.Contains(stripped, want) {
 			t.Fatalf("resized view missing %q:\n%s", want, stripped)
 		}
 	}
 	for _, line := range strings.Split(stripped, "\n") {
-		if strings.Contains(line, "input draft: inactive") && strings.Contains(line, "Memax Code") {
-			t.Fatalf("resized narrow status should prioritize input/help over brand:\n%s", stripped)
+		if strings.Contains(line, "F1 help") && strings.Contains(line, "Web fetch(") {
+			t.Fatalf("resized narrow status should stay separate from activity rows:\n%s", stripped)
 		}
 	}
 	for _, line := range strings.Split(view, "\n") {
