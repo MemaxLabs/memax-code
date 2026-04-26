@@ -31,6 +31,7 @@ type appTranscriptFormatter struct {
 	renderedToolDisplays   map[string]string
 	lastActivityCommandKey string
 	lastActivityToolKey    string
+	liveActivityBlockOpen  bool
 	flushedAnonymous       bool
 	liveCommandGroups      bool
 	nextCommandGroup       int
@@ -118,6 +119,7 @@ func (f *appTranscriptFormatter) appendAssistantText(text string) {
 	f.flushUnprintedCommandGroups()
 	f.lastActivityCommandKey = ""
 	f.lastActivityToolKey = ""
+	f.liveActivityBlockOpen = false
 	if f.compactor.section != "assistant" {
 		f.appendTranscriptSpacer()
 	}
@@ -134,6 +136,7 @@ func (f *appTranscriptFormatter) appendActivityLine(line string) {
 	f.compactor.resetSection()
 	f.lastActivityCommandKey = ""
 	f.lastActivityToolKey = ""
+	f.liveActivityBlockOpen = false
 	f.queuePrints(f.transcript.appendStandaloneLine(line))
 }
 
@@ -149,6 +152,7 @@ func (f *appTranscriptFormatter) appendRuntimeErrorLine(text string) {
 	f.compactor.resetSection()
 	f.lastActivityCommandKey = ""
 	f.lastActivityToolKey = ""
+	f.liveActivityBlockOpen = false
 	f.queuePrints(f.transcript.appendStandaloneLine(compactAppProgramLocalLine("error", "error: "+text)))
 }
 
@@ -271,6 +275,9 @@ func (f *appTranscriptFormatter) appendImmediateCommandToolUse(toolUse *model.To
 	}
 	key := f.startCommandGroupKey(commandEvent)
 	f.ensurePendingCommands()
+	if f.liveCommandGroups {
+		f.beginLiveActivityBlock()
+	}
 	group := f.pendingCommandGroup(key, commandEvent)
 	if group.printed {
 		return true
@@ -325,6 +332,7 @@ func (f *appTranscriptFormatter) appendLocalTranscriptLine(kind, text string) {
 	f.compactor.resetSection()
 	f.lastActivityCommandKey = ""
 	f.lastActivityToolKey = ""
+	f.liveActivityBlockOpen = false
 	if kind == "user" {
 		f.appendTranscriptSpacer()
 	}
@@ -339,6 +347,7 @@ func (f *appTranscriptFormatter) appendActivityGroup(lines ...string) {
 	f.compactor.resetSection()
 	f.lastActivityCommandKey = ""
 	f.lastActivityToolKey = ""
+	f.liveActivityBlockOpen = false
 	f.appendTranscriptSpacer()
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
@@ -356,6 +365,7 @@ func (f *appTranscriptFormatter) appendCommandActivityGroup(key string, lines ..
 	f.flushTranscriptPartial()
 	f.compactor.resetSection()
 	f.lastActivityToolKey = ""
+	f.liveActivityBlockOpen = false
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -392,6 +402,7 @@ func (f *appTranscriptFormatter) appendToolActivityGroup(key string, lines ...st
 	f.flushTranscriptPartial()
 	f.compactor.resetSection()
 	f.lastActivityCommandKey = ""
+	f.liveActivityBlockOpen = false
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -866,6 +877,9 @@ func (f *appTranscriptFormatter) appendGroupedCommandEvent(event memaxagent.Even
 	case memaxagent.EventCommandStarted:
 		key := f.startCommandGroupKey(command)
 		f.ensurePendingCommands()
+		if f.liveCommandGroups && f.pendingCommands[key] == nil {
+			f.beginLiveActivityBlock()
+		}
 		group := f.pendingCommandGroup(key, command)
 		if strings.TrimSpace(command.CommandID) != "" && !group.printed && !f.liveCommandGroups {
 			f.appendCommandBlock(key, group.renderHeader()...)
@@ -1133,6 +1147,7 @@ func (f *appTranscriptFormatter) pendingToolGroup(key, name, display string) *ap
 	}
 	group := f.pendingToolGroups[key]
 	if group == nil {
+		f.beginLiveActivityBlock()
 		group = &appProgramToolGroup{name: name, display: display}
 		f.pendingToolGroups[key] = group
 		f.pendingToolOrder = append(f.pendingToolOrder, key)
@@ -1145,6 +1160,18 @@ func (f *appTranscriptFormatter) pendingToolGroup(key, name, display string) *ap
 		group.display = display
 	}
 	return group
+}
+
+func (f *appTranscriptFormatter) beginLiveActivityBlock() {
+	if !f.liveCommandGroups || f.liveActivityBlockOpen {
+		return
+	}
+	f.flushTranscriptPartial()
+	f.compactor.resetSection()
+	f.lastActivityCommandKey = ""
+	f.lastActivityToolKey = ""
+	f.appendTranscriptSpacer()
+	f.liveActivityBlockOpen = true
 }
 
 func (f *appTranscriptFormatter) appendLiveToolResult(toolUse *model.ToolUse, result *model.ToolResult) bool {

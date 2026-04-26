@@ -2660,6 +2660,171 @@ func TestAppProgramAssistantAfterToolCallHasSpacing(t *testing.T) {
 	}
 }
 
+func TestAppProgramLiveToolAfterAssistantHasSpacing(t *testing.T) {
+	app := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	app.transcript = appTranscriptTail{}
+	app.width = 100
+	app.running = true
+
+	app.appendEvent(memaxagent.Event{Kind: memaxagent.EventAssistant, Message: &model.Message{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{
+			{Type: model.ContentText, Text: "I will inspect the repository layout.\n"},
+		},
+	}})
+	app.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{
+		ID:   "tool-1",
+		Name: "workspace_list_files",
+	}})
+	app.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		ToolUseID: "tool-1",
+		Name:      "workspace_list_files",
+		Content:   "ok",
+	}})
+
+	got := ansi.Strip(strings.Join(app.transcript.lines(maxAppTranscriptLines), "\n"))
+	want := strings.Join([]string{
+		"• I will inspect the repository layout.",
+		"",
+		"• List files",
+		"  └ ok",
+	}, "\n")
+	if !strings.Contains(got, want) {
+		t.Fatalf("live tool after assistant missing spacer:\n%s", got)
+	}
+	if strings.Contains(got, "layout.\n• List files") {
+		t.Fatalf("live tool glued to assistant thought:\n%s", got)
+	}
+}
+
+func TestAppProgramLiveCommandAfterAssistantHasSpacing(t *testing.T) {
+	app := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	app.transcript = appTranscriptTail{}
+	app.width = 100
+	app.running = true
+
+	app.appendEvent(memaxagent.Event{Kind: memaxagent.EventAssistant, Message: &model.Message{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{
+			{Type: model.ContentText, Text: "Let me check the current branch.\n"},
+		},
+	}})
+	app.appendEvent(memaxagent.Event{
+		Kind: memaxagent.EventCommandStarted,
+		Command: &memaxagent.CommandEvent{
+			Operation: "run",
+			Command:   "git status --short --branch",
+			CommandID: "cmd-1",
+		},
+	})
+	app.appendEvent(memaxagent.Event{
+		Kind: memaxagent.EventCommandFinished,
+		Command: &memaxagent.CommandEvent{
+			Operation:  "run",
+			Command:    "git status --short --branch",
+			CommandID:  "cmd-1",
+			ExitCode:   0,
+			DurationMS: 3,
+		},
+	})
+
+	got := ansi.Strip(strings.Join(app.transcript.lines(maxAppTranscriptLines), "\n"))
+	want := strings.Join([]string{
+		"• Let me check the current branch.",
+		"",
+		"• Bash(git status --short --branch)",
+		"  └ done id=cmd-1 exit=0 duration=3ms",
+	}, "\n")
+	if !strings.Contains(got, want) {
+		t.Fatalf("live command after assistant missing spacer:\n%s", got)
+	}
+	if strings.Contains(got, "branch.\n• Bash(") {
+		t.Fatalf("live command glued to assistant thought:\n%s", got)
+	}
+}
+
+func TestAppProgramImmediateLiveCommandAfterAssistantHasSpacing(t *testing.T) {
+	app := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	app.transcript = appTranscriptTail{}
+	app.width = 100
+	app.running = true
+
+	app.appendEvent(memaxagent.Event{Kind: memaxagent.EventAssistant, Message: &model.Message{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{
+			{Type: model.ContentText, Text: "I will run a status check.\n"},
+		},
+	}})
+	app.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:    "tool-1",
+		Name:  "run_command",
+		Input: json.RawMessage(`{"command":"git status --short --branch"}`),
+	}})
+
+	got := ansi.Strip(strings.Join(app.transcript.lines(maxAppTranscriptLines), "\n"))
+	want := strings.Join([]string{
+		"• I will run a status check.",
+		"",
+	}, "\n")
+	if !strings.Contains(got, want) {
+		t.Fatalf("immediate live command after assistant missing spacer:\n%s", got)
+	}
+	if strings.Contains(got, "check.\n• Bash(") {
+		t.Fatalf("immediate live command glued to assistant thought:\n%s", got)
+	}
+	if active := ansi.Strip(strings.Join(app.activeActivityLines(), "\n")); !strings.Contains(active, "• Bash(git status --short --branch)") {
+		t.Fatalf("immediate live command missing active row:\n%s", active)
+	}
+}
+
+func TestAppProgramFreshLiveToolAfterAssistantIgnoresStalePending(t *testing.T) {
+	app := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	app.transcript = appTranscriptTail{}
+	app.width = 100
+	app.running = true
+
+	app.appendEvent(memaxagent.Event{Kind: memaxagent.EventAssistant, Message: &model.Message{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{
+			{Type: model.ContentText, Text: "I will start a long-running command.\n"},
+		},
+	}})
+	app.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:    "tool-1",
+		Name:  "start_command",
+		Input: json.RawMessage(`{"command":"sleep 60"}`),
+	}})
+	app.appendEvent(memaxagent.Event{Kind: memaxagent.EventAssistant, Message: &model.Message{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{
+			{Type: model.ContentText, Text: "While that runs, I will inspect files.\n"},
+		},
+	}})
+	app.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUseStart, ToolUse: &model.ToolUse{
+		ID:   "tool-2",
+		Name: "workspace_list_files",
+	}})
+	app.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		ToolUseID: "tool-2",
+		Name:      "workspace_list_files",
+		Content:   "ok",
+	}})
+
+	got := ansi.Strip(strings.Join(app.transcript.lines(maxAppTranscriptLines), "\n"))
+	want := strings.Join([]string{
+		"• While that runs, I will inspect files.",
+		"",
+		"• List files",
+		"  └ ok",
+	}, "\n")
+	if !strings.Contains(got, want) {
+		t.Fatalf("fresh live tool after assistant with stale pending missing spacer:\n%s", got)
+	}
+	if strings.Contains(got, "files.\n• List files") {
+		t.Fatalf("fresh live tool glued to assistant thought despite stale pending:\n%s", got)
+	}
+}
+
 func TestAppProgramComposerContentWidthHandlesNarrowTerminal(t *testing.T) {
 	for _, width := range []int{0, 1, 2, 3, 14, 80} {
 		if got := appProgramComposerContentWidth(width); got < 1 {
