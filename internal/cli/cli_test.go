@@ -2521,12 +2521,6 @@ func TestInteractiveAppTmuxResizeVisiblePaneDoesNotGhostPrompt(t *testing.T) {
 	if _, err := waitForTmuxPaneContains(sessionName, "Ask Memax Code", 15*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command("tmux", "send-keys", "-t", sessionName, "/status", "Enter").CombinedOutput(); err != nil {
-		t.Fatalf("send tmux status command: %v\n%s", err, out)
-	}
-	if _, err := waitForTmuxPaneContains(sessionName, "status:", 5*time.Second); err != nil {
-		t.Fatal(err)
-	}
 	for _, size := range [][2]string{
 		{"70", "22"},
 		{"42", "28"},
@@ -2542,18 +2536,60 @@ func TestInteractiveAppTmuxResizeVisiblePaneDoesNotGhostPrompt(t *testing.T) {
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("resize tmux to %sx%s: %v\n%s", size[0], size[1], err, out)
 		}
-		waitForTmuxPaneStableSingleLivePrompt(t, sessionName, 2*time.Second)
+		waitForTmuxPaneStableSingleLivePrompt(t, sessionName, "Ask Memax Code", 2*time.Second)
 	}
-	waitForTmuxPaneStableSingleLivePrompt(t, sessionName, 2*time.Second)
+	waitForTmuxPaneStableSingleLivePrompt(t, sessionName, "Ask Memax Code", 2*time.Second)
+
+	longDraft := "areaw rewarwar wrewar awer ewar awr awr"
+	if out, err := exec.Command("tmux", "send-keys", "-t", sessionName, "-l", longDraft).CombinedOutput(); err != nil {
+		t.Fatalf("send tmux long draft: %v\n%s", err, out)
+	}
+	if _, err := waitForTmuxPaneContains(sessionName, "areaw", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range [][2]string{
+		{"48", "20"},
+		{"120", "34"},
+		{"38", "24"},
+		{"100", "28"},
+		{"44", "22"},
+	} {
+		cmd := exec.Command("tmux", "resize-window", "-t", sessionName, "-x", size[0], "-y", size[1])
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("resize tmux with draft to %sx%s: %v\n%s", size[0], size[1], err, out)
+		}
+		waitForTmuxPaneStableSingleLiveDraft(t, sessionName, longDraft, 2*time.Second)
+	}
 }
 
-func waitForTmuxPaneStableSingleLivePrompt(t *testing.T, sessionName string, timeout time.Duration) {
+func waitForTmuxPaneStableSingleLiveDraft(t *testing.T, sessionName, draft string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	stable := 0
 	var last string
 	for time.Now().Before(deadline) {
-		ok, out := tmuxPaneHasSingleLivePrompt(t, sessionName)
+		ok, out := tmuxPaneHasSingleLiveDraft(t, sessionName, draft)
+		last = out
+		if ok {
+			stable++
+			if stable >= 2 {
+				return
+			}
+		} else {
+			stable = 0
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("visible pane did not settle to a single live draft:\n%s", last)
+}
+
+func waitForTmuxPaneStableSingleLivePrompt(t *testing.T, sessionName, promptNeedle string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	stable := 0
+	var last string
+	for time.Now().Before(deadline) {
+		ok, out := tmuxPaneHasSingleLivePrompt(t, sessionName, promptNeedle)
 		last = out
 		if ok {
 			stable++
@@ -2568,15 +2604,44 @@ func waitForTmuxPaneStableSingleLivePrompt(t *testing.T, sessionName string, tim
 	t.Fatalf("visible pane did not settle to a single live prompt:\n%s", last)
 }
 
-func tmuxPaneHasSingleLivePrompt(t *testing.T, sessionName string) (bool, string) {
+func tmuxPaneHasSingleLivePrompt(t *testing.T, sessionName, promptNeedle string) (bool, string) {
 	t.Helper()
 	capture, err := captureTmuxPane(sessionName)
 	if err != nil {
 		t.Fatalf("capture tmux pane: %v\n%s", err, capture)
 	}
 	out := string(capture)
-	if count := strings.Count(out, "Ask Memax Code"); count != 1 {
+	if promptNeedle != "" && strings.Count(out, promptNeedle) != 1 {
 		return false, out
+	}
+	if count := strings.Count(out, "F1 help"); count != 1 {
+		return false, out
+	}
+	if count := strings.Count(out, "status:"); count > 1 {
+		return false, out
+	}
+	return true, out
+}
+
+func tmuxPaneHasSingleLiveDraft(t *testing.T, sessionName, draft string) (bool, string) {
+	t.Helper()
+	capture, err := captureTmuxPane(sessionName)
+	if err != nil {
+		t.Fatalf("capture tmux pane: %v\n%s", err, capture)
+	}
+	out := string(capture)
+	wantCounts := map[string]int{}
+	for _, field := range strings.Fields(draft) {
+		wantCounts[field]++
+	}
+	gotCounts := map[string]int{}
+	for _, field := range strings.Fields(out) {
+		gotCounts[field]++
+	}
+	for field, want := range wantCounts {
+		if got := gotCounts[field]; got != want {
+			return false, out
+		}
 	}
 	if count := strings.Count(out, "F1 help"); count != 1 {
 		return false, out

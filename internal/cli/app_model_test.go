@@ -2389,7 +2389,11 @@ func TestAppProgramViewUsesQuietIdleStatus(t *testing.T) {
 
 func TestAppProgramComposerViewUsesVerticalPadding(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
-	got := ansi.Strip(model.composerView(80))
+	raw := model.composerView(80)
+	if strings.Contains(raw, "\x1b[7") {
+		t.Fatalf("empty composer should not render an inverse cursor block:\n%q", raw)
+	}
+	got := ansi.Strip(raw)
 	lines := strings.Split(got, "\n")
 	if len(lines) < 3 {
 		t.Fatalf("composer view lines = %d, want vertical padding around input:\n%q", len(lines), got)
@@ -2411,6 +2415,9 @@ func TestAppProgramComposerViewPaintsTrailingWhitespace(t *testing.T) {
 	defer lipgloss.SetColorProfile(previousProfile)
 
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.input.SetValue("areaw rewarwar wrewar awer ewar awr awr")
+	model.width = 42
+	model.resize()
 	raw := model.composerView(20)
 	if strings.Contains(raw, "\x1b[0m  \x1b[0m") {
 		t.Fatalf("composer rendered unpainted trailing whitespace gap:\n%q", raw)
@@ -2418,22 +2425,80 @@ func TestAppProgramComposerViewPaintsTrailingWhitespace(t *testing.T) {
 	if regexp.MustCompile(`\x1b\[0m[ \t]+\x1b\[48;5;235m`).MatchString(raw) {
 		t.Fatalf("composer reset background before trailing spacer:\n%q", raw)
 	}
-	if strings.Contains(raw, "\x1b[7") {
-		t.Fatalf("empty composer placeholder rendered inverse cursor block:\n%q", raw)
-	}
 	if !strings.Contains(raw, "\x1b[48;5;235m") {
 		t.Fatalf("composer missing expected background color:\n%q", raw)
 	}
 	lines := strings.Split(raw, "\n")
 	for _, line := range lines {
-		if !strings.HasSuffix(line, appProgramComposerBackgroundSGR) && !strings.HasSuffix(line, appProgramComposerBackgroundSGR+" ") {
-			t.Fatalf("composer line should leave background active for renderer erase-line-right fill:\n%q", raw)
+		if !strings.Contains(line, ansi.EraseLineRight) || !strings.HasSuffix(line, appProgramResetSGR) {
+			t.Fatalf("composer line should explicitly erase to end of line and reset style:\n%q", raw)
 		}
+	}
+	stripped := ansi.Strip(raw)
+	if strings.Contains(stripped, "awr awr       ") {
+		t.Fatalf("composer kept textarea trailing padding in typed draft:\n%q", raw)
+	}
+}
+
+func TestAppProgramComposerHeightTracksSoftWrappedDraft(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.input.SetValue("areaw rewarwar wrewar awer ewar awr awr")
+
+	model.width = 42
+	model.resize()
+	narrowHeight := model.input.Height()
+	if narrowHeight <= appProgramMinComposer {
+		t.Fatalf("narrow composer height = %d, want soft-wrapped draft to expand", narrowHeight)
+	}
+
+	model.width = 120
+	model.resize()
+	if got, want := model.input.Height(), appProgramMinComposer; got != want {
+		t.Fatalf("wide composer height = %d, want %d", got, want)
+	}
+}
+
+func TestAppProgramComposerHeightTracksTextareaWordWrap(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.input.SetValue("a a a")
+	model.width = 8
+	model.resize()
+
+	if got, want := model.input.Height(), 3; got != want {
+		t.Fatalf("word-wrapped composer height = %d, want %d", got, want)
+	}
+	stripped := ansi.Strip(model.composerView(appProgramLiveRegionWidth(model.width)))
+	if strings.Count(stripped, "a") != 3 {
+		t.Fatalf("word-wrapped composer clipped draft:\n%s", stripped)
+	}
+
+	model.input.SetValue("aaaaaaaaaaaaaaaaaaaa")
+	model.resize()
+	if got, want := model.input.Height(), 7; got != want {
+		t.Fatalf("long-token composer height = %d, want %d", got, want)
+	}
+
+	model.input.SetValue(strings.Repeat("a ", 30))
+	model.resize()
+	if got, want := model.input.Height(), 8; got != want {
+		t.Fatalf("very long composer height = %d, want cap %d", got, want)
+	}
+}
+
+func TestAppProgramComposerHeightUsesGraphemeWidth(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.input.SetValue("go 🇺🇸 now")
+	model.width = 9
+	model.resize()
+
+	if got, want := model.input.Height(), 3; got != want {
+		t.Fatalf("grapheme-wrapped composer height = %d, want %d", got, want)
 	}
 }
 
 func TestAppProgramComposerViewAvoidsReflowableFullWidthRows(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.input.SetValue("areaw rewarwar wrewar awer ewar awr awr")
 	model.width = 120
 	model.resize()
 	raw := model.View()

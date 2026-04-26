@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -18,10 +19,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/rivo/uniseg"
 )
 
 const (
 	appProgramMinComposer = 1
+	appProgramPromptWidth = 2
 	appProgramStatusInset = 2
 	appProgramBottomInset = 1
 )
@@ -144,7 +147,7 @@ func newAppProgramTextarea() textarea.Model {
 	input.Cursor.Style = input.Cursor.Style.Background(appProgramComposerBackground)
 	input.Cursor.TextStyle = input.Cursor.TextStyle.Background(appProgramComposerBackground)
 	input.Cursor.SetMode(cursor.CursorStatic)
-	input.SetPromptFunc(2, func(lineIdx int) string {
+	input.SetPromptFunc(appProgramPromptWidth, func(lineIdx int) string {
 		if lineIdx == 0 {
 			return "› "
 		}
@@ -556,9 +559,13 @@ func (m *appProgramModel) resize() {
 	}
 	renderWidth := appProgramLiveRegionWidth(width)
 	m.compactor.width = renderWidth
-	composerHeight := max(appProgramMinComposer, min(8, strings.Count(m.input.Value(), "\n")+1))
-	m.input.SetWidth(appProgramComposerContentWidth(renderWidth))
+	contentWidth := appProgramComposerContentWidth(renderWidth)
+	composerHeight := appProgramComposerHeight(m.input.Value(), contentWidth)
+	m.input.SetWidth(contentWidth)
 	m.input.SetHeight(composerHeight)
+	// Bubbles textarea keeps viewport positioning internally; updating with a
+	// nil message forces it to reposition after width/height changes.
+	m.input, _ = m.input.Update(nil)
 }
 
 func (m *appProgramModel) View() string {
@@ -588,7 +595,17 @@ func (m *appProgramModel) View() string {
 	if m.showHelp {
 		rows = append(rows, m.helpView(renderWidth))
 	}
+	rows = appProgramClearBelowLastRow(rows)
 	return appProgramNoWrap(appProgramJoinRows(rows))
+}
+
+func appProgramClearBelowLastRow(rows []string) []string {
+	if len(rows) == 0 {
+		return rows
+	}
+	out := append([]string(nil), rows...)
+	out[len(out)-1] += appProgramResetSGR + xansi.EraseScreenBelow
+	return out
 }
 
 func appendAppProgramBlankRows(rows []string, count int) []string {
@@ -686,11 +703,12 @@ func (m *appProgramModel) helpView(width int) string {
 
 func (m *appProgramModel) composerView(width int) string {
 	contentWidth := appProgramComposerContentWidth(width)
-	lines := strings.Split(m.input.View(), "\n")
+	lines := appProgramTextareaRows(m.input.View(), m.input.Height())
 	if m.input.Value() == "" {
 		lines = []string{appProgramEmptyComposerLine(m.input.Placeholder)}
 	}
 	for i, line := range lines {
+		line = appProgramTrimRightVisibleSpace(line)
 		lines[i] = appProgramComposerContentLine(appProgramFitLine(line, contentWidth))
 	}
 	// The live prompt must look like a full-width gray band, but literal
@@ -709,14 +727,62 @@ func appProgramNoWrap(s string) string {
 }
 
 func appProgramComposerFillLine() string {
-	// Bubble Tea's standard renderer fills the rest of short lines with
-	// erase-line-right. Leaving the background SGR active here makes that
-	// renderer fill paint the visual prompt band without literal spaces.
-	return appProgramComposerBackgroundSGR
+	return appProgramComposerBackgroundSGR + xansi.EraseLineRight + appProgramResetSGR
 }
 
 func appProgramComposerContentLine(line string) string {
-	return appProgramComposerBackgroundSGR + " " + line + appProgramComposerBackgroundSGR + " "
+	return appProgramComposerBackgroundSGR + " " + line + appProgramComposerBackgroundSGR + " " + xansi.EraseLineRight + appProgramResetSGR
+}
+
+func appProgramTextareaRows(view string, height int) []string {
+	view = strings.TrimSuffix(view, "\n")
+	if view == "" {
+		return []string{""}
+	}
+	lines := strings.Split(view, "\n")
+	if height > 0 && len(lines) > height {
+		lines = lines[:height]
+	}
+	return lines
+}
+
+func appProgramTrimRightVisibleSpace(line string) string {
+	suffix := ""
+	for {
+		trimmed := strings.TrimRightFunc(line, unicode.IsSpace)
+		if trimmed != line {
+			return trimmed + suffix
+		}
+		start := appProgramTrailingCSIStart(line)
+		if start < 0 {
+			return line + suffix
+		}
+		suffix = line[start:] + suffix
+		line = line[:start]
+	}
+}
+
+func appProgramTrailingCSIStart(line string) int {
+	// Composer styling currently emits SGR CSI sequences only. If the input
+	// path later grows OSC hyperlinks or other escape families, this helper
+	// should be broadened before those styles are attached to textarea output.
+	if len(line) < 3 {
+		return -1
+	}
+	last := line[len(line)-1]
+	if last < 0x40 || last > 0x7e {
+		return -1
+	}
+	start := strings.LastIndex(line, "\x1b[")
+	if start < 0 {
+		return -1
+	}
+	for i := start + 2; i < len(line)-1; i++ {
+		if line[i] < 0x20 || line[i] > 0x3f {
+			return -1
+		}
+	}
+	return start
 }
 
 func appProgramEmptyComposerLine(placeholder string) string {
@@ -732,6 +798,62 @@ func appProgramComposerContentWidth(width int) int {
 		return 1
 	}
 	return width - 2
+}
+
+func appProgramComposerHeight(value string, contentWidth int) int {
+	return max(appProgramMinComposer, min(8, appProgramComposerVisualRows(value, contentWidth)))
+}
+
+func appProgramComposerVisualRows(value string, contentWidth int) int {
+	if value == "" {
+		return 1
+	}
+	textWidth := contentWidth - appProgramPromptWidth
+	if textWidth < 1 {
+		textWidth = 1
+	}
+	total := 0
+	for _, line := range strings.Split(value, "\n") {
+		total += appProgramTextareaWrapRows(line, textWidth)
+	}
+	return total
+}
+
+func appProgramTextareaWrapRows(line string, width int) int {
+	if width < 1 {
+		width = 1
+	}
+	rows := 1
+	lineWidth := 0
+	var token strings.Builder
+	flushToken := func() {
+		if token.Len() == 0 {
+			return
+		}
+		tokenWidth := uniseg.StringWidth(token.String())
+		if lineWidth > 0 && lineWidth+tokenWidth > width {
+			rows++
+			lineWidth = 0
+		}
+		if tokenWidth > width {
+			extraRows := (tokenWidth - 1) / width
+			rows += extraRows
+			tokenWidth -= extraRows * width
+		}
+		lineWidth += tokenWidth
+		token.Reset()
+	}
+	for _, r := range []rune(line) {
+		token.WriteRune(r)
+		if unicode.IsSpace(r) {
+			flushToken()
+		}
+	}
+	flushToken()
+	if lineWidth >= width {
+		rows++
+	}
+	return rows
 }
 
 func appProgramLiveRegionWidth(width int) int {
