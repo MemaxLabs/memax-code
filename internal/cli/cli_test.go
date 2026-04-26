@@ -13,6 +13,7 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 )
 
@@ -2233,6 +2234,237 @@ func TestRunInteractiveAppFlagUsesInlineApp(t *testing.T) {
 	}
 	if strings.Contains(out, "\x1b[2J") {
 		t.Fatalf("interactive app output used full-screen clear:\n%s", out)
+	}
+}
+
+func TestRunInteractiveAppHandlesResizeWithoutFullScreenClear(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Fatalf("pty.Open() error = %v", err)
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 30, Cols: 120}); err != nil {
+		t.Skipf("set pty size: %v", err)
+	}
+
+	var output bytes.Buffer
+	copyDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(&output, ptmx)
+		copyDone <- err
+	}()
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- runInteractiveWithRunner(
+			context.Background(),
+			tty,
+			tty,
+			tty,
+			options{SessionDir: t.TempDir(), UI: renderModeApp},
+			func(_ context.Context, w io.Writer, opts options) (string, error) {
+				fmt.Fprintf(w, "ran prompt %q\n", opts.Prompt)
+				return "", nil
+			},
+		)
+	}()
+
+	for _, size := range []pty.Winsize{
+		{Rows: 18, Cols: 58},
+		{Rows: 32, Cols: 132},
+		{Rows: 20, Cols: 72},
+		{Rows: 28, Cols: 118},
+	} {
+		time.Sleep(60 * time.Millisecond)
+		if err := pty.Setsize(ptmx, &size); err != nil {
+			t.Skipf("resize pty: %v", err)
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := io.WriteString(ptmx, "/quit\r"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("runInteractiveWithRunner() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runInteractiveWithRunner() timed out")
+	}
+	if err := tty.Close(); err != nil {
+		t.Fatalf("tty.Close() error = %v", err)
+	}
+	select {
+	case err := <-copyDone:
+		if err != nil && !isClosedPTYRead(err) {
+			t.Fatalf("Copy() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Copy() timed out")
+	}
+
+	out := output.String()
+	for _, want := range []string{"Welcome. Type a task or /help.", "Memax Code", "session none", "bye"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("resized app output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "\x1b[?1049h") {
+		t.Fatalf("resized app output entered alt screen:\n%s", out)
+	}
+	if strings.Contains(out, "\x1b[2J") {
+		t.Fatalf("resized app output used full-screen clear:\n%s", out)
+	}
+	if !strings.Contains(out, ansi.SetBracketedPasteMode) {
+		t.Fatalf("resized app output did not enable bracketed paste:\n%s", out)
+	}
+	if !strings.Contains(out, ansi.ResetBracketedPasteMode) {
+		t.Fatalf("resized app output did not reset bracketed paste:\n%s", out)
+	}
+	if !strings.Contains(out, ansi.HideCursor) {
+		t.Fatalf("resized app output did not hide cursor during live-region repaint:\n%s", out)
+	}
+	if !strings.Contains(out, ansi.ShowCursor) {
+		t.Fatalf("resized app output did not restore cursor after live-region repaint:\n%s", out)
+	}
+}
+
+func TestRunInteractiveAppHandlesResizeDuringPromptTranscript(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Fatalf("pty.Open() error = %v", err)
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 28, Cols: 100}); err != nil {
+		t.Skipf("set pty size: %v", err)
+	}
+
+	var output bytes.Buffer
+	copyDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(&output, ptmx)
+		copyDone <- err
+	}()
+
+	promptStarted := make(chan struct{})
+	promptDone := make(chan struct{})
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- runInteractiveWithRunner(
+			context.Background(),
+			tty,
+			tty,
+			tty,
+			options{SessionDir: t.TempDir(), UI: renderModeApp},
+			func(_ context.Context, w io.Writer, opts options) (string, error) {
+				close(promptStarted)
+				fmt.Fprintln(w, "[assistant]")
+				fmt.Fprintln(w, "streaming transcript line before resize")
+				time.Sleep(250 * time.Millisecond)
+				fmt.Fprintln(w, "streaming transcript line after resize")
+				close(promptDone)
+				return "00000000-0000-7000-8000-000000000456", nil
+			},
+		)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	if _, err := io.WriteString(ptmx, "resize while running\r"); err != nil {
+		t.Fatalf("WriteString(prompt) error = %v", err)
+	}
+	select {
+	case <-promptStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("prompt runner did not start")
+	}
+	for _, size := range []pty.Winsize{
+		{Rows: 18, Cols: 58},
+		{Rows: 34, Cols: 128},
+		{Rows: 20, Cols: 68},
+		{Rows: 30, Cols: 110},
+	} {
+		if err := pty.Setsize(ptmx, &size); err != nil {
+			t.Skipf("resize pty: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	select {
+	case <-promptDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("prompt runner did not finish")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := io.WriteString(ptmx, "/quit\r"); err != nil {
+		t.Fatalf("WriteString(/quit) error = %v", err)
+	}
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("runInteractiveWithRunner() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runInteractiveWithRunner() timed out")
+	}
+	if err := tty.Close(); err != nil {
+		t.Fatalf("tty.Close() error = %v", err)
+	}
+	select {
+	case err := <-copyDone:
+		if err != nil && !isClosedPTYRead(err) {
+			t.Fatalf("Copy() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Copy() timed out")
+	}
+
+	out := output.String()
+	for _, want := range []string{
+		"streaming transcript line before resize",
+		"streaming transcript line after resize",
+		"Memax Code",
+		"bye",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("resized active app output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "\x1b[?1049h") {
+		t.Fatalf("resized active app output entered alt screen:\n%s", out)
+	}
+	if strings.Contains(out, "\x1b[2J") {
+		t.Fatalf("resized active app output used full-screen clear:\n%s", out)
+	}
+}
+
+func TestRunInteractiveAppFallsBackToPlainOutputForNonTerminal(t *testing.T) {
+	var stdout bytes.Buffer
+	err := runInteractiveAppWithEvents(
+		context.Background(),
+		strings.NewReader("/quit\n"),
+		&stdout,
+		options{SessionDir: t.TempDir(), UI: renderModeApp},
+		func(_ context.Context, w io.Writer, opts options) (string, error) {
+			fmt.Fprintf(w, "ran prompt %q\n", opts.Prompt)
+			return "", nil
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("runInteractiveAppWithEvents() error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"Welcome. Type a task or /help.", "bye"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("non-terminal app output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "\x1b[") {
+		t.Fatalf("non-terminal app output contains ANSI escapes:\n%q", out)
 	}
 }
 

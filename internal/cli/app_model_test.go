@@ -2541,6 +2541,61 @@ func TestAppProgramLiveRegionWidthReservesPhysicalWrapColumn(t *testing.T) {
 	}
 }
 
+func TestAppProgramClearLiveRegionAccountsForResizeWrap(t *testing.T) {
+	var out strings.Builder
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.output = &out
+	model.liveRows = 1
+	model.liveLines = []string{strings.Repeat("x", 9)}
+
+	model.clearLiveRegionForWidth(5)
+
+	if got, want := strings.Count(out.String(), ansi.EraseEntireLine), 3; got != want {
+		t.Fatalf("cleared rows = %d, want %d for wrapped previous live region:\n%q", got, want, out.String())
+	}
+	if strings.HasPrefix(out.String(), ansi.CursorUp(1)) {
+		t.Fatalf("clear moved upward before erasing; live region should be top-anchored:\n%q", out.String())
+	}
+	if !strings.Contains(out.String(), ansi.ResetStyle) {
+		t.Fatalf("clear did not reset style before erase:\n%q", out.String())
+	}
+	if model.liveRows != 0 || len(model.liveLines) != 0 {
+		t.Fatalf("live region state not reset: rows=%d lines=%d", model.liveRows, len(model.liveLines))
+	}
+}
+
+func TestAppProgramFlushPrintsClearsLiveRegionBeforeTranscript(t *testing.T) {
+	var out strings.Builder
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.output = &out
+	model.width = 80
+	model.liveRows = 2
+	model.liveLines = []string{"live composer", "live status"}
+	model.appendLocalTranscriptLine("dim", "durable transcript line")
+
+	model.flushPrints()
+
+	rendered := out.String()
+	clearIndex := strings.Index(rendered, ansi.EraseEntireLine)
+	transcriptIndex := strings.Index(ansi.Strip(rendered), "durable transcript line")
+	if clearIndex < 0 {
+		t.Fatalf("flush did not clear live region before transcript:\n%q", rendered)
+	}
+	if transcriptIndex < 0 {
+		t.Fatalf("flush did not print transcript line:\n%q", rendered)
+	}
+	rawTranscriptIndex := strings.Index(rendered, "durable transcript line")
+	if rawTranscriptIndex < 0 {
+		t.Fatalf("flush did not print raw transcript line:\n%q", rendered)
+	}
+	if clearIndex > rawTranscriptIndex {
+		t.Fatalf("flush printed transcript before clearing live region:\n%q", rendered)
+	}
+	if model.liveRows != 0 || len(model.liveLines) != 0 {
+		t.Fatalf("live region state not reset after transcript flush: rows=%d lines=%d", model.liveRows, len(model.liveLines))
+	}
+}
+
 func TestAppProgramFitPrintedLinesWrapsBeforeTerminalEdge(t *testing.T) {
 	lines := appProgramFitPrintedLines([]string{
 		"short",
