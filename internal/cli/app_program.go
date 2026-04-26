@@ -68,7 +68,6 @@ type appProgramModel struct {
 	runPrompt interactivePromptRunner
 	runEvents interactiveEventPromptRunner
 	program   *tea.Program
-	output    io.Writer
 	plainOut  io.Writer
 	history   persistentPromptHistory
 	composer  interactiveComposer
@@ -89,8 +88,6 @@ type appProgramModel struct {
 	spinner       int
 	tickArmed     bool
 	turnStartedAt time.Time
-	liveRows      int
-	liveLines     []string
 }
 
 func newAppProgramModel(ctx context.Context, opts options, runPrompt interactivePromptRunner) *appProgramModel {
@@ -153,20 +150,12 @@ func newAppProgramTextarea() textarea.Model {
 }
 
 func (m *appProgramModel) Init() tea.Cmd {
-	m.flushPrints()
-	m.renderLiveRegion()
-	return textarea.Blink
+	return tea.Batch(m.flushPrints(), textarea.Blink)
 }
 
 func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	defer func() {
-		if !m.quitting {
-			m.renderLiveRegion()
-		}
-	}()
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.clearLiveRegionForWidth(msg.Width)
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resize()
@@ -510,19 +499,13 @@ func (m *appProgramModel) flushPrints() tea.Cmd {
 	if m.width > 0 {
 		lines = appProgramFitPrintedLines(lines, appProgramLiveRegionWidth(m.width))
 	}
-	if m.output != nil {
-		m.clearLiveRegion()
-		for _, line := range lines {
-			fmt.Fprint(m.output, line, "\r\n")
-		}
-		return nil
-	}
 	if m.plainOut != nil {
 		for _, line := range lines {
 			fmt.Fprintln(m.plainOut, xansi.Strip(line))
 		}
+		return nil
 	}
-	return nil
+	return tea.Println(strings.Join(lines, "\n"))
 }
 
 func (m *appProgramModel) withFlush(cmd tea.Cmd) tea.Cmd {
@@ -586,78 +569,6 @@ func (m *appProgramModel) View() string {
 		rows = append(rows, m.helpView(renderWidth))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
-}
-
-func (m *appProgramModel) renderLiveRegion() {
-	if m.output == nil {
-		return
-	}
-	m.clearLiveRegion()
-	view := m.View()
-	if view == "" {
-		return
-	}
-	width := m.width
-	if width <= 0 {
-		width = defaultAppShellWidth
-	}
-	liveWidth := appProgramLiveRegionWidth(width)
-	lines := appProgramFitPrintedLines(strings.Split(view, "\n"), liveWidth)
-	for i, line := range lines {
-		if i > 0 {
-			fmt.Fprint(m.output, "\r\n")
-		}
-		fmt.Fprint(m.output, line)
-	}
-	physicalRows := appProgramPhysicalRows(lines, liveWidth)
-	if physicalRows > 1 {
-		fmt.Fprint(m.output, xansi.CursorUp(physicalRows-1))
-	}
-	fmt.Fprint(m.output, "\r")
-	m.liveLines = append(m.liveLines[:0], lines...)
-	m.liveRows = physicalRows
-}
-
-func (m *appProgramModel) clearLiveRegion() {
-	m.clearLiveRegionRows(m.liveRows)
-}
-
-func (m *appProgramModel) clearLiveRegionForWidth(width int) {
-	rows := m.liveRows
-	if width > 0 {
-		rows = max(rows, appProgramPhysicalRows(m.liveLines, appProgramLiveRegionWidth(width)))
-	}
-	m.clearLiveRegionRows(rows)
-}
-
-func (m *appProgramModel) clearLiveRegionRows(rows int) {
-	if m.output == nil || rows <= 0 {
-		return
-	}
-	fmt.Fprint(m.output, xansi.ResetStyle, "\r")
-	for i := 0; i < rows; i++ {
-		fmt.Fprint(m.output, xansi.EraseEntireLine)
-		fmt.Fprint(m.output, "\r\n")
-	}
-	fmt.Fprint(m.output, xansi.ResetStyle, xansi.CursorUp(rows), "\r")
-	m.liveRows = 0
-	m.liveLines = nil
-}
-
-func appProgramPhysicalRows(lines []string, width int) int {
-	if width <= 0 {
-		width = 1
-	}
-	rows := 0
-	for _, line := range lines {
-		lineWidth := xansi.StringWidth(line)
-		if lineWidth <= 0 {
-			rows++
-			continue
-		}
-		rows += (lineWidth + width - 1) / width
-	}
-	return rows
 }
 
 func appendAppProgramBlankRows(rows []string, count int) []string {
@@ -2112,10 +2023,9 @@ func runInteractiveAppWithEvents(ctx context.Context, stdin io.Reader, stdout io
 	model := newAppProgramModelWithEvents(ctx, opts, runPrompt, runEvents)
 	terminal, terminalWidth, terminalHeight := terminalWriterInfo(stdout)
 	if terminal {
-		model.output = stdout
-		// terminalWriterInfo reserves one physical column for printed transcript
-		// wrapping. appProgramModel.width stores the real terminal width and
-		// applies its own live-region reserve during rendering.
+		// terminalWriterInfo reserves one physical column for terminal wrapping.
+		// appProgramModel.width stores the real terminal width and applies its
+		// own width reserve when wrapping printed transcript lines.
 		if terminalWidth > 0 {
 			model.width = terminalWidth + 1
 		} else {
@@ -2130,24 +2040,13 @@ func runInteractiveAppWithEvents(ctx context.Context, stdin io.Reader, stdout io
 	} else {
 		model.plainOut = stdout
 	}
-	if terminal {
-		// Bubble Tea's default renderer normally enables bracketed paste.
-		// This app owns its bounded live-region repainting via WithoutRenderer,
-		// so it must preserve terminal input modes that users expect from a
-		// modern multi-line coding-agent composer.
-		//
-		// The renderer also parks the real terminal cursor at the top of the
-		// live region while drawing a styled textarea cursor itself. Keeping
-		// the real cursor hidden avoids a second blinking caret on the status
-		// row or live-region anchor.
-		fmt.Fprint(stdout, xansi.SetBracketedPasteMode, xansi.HideCursor)
-		defer fmt.Fprint(stdout, xansi.ResetBracketedPasteMode, xansi.ShowCursor)
-	}
 	programOpts := []tea.ProgramOption{
 		tea.WithInput(stdin),
 		tea.WithOutput(stdout),
 		tea.WithContext(ctx),
-		tea.WithoutRenderer(),
+	}
+	if !terminal {
+		programOpts = append(programOpts, tea.WithoutRenderer())
 	}
 	program := tea.NewProgram(model, programOpts...)
 	model.program = program

@@ -13,6 +13,7 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 )
@@ -2192,8 +2193,12 @@ func TestRunInteractiveAppFlagUsesInlineApp(t *testing.T) {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	if _, err := io.WriteString(ptmx, "/help\r/quit\r"); err != nil {
-		t.Fatalf("WriteString() error = %v", err)
+	if _, err := io.WriteString(ptmx, "/help\r"); err != nil {
+		t.Fatalf("WriteString(/help) error = %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := io.WriteString(ptmx, "/quit\r"); err != nil {
+		t.Fatalf("WriteString(/quit) error = %v", err)
 	}
 	select {
 	case err := <-runDone:
@@ -2237,7 +2242,7 @@ func TestRunInteractiveAppFlagUsesInlineApp(t *testing.T) {
 	}
 }
 
-func TestRunInteractiveAppHandlesResizeWithoutFullScreenClear(t *testing.T) {
+func TestRunInteractiveAppUsesInlineRendererWithoutAltScreen(t *testing.T) {
 	ptmx, tty, err := pty.Open()
 	if err != nil {
 		t.Fatalf("pty.Open() error = %v", err)
@@ -2270,17 +2275,6 @@ func TestRunInteractiveAppHandlesResizeWithoutFullScreenClear(t *testing.T) {
 		)
 	}()
 
-	for _, size := range []pty.Winsize{
-		{Rows: 18, Cols: 58},
-		{Rows: 32, Cols: 132},
-		{Rows: 20, Cols: 72},
-		{Rows: 28, Cols: 118},
-	} {
-		time.Sleep(60 * time.Millisecond)
-		if err := pty.Setsize(ptmx, &size); err != nil {
-			t.Skipf("resize pty: %v", err)
-		}
-	}
 	time.Sleep(100 * time.Millisecond)
 	if _, err := io.WriteString(ptmx, "/quit\r"); err != nil {
 		t.Fatalf("WriteString() error = %v", err)
@@ -2309,30 +2303,122 @@ func TestRunInteractiveAppHandlesResizeWithoutFullScreenClear(t *testing.T) {
 	out := output.String()
 	for _, want := range []string{"Welcome. Type a task or /help.", "Memax Code", "session none", "bye"} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("resized app output missing %q:\n%s", want, out)
+			t.Fatalf("inline app output missing %q:\n%s", want, out)
 		}
 	}
+	stripped := ansi.Strip(out)
+	if got := strings.Count(stripped, "Ask Memax Code to inspect, change, or verify the repo"); got > 1 {
+		t.Fatalf("inline app output duplicated the composer placeholder %d times:\n%s", got, stripped)
+	}
 	if strings.Contains(out, "\x1b[?1049h") {
-		t.Fatalf("resized app output entered alt screen:\n%s", out)
+		t.Fatalf("inline app output entered alt screen:\n%s", out)
 	}
 	if strings.Contains(out, "\x1b[2J") {
-		t.Fatalf("resized app output used full-screen clear:\n%s", out)
+		t.Fatalf("inline app output used full-screen clear:\n%s", out)
 	}
+	// These terminal toggles are emitted by Bubble Tea's standard renderer
+	// during init/restore; Memax Code does not write them manually.
 	if !strings.Contains(out, ansi.SetBracketedPasteMode) {
-		t.Fatalf("resized app output did not enable bracketed paste:\n%s", out)
+		t.Fatalf("inline app output did not enable bracketed paste:\n%s", out)
 	}
 	if !strings.Contains(out, ansi.ResetBracketedPasteMode) {
-		t.Fatalf("resized app output did not reset bracketed paste:\n%s", out)
+		t.Fatalf("inline app output did not reset bracketed paste:\n%s", out)
 	}
 	if !strings.Contains(out, ansi.HideCursor) {
-		t.Fatalf("resized app output did not hide cursor during live-region repaint:\n%s", out)
+		t.Fatalf("inline app output did not hide cursor during live-region repaint:\n%s", out)
 	}
 	if !strings.Contains(out, ansi.ShowCursor) {
-		t.Fatalf("resized app output did not restore cursor after live-region repaint:\n%s", out)
+		t.Fatalf("inline app output did not restore cursor after live-region repaint:\n%s", out)
 	}
 }
 
-func TestRunInteractiveAppHandlesResizeDuringPromptTranscript(t *testing.T) {
+func TestInteractiveAppProgramHandlesExplicitResizeMessages(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Fatalf("pty.Open() error = %v", err)
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 30, Cols: 120}); err != nil {
+		t.Skipf("set pty size: %v", err)
+	}
+
+	var output bytes.Buffer
+	copyDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(&output, ptmx)
+		copyDone <- err
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model := newAppProgramModel(ctx, options{SessionDir: t.TempDir(), UI: renderModeApp}, func(_ context.Context, w io.Writer, opts options) (string, error) {
+		fmt.Fprintf(w, "ran prompt %q\n", opts.Prompt)
+		return "", nil
+	})
+	model.width = 121
+	model.height = 30
+	model.resize()
+	program := tea.NewProgram(model, tea.WithInput(tty), tea.WithOutput(tty), tea.WithContext(ctx))
+	model.program = program
+
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := program.Run()
+		runDone <- err
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	for _, size := range []tea.WindowSizeMsg{
+		{Width: 58, Height: 18},
+		{Width: 34, Height: 36},
+		{Width: 132, Height: 32},
+		{Width: 34, Height: 36},
+		{Width: 72, Height: 20},
+		{Width: 118, Height: 28},
+	} {
+		program.Send(size)
+		time.Sleep(40 * time.Millisecond)
+	}
+	if _, err := io.WriteString(ptmx, "/quit\r"); err != nil {
+		t.Fatalf("WriteString(/quit) error = %v", err)
+	}
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("program.Run() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("program.Run() timed out")
+	}
+	if err := tty.Close(); err != nil {
+		t.Fatalf("tty.Close() error = %v", err)
+	}
+	select {
+	case err := <-copyDone:
+		if err != nil && !isClosedPTYRead(err) {
+			t.Fatalf("Copy() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Copy() timed out")
+	}
+
+	out := output.String()
+	for _, want := range []string{"Welcome. Type a task or /help.", "Memax Code", "bye"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("explicit resize output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "\x1b[?1049h") {
+		t.Fatalf("explicit resize output entered alt screen:\n%s", out)
+	}
+	if strings.Contains(out, "\x1b[2J") {
+		t.Fatalf("explicit resize output used full-screen clear:\n%s", out)
+	}
+}
+
+func TestRunInteractiveAppKeepsPromptTranscriptInInlineRenderer(t *testing.T) {
 	ptmx, tty, err := pty.Open()
 	if err != nil {
 		t.Fatalf("pty.Open() error = %v", err)
@@ -2381,17 +2467,6 @@ func TestRunInteractiveAppHandlesResizeDuringPromptTranscript(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("prompt runner did not start")
 	}
-	for _, size := range []pty.Winsize{
-		{Rows: 18, Cols: 58},
-		{Rows: 34, Cols: 128},
-		{Rows: 20, Cols: 68},
-		{Rows: 30, Cols: 110},
-	} {
-		if err := pty.Setsize(ptmx, &size); err != nil {
-			t.Skipf("resize pty: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
 	select {
 	case <-promptDone:
 	case <-time.After(5 * time.Second):
@@ -2430,14 +2505,14 @@ func TestRunInteractiveAppHandlesResizeDuringPromptTranscript(t *testing.T) {
 		"bye",
 	} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("resized active app output missing %q:\n%s", want, out)
+			t.Fatalf("inline active app output missing %q:\n%s", want, out)
 		}
 	}
 	if strings.Contains(out, "\x1b[?1049h") {
-		t.Fatalf("resized active app output entered alt screen:\n%s", out)
+		t.Fatalf("inline active app output entered alt screen:\n%s", out)
 	}
 	if strings.Contains(out, "\x1b[2J") {
-		t.Fatalf("resized active app output used full-screen clear:\n%s", out)
+		t.Fatalf("inline active app output used full-screen clear:\n%s", out)
 	}
 }
 

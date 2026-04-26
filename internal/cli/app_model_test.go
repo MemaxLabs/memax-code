@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -2408,6 +2409,55 @@ func TestAppProgramComposerViewPaintsFullLiveRegionWidth(t *testing.T) {
 	}
 }
 
+func TestAppProgramFlushPrintsBatchesTranscriptLines(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.width = 64
+	_ = model.drainPendingPrints()
+	model.appendLocalTranscriptLine("dim", "first transcript line")
+	model.appendLocalTranscriptLine("dim", "second transcript line")
+
+	cmd := model.flushPrints()
+	if cmd == nil {
+		t.Fatal("flushPrints returned nil")
+	}
+	msgText := ansi.Strip(fmt.Sprint(cmd()))
+	if !strings.Contains(msgText, "first transcript line\nsecond transcript line") {
+		t.Fatalf("flushPrints should emit one ordered print message, got %q", msgText)
+	}
+	if cmd := model.flushPrints(); cmd != nil {
+		t.Fatal("flushPrints returned a command after draining pending prints")
+	}
+}
+
+func TestAppProgramViewHandlesRepeatedExplicitResizeMessages(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{
+		CWD:   "/workspace/memax-code",
+		Model: "anthropic/claude-sonnet-4-6",
+	}, nil)
+	sizes := []tea.WindowSizeMsg{
+		{Width: 118, Height: 32},
+		{Width: 34, Height: 36},
+		{Width: 96, Height: 24},
+		{Width: 28, Height: 18},
+		{Width: 132, Height: 40},
+		{Width: 30, Height: 20},
+	}
+	for _, size := range sizes {
+		updated, _ := model.Update(size)
+		model = updated.(*appProgramModel)
+		view := model.View()
+		stripped := ansi.Strip(view)
+		if got := strings.Count(stripped, "Ask Memax Code"); got != 1 {
+			t.Fatalf("resize %dx%d rendered placeholder %d times:\n%s", size.Width, size.Height, got, stripped)
+		}
+		for _, line := range strings.Split(view, "\n") {
+			if got := lipgloss.Width(line); got >= size.Width {
+				t.Fatalf("resize %dx%d line width = %d, want < %d:\n%s\nfull view:\n%s", size.Width, size.Height, got, size.Width, line, view)
+			}
+		}
+	}
+}
+
 func TestAppProgramUserPromptTranscriptHasVerticalPadding(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.transcript = appTranscriptTail{}
@@ -2538,61 +2588,6 @@ func TestAppProgramLiveRegionWidthReservesPhysicalWrapColumn(t *testing.T) {
 		if got := appProgramLiveRegionWidth(tc.width); got != tc.want {
 			t.Fatalf("appProgramLiveRegionWidth(%d) = %d, want %d", tc.width, got, tc.want)
 		}
-	}
-}
-
-func TestAppProgramClearLiveRegionAccountsForResizeWrap(t *testing.T) {
-	var out strings.Builder
-	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
-	model.output = &out
-	model.liveRows = 1
-	model.liveLines = []string{strings.Repeat("x", 9)}
-
-	model.clearLiveRegionForWidth(5)
-
-	if got, want := strings.Count(out.String(), ansi.EraseEntireLine), 3; got != want {
-		t.Fatalf("cleared rows = %d, want %d for wrapped previous live region:\n%q", got, want, out.String())
-	}
-	if strings.HasPrefix(out.String(), ansi.CursorUp(1)) {
-		t.Fatalf("clear moved upward before erasing; live region should be top-anchored:\n%q", out.String())
-	}
-	if !strings.Contains(out.String(), ansi.ResetStyle) {
-		t.Fatalf("clear did not reset style before erase:\n%q", out.String())
-	}
-	if model.liveRows != 0 || len(model.liveLines) != 0 {
-		t.Fatalf("live region state not reset: rows=%d lines=%d", model.liveRows, len(model.liveLines))
-	}
-}
-
-func TestAppProgramFlushPrintsClearsLiveRegionBeforeTranscript(t *testing.T) {
-	var out strings.Builder
-	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
-	model.output = &out
-	model.width = 80
-	model.liveRows = 2
-	model.liveLines = []string{"live composer", "live status"}
-	model.appendLocalTranscriptLine("dim", "durable transcript line")
-
-	model.flushPrints()
-
-	rendered := out.String()
-	clearIndex := strings.Index(rendered, ansi.EraseEntireLine)
-	transcriptIndex := strings.Index(ansi.Strip(rendered), "durable transcript line")
-	if clearIndex < 0 {
-		t.Fatalf("flush did not clear live region before transcript:\n%q", rendered)
-	}
-	if transcriptIndex < 0 {
-		t.Fatalf("flush did not print transcript line:\n%q", rendered)
-	}
-	rawTranscriptIndex := strings.Index(rendered, "durable transcript line")
-	if rawTranscriptIndex < 0 {
-		t.Fatalf("flush did not print raw transcript line:\n%q", rendered)
-	}
-	if clearIndex > rawTranscriptIndex {
-		t.Fatalf("flush printed transcript before clearing live region:\n%q", rendered)
-	}
-	if model.liveRows != 0 || len(model.liveLines) != 0 {
-		t.Fatalf("live region state not reset after transcript flush: rows=%d lines=%d", model.liveRows, len(model.liveLines))
 	}
 }
 
