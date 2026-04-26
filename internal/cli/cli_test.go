@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 )
+
+func TestMain(m *testing.M) {
+	_ = os.Setenv("MEMAX_CODE_MODEL_REGISTRY", "off")
+	os.Exit(m.Run())
+}
 
 func TestDryRunPrintsResolvedConfig(t *testing.T) {
 	var stdout, stderr bytes.Buffer
@@ -244,6 +251,51 @@ func TestParseEnablesCompactionByDefault(t *testing.T) {
 	budgets := resolveContextBudgets(opts, nil)
 	if budgets.WindowTokens != 272000 || budgets.SummaryTokens != 8192 || budgets.RetryTokens >= budgets.MainTokens {
 		t.Fatalf("resolveContextBudgets() = %+v, want resolved budgets with retry < main", budgets)
+	}
+}
+
+func TestDryRunUsesModelsDevRegistryForContextWindow(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MEMAX_CODE_MODEL_REGISTRY", "")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{
+			"openai": {
+				"id": "openai",
+				"models": {
+					"gpt-5.4": {
+						"id": "gpt-5.4",
+						"reasoning": true,
+						"tool_call": true,
+						"structured_output": true,
+						"limit": {"context": 1050000, "output": 128000}
+					}
+				}
+			}
+		}`)
+	}))
+	defer server.Close()
+	t.Setenv("MEMAX_CODE_MODEL_REGISTRY_URL", server.URL)
+	t.Setenv("MEMAX_CODE_MODEL_REGISTRY_TIMEOUT", "2s")
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--dry-run",
+		"--provider", "openai",
+		"--model", "gpt-5.4",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"context_window: 1050000",
+		"context_main_tokens: 840000",
+		"context_retry_tokens: 577500",
+		"model_registry: remote models.dev",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, out)
+		}
 	}
 }
 

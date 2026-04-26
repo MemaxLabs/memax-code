@@ -49,6 +49,9 @@ func effectiveContextWindow(opts options, client model.Client) int {
 	if caps, ok := model.ClientCapabilities(client); ok && caps.ContextWindowTokens > 0 {
 		return caps.ContextWindowTokens
 	}
+	if opts.ModelCapabilities.ContextWindowTokens > 0 {
+		return opts.ModelCapabilities.ContextWindowTokens
+	}
 	return inferredContextWindow(opts.Provider, opts.Model)
 }
 

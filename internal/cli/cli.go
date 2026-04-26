@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"golang.org/x/term"
 )
 
@@ -46,6 +47,7 @@ func RunWithIO(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 			return err
 		}
 	}
+	hydrateModelRegistry(ctx, &opts)
 	if opts.EventStream == eventStreamModeOff && !opts.Interactive && opts.Prompt == "" && !opts.DryRun &&
 		shouldImplicitlyStartInteractive(stdin, stdout, stderr, opts) {
 		opts.Interactive = true
@@ -77,6 +79,8 @@ type options struct {
 	Compaction        compactionMode
 	ContextWindow     int
 	ContextSummary    int
+	ModelCapabilities model.Capabilities
+	ModelRegistryInfo string
 	SessionDir        string
 	HistoryFile       string
 	ResumeSessionID   string
@@ -417,6 +421,14 @@ func defaultHistoryPath() string {
 	return filepath.Join(home, ".memax-code", "history.jsonl")
 }
 
+func defaultModelRegistryCachePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ".memax-code/cache/models.dev.api.json"
+	}
+	return filepath.Join(home, ".memax-code", "cache", "models.dev.api.json")
+}
+
 func shouldImplicitlyStartInteractive(stdin io.Reader, stdout, stderr io.Writer, opts options) bool {
 	input, ok := stdin.(*os.File)
 	if !ok || !term.IsTerminal(int(input.Fd())) {
@@ -745,6 +757,9 @@ func renderDryRun(w io.Writer, opts options) error {
 		fmt.Fprintf(w, "context_summary_tokens: %d\n", budgets.SummaryTokens)
 		fmt.Fprintf(w, "context_main_tokens: %d\n", budgets.MainTokens)
 		fmt.Fprintf(w, "context_retry_tokens: %d\n", budgets.RetryTokens)
+		if opts.ModelRegistryInfo != "" {
+			fmt.Fprintf(w, "model_registry: %s\n", opts.ModelRegistryInfo)
+		}
 	}
 	fmt.Fprintf(w, "config: %s\n", opts.ConfigPath)
 	fmt.Fprintf(w, "config_loaded: %t\n", opts.ConfigLoaded)
