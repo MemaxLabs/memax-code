@@ -36,20 +36,13 @@ func (s *appRenderState) Finish(w io.Writer) error {
 
 func (s *appRenderState) Tick(w io.Writer) error {
 	// The non-interactive app renderer has no animation work. It still exposes
-	// a tick interval so renderWithTicksPollerObserved keeps polling Ctrl+C
+	// a tick interval so renderWithTicksObserved keeps status output fresh
 	// while an event stream is quiet.
 	return nil
 }
 
 func (s *appRenderState) TickInterval() time.Duration {
 	return appShellTickInterval
-}
-
-func (s *appRenderState) HandleKey(w io.Writer, key rawKey) error {
-	if key.kind == rawKeyCtrlC {
-		return contextCanceled
-	}
-	return nil
 }
 
 func (s *appRenderState) renderEvent(event memaxagent.Event) ([]string, error) {

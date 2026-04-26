@@ -422,7 +422,10 @@ func shouldImplicitlyStartInteractive(stdin io.Reader, stdout, stderr io.Writer,
 	if !ok || !term.IsTerminal(int(input.Fd())) {
 		return false
 	}
-	return writerIsTerminal(interactiveShellWriter(opts.UI, stdout, stderr))
+	// Interactive sessions need at least one terminal output stream. App mode
+	// renders on stdout; the fallback line shell renders on stderr so stdout can
+	// remain available for redirected machine-readable output.
+	return writerIsTerminal(stdout) || writerIsTerminal(stderr)
 }
 
 type fileConfig struct {

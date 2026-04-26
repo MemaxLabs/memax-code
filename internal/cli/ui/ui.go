@@ -17,12 +17,11 @@ import (
 type Mode string
 
 const (
-	// ModeAuto selects the app renderer for terminals and the plain transcript
-	// renderer for non-terminal writers.
+	// ModeAuto selects the app renderer for terminals and plain renderer for
+	// non-terminal writers.
 	ModeAuto Mode = "auto"
-	// ModeApp renders the terminal-native app surface: transcript rows flow
-	// through normal scrollback while status and composer controls stay live at
-	// the bottom in interactive sessions.
+	// ModeApp renders the interactive terminal app without taking over the full
+	// terminal screen or entering an alternate buffer.
 	ModeApp Mode = "app"
 	// ModeLive renders an interactive transcript with a live status line.
 	ModeLive Mode = "live"
@@ -63,9 +62,6 @@ func ResolveMode(mode Mode, terminal bool) Mode {
 	if (mode == ModeApp || mode == ModeLive) && !terminal {
 		return ModePlain
 	}
-	// Structured mode is safe for redirected output because it writes plain
-	// sectioned text. App and live stay terminal-only so Ctrl+C polling and
-	// live status behavior remain tied to an interactive terminal.
 	if mode != ModeAuto {
 		return mode
 	}

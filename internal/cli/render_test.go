@@ -310,15 +310,6 @@ func TestAppRenderDropsResultAndUsageMetadata(t *testing.T) {
 	}
 }
 
-func TestAppRenderHandleKeyCtrlCCancels(t *testing.T) {
-	var out bytes.Buffer
-	renderer := &appRenderState{}
-	err := renderer.HandleKey(&out, rawKey{kind: rawKeyCtrlC})
-	if !errors.Is(err, contextCanceled) {
-		t.Fatalf("HandleKey(CtrlC) error = %v, want contextCanceled", err)
-	}
-}
-
 func TestAppTranscriptTailBoundsStoredLinesAndKeepsPartial(t *testing.T) {
 	var tail appTranscriptTail
 	tail.limit = 3
@@ -428,27 +419,6 @@ func TestRenderWithTicksRendererWhileEventStreamIsIdle(t *testing.T) {
 	}
 	if renderer.finished != 1 {
 		t.Fatalf("Finish calls = %d, want 1", renderer.finished)
-	}
-}
-
-func TestRenderWithTicksPollerObservedFinishesOnCancel(t *testing.T) {
-	events := make(chan memaxagent.Event)
-	ticks := make(chan time.Time, 1)
-	renderer := &cancelSpyRenderer{}
-	poller := &stubRawKeyPoller{keys: []rawKey{{kind: rawKeyCtrlC}}}
-	done := make(chan error, 1)
-
-	go func() {
-		done <- renderWithTicksPollerObserved(&bytes.Buffer{}, events, renderer, ticks, poller, nil)
-	}()
-
-	ticks <- time.Now()
-	err := <-done
-	if !errors.Is(err, contextCanceled) {
-		t.Fatalf("renderWithTicksPollerObserved() error = %v, want contextCanceled", err)
-	}
-	if renderer.finishCalls != 1 {
-		t.Fatalf("renderer.Finish() calls = %d, want 1", renderer.finishCalls)
 	}
 }
 
@@ -1045,43 +1015,4 @@ func (r *tickSpyRenderer) Tick(io.Writer) error {
 
 func (r *tickSpyRenderer) TickInterval() time.Duration {
 	return time.Hour
-}
-
-type cancelSpyRenderer struct {
-	finishCalls int
-}
-
-func (r *cancelSpyRenderer) Render(io.Writer, memaxagent.Event) error {
-	return nil
-}
-
-func (r *cancelSpyRenderer) Finish(io.Writer) error {
-	r.finishCalls++
-	return nil
-}
-
-func (r *cancelSpyRenderer) HandleKey(io.Writer, rawKey) error {
-	return contextCanceled
-}
-
-func (r *cancelSpyRenderer) Tick(io.Writer) error {
-	return nil
-}
-
-func (r *cancelSpyRenderer) TickInterval() time.Duration {
-	return time.Hour
-}
-
-type stubRawKeyPoller struct {
-	keys []rawKey
-}
-
-func (p *stubRawKeyPoller) Poll() ([]rawKey, error) {
-	keys := append([]rawKey(nil), p.keys...)
-	p.keys = nil
-	return keys, nil
-}
-
-func (p *stubRawKeyPoller) Close() error {
-	return nil
 }

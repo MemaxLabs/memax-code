@@ -50,8 +50,8 @@ This repository is intentionally separate from the SDK:
 **Foundation**.
 
 The CLI is already usable for real workflows, with a solid interactive shell,
-session persistence, structured tool rendering, verification hooks, and a first
-terminal app surface. Richer timeline UX, approvals flow, and deeper composer
+session persistence, structured tool rendering, verification hooks, and a
+transcript-first terminal app surface. Approvals flow and deeper composer
 behavior are follow-on slices.
 
 ## Screenshot
@@ -123,7 +123,7 @@ memax-code doctor --config .memax-code/config.json --cwd .
 Persist local defaults in `~/.memax-code/config.json`:
 
 ```sh
-memax-code config init --provider openai --model gpt-5.4 --ui app
+memax-code config init --provider openai --model gpt-5.4 --ui auto
 memax-code config show
 ```
 
@@ -135,7 +135,7 @@ Example config:
   "model": "gpt-5.4",
   "profile": "balanced",
   "effort": "auto",
-  "ui": "app",
+  "ui": "auto",
   "compaction": "auto",
   "context_window": 128000,
   "context_summary_tokens": 8192,
@@ -224,8 +224,9 @@ reopens that session in the interactive shell.
 
 Memax Code supports several renderers:
 
-- `app`: default human-facing terminal surface
-- `live`: lighter status-line mode
+- `auto`: default; uses the transcript-first app renderer on terminals
+- `app`: styled interactive terminal app with normal scrollback
+- `live`: transcript-first terminal mode with a transient status line
 - `tui`: structured/raw sectioned output
 - `plain`: stable log-oriented output
 - `--event-stream json`: JSONL event stream for wrappers and tooling
@@ -233,7 +234,7 @@ Memax Code supports several renderers:
 Examples:
 
 ```sh
-memax-code --ui app "repair the failing test"
+memax-code --ui auto "repair the failing test"
 memax-code --ui live "repair the failing test"
 memax-code --ui tui "inspect the failing test"
 memax-code --ui plain "run the relevant checks" > run.log
@@ -241,7 +242,9 @@ memax-code --event-stream json "repair the failing test"
 ```
 
 `--ui auto` is the default. It uses app mode for interactive terminals and the
-plain renderer for non-terminal output.
+plain renderer for non-terminal output. Terminal history stays in normal
+scrollback; Memax Code does not enter a full-screen alternate buffer. Existing
+configs that set `"ui": "app"` keep the same styled terminal behavior.
 
 ## Safety and execution model
 

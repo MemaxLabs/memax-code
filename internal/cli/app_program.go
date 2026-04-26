@@ -7,22 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
-	"golang.org/x/term"
 )
 
 const (
@@ -65,10 +60,6 @@ type appProgramPromptDoneMsg struct {
 	prompt    string
 }
 
-type appProgramExternalStatusMsg struct {
-	text string
-}
-
 type appProgramTickMsg time.Time
 
 type appProgramModel struct {
@@ -77,35 +68,25 @@ type appProgramModel struct {
 	runPrompt interactivePromptRunner
 	runEvents interactiveEventPromptRunner
 	program   *tea.Program
-	output    io.Writer
 	history   persistentPromptHistory
 	composer  interactiveComposer
 	input     textarea.Model
 	runCancel context.CancelFunc
 	appTranscriptFormatter
-	width           int
-	height          int
-	sessionID       string
-	statusLine      string
-	lastError       string
-	runErrors       map[string]struct{}
-	running         bool
-	canceling       bool
-	quitting        bool
-	showHelp        bool
-	firstErr        error
-	spinner         int
-	tickArmed       bool
-	turnStartedAt   time.Time
-	customRenderer  bool
-	liveRegion      bool
-	liveRegionTop   int
-	liveRegionRows  int
-	clearedLiveTop  int
-	clearedLiveRows int
-	liveCursor      bool
-	liveCursorRow   int
-	liveCursorCol   int
+	width         int
+	height        int
+	sessionID     string
+	statusLine    string
+	lastError     string
+	runErrors     map[string]struct{}
+	running       bool
+	canceling     bool
+	quitting      bool
+	showHelp      bool
+	firstErr      error
+	spinner       int
+	tickArmed     bool
+	turnStartedAt time.Time
 }
 
 func newAppProgramModel(ctx context.Context, opts options, runPrompt interactivePromptRunner) *appProgramModel {
@@ -168,35 +149,16 @@ func newAppProgramTextarea() textarea.Model {
 }
 
 func (m *appProgramModel) Init() tea.Cmd {
-	if m.customRenderer {
-		return m.flushPrints()
-	}
 	return tea.Sequence(m.flushPrints(), textarea.Blink)
 }
 
 func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	forwardInputCmd := false
-	if m.customRenderer {
-		defer func() {
-			if !m.quitting {
-				m.renderLiveRegion()
-			}
-		}()
-	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resize()
-		if m.customRenderer {
-			// Pending prints are transcript-backed. Resize replay is the source
-			// of truth so the transcript and live footer are redrawn once.
-			_ = m.drainPendingPrints()
-			m.redrawScreenAfterResize()
-			return m, nil
-		}
 	case tea.KeyMsg:
-		forwardInputCmd = key.Matches(msg, m.input.KeyMap.Paste)
 		if cmd, handled := m.updateKey(msg); handled {
 			return m, m.withFlush(cmd)
 		}
@@ -209,10 +171,6 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case appProgramPromptDoneMsg:
 		m.finishPrompt(msg)
 		return m, m.flushPrints()
-	case appProgramExternalStatusMsg:
-		if strings.TrimSpace(msg.text) != "" {
-			m.statusLine = strings.TrimSpace(msg.text)
-		}
 	case appProgramTickMsg:
 		m.tickArmed = false
 		if !m.running {
@@ -229,12 +187,6 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.input.Value() != beforeInput {
 		m.composer.history.ResetTraversal()
 		m.resize()
-	}
-	if m.customRenderer {
-		if forwardInputCmd {
-			return m, m.withFlush(cmd)
-		}
-		return m, m.flushPrints()
 	}
 	return m, m.withFlush(cmd)
 }
@@ -546,207 +498,7 @@ func (m *appProgramModel) flushPrints() tea.Cmd {
 	if m.width > 0 {
 		lines = appProgramFitPrintedLines(lines, appProgramLiveRegionWidth(m.width))
 	}
-	if m.customRenderer {
-		m.printTranscriptLines(lines)
-		return nil
-	}
 	return tea.Println(strings.Join(lines, "\n"))
-}
-
-func (m *appProgramModel) printTranscriptLines(lines []string) {
-	if m.output == nil || len(lines) == 0 {
-		return
-	}
-	liveTop := m.liveRegionTop
-	if liveTop <= 0 {
-		liveTop = m.liveRegionTopRow()
-	}
-	m.clearLiveRegion()
-	if m.height > 0 && liveTop > 1 {
-		availableRows := liveTop - 1
-		for len(lines) > 0 {
-			n := min(len(lines), availableRows)
-			chunk := lines[:n]
-			lines = lines[n:]
-			startRow := liveTop - len(chunk)
-			if startRow < 1 {
-				startRow = 1
-			}
-			fmt.Fprint(m.output, appProgramScrollUp(len(chunk)))
-			fmt.Fprint(m.output, appProgramMoveCursor(startRow, 1))
-			fmt.Fprint(m.output, appProgramTerminalText(strings.Join(chunk, "\n")))
-		}
-		return
-	}
-	fmt.Fprint(m.output, appProgramTerminalLines(lines))
-}
-
-func (m *appProgramModel) redrawScreenAfterResize() {
-	if m.output == nil {
-		return
-	}
-	view := m.View()
-	liveRows := m.liveRegionPhysicalRowsForView(view)
-	m.redrawTranscriptForLiveRows(liveRows)
-}
-
-func (m *appProgramModel) redrawTranscriptForLiveRows(liveRows int) {
-	if m.output == nil {
-		return
-	}
-	m.liveRegion = false
-	m.liveRegionTop = 0
-	m.liveRegionRows = 0
-	m.clearedLiveTop = 0
-	m.clearedLiveRows = 0
-	fmt.Fprint(m.output, appProgramHideCursor()+appProgramResetScrollRegion()+"\x1b[2J\x1b[H")
-	lines := m.resizeTranscriptReplayLinesForLiveRows(liveRows)
-	if len(lines) > 0 {
-		fmt.Fprint(m.output, appProgramTerminalLines(lines))
-	}
-}
-
-func (m *appProgramModel) resizeTranscriptReplayLines() []string {
-	return m.resizeTranscriptReplayLinesForLiveRows(m.liveRegionPhysicalRows())
-}
-
-func (m *appProgramModel) resizeTranscriptReplayLinesForLiveRows(liveRows int) []string {
-	lines := m.transcript.lines(maxAppTranscriptLines)
-	width := m.liveRegionWidth()
-	if width > 0 {
-		lines = appProgramFitPrintedLines(lines, width)
-	}
-	limit := m.resizeTranscriptReplayLimitForLiveRows(liveRows)
-	if limit <= 0 {
-		return nil
-	}
-	if len(lines) > limit {
-		lines = lines[len(lines)-limit:]
-	}
-	return lines
-}
-
-func (m *appProgramModel) resizeTranscriptReplayLimit() int {
-	return m.resizeTranscriptReplayLimitForLiveRows(m.liveRegionPhysicalRows())
-}
-
-func (m *appProgramModel) resizeTranscriptReplayLimitForLiveRows(liveRows int) int {
-	if m.height <= 0 {
-		return maxAppTranscriptLines
-	}
-	available := m.height - liveRows
-	if available <= 0 {
-		return 0
-	}
-	return min(maxAppTranscriptLines, available)
-}
-
-func (m *appProgramModel) clearLiveRegion() {
-	if m.output == nil || !m.liveRegion {
-		return
-	}
-	m.clearedLiveTop = m.liveRegionTop
-	m.clearedLiveRows = m.liveRegionRows
-	fmt.Fprint(m.output, m.liveRegionClearPrefixFromRow(m.liveRegionTop))
-	m.liveRegion = false
-	m.liveRegionTop = 0
-	m.liveRegionRows = 0
-}
-
-func (m *appProgramModel) renderLiveRegion() {
-	if !m.customRenderer || m.output == nil {
-		return
-	}
-	m.liveCursor = false
-	m.liveCursorRow = 0
-	m.liveCursorCol = 0
-	view := m.View()
-	top := m.liveRegionTopRowForView(view)
-	rows := m.liveRegionPhysicalRowsForView(view)
-	if (!m.liveRegion && m.clearedLiveTop > 0 && m.clearedLiveTop != top) ||
-		(m.liveRegion && m.liveRegionTop > 0 && m.liveRegionTop != top) {
-		m.redrawTranscriptForLiveRows(rows)
-	}
-	clearTop := top
-	if m.liveRegion && m.liveRegionTop > 0 && (clearTop == 0 || m.liveRegionTop < clearTop) {
-		clearTop = m.liveRegionTop
-	}
-	fmt.Fprint(m.output, appProgramHideCursor()+m.liveRegionClearPrefixFromRow(clearTop))
-	m.liveRegion = true
-	m.liveRegionTop = top
-	m.liveRegionRows = rows
-	m.clearedLiveTop = 0
-	m.clearedLiveRows = 0
-	if view == "" {
-		return
-	}
-	if top > 0 && clearTop != top {
-		fmt.Fprint(m.output, appProgramMoveCursor(top, 1))
-	}
-	fmt.Fprint(m.output, appProgramTerminalText(view))
-	if m.liveCursor && top > 0 {
-		cursorRow := top + m.liveCursorRow - 1
-		if cursorRow < top {
-			cursorRow = top
-		}
-		fmt.Fprint(m.output, appProgramMoveCursor(cursorRow, m.liveCursorCol)+appProgramShowCursor())
-		return
-	}
-	fmt.Fprint(m.output, appProgramHideCursor())
-}
-
-func (m *appProgramModel) liveRegionClearPrefixFromRow(row int) string {
-	if row > 0 {
-		return appProgramResetScrollRegion() + appProgramMoveCursor(row, 1) + appProgramClearToScreenEnd()
-	}
-	if m.liveRegionRows > 1 {
-		return appProgramResetScrollRegion() + fmt.Sprintf("\x1b[%dA\r%s", m.liveRegionRows-1, appProgramClearToScreenEnd())
-	}
-	return appProgramResetScrollRegion() + "\r" + appProgramClearToScreenEnd()
-}
-
-func (m *appProgramModel) liveRegionTopRow() int {
-	return m.liveRegionTopRowForView(m.View())
-}
-
-func (m *appProgramModel) liveRegionTopRowForView(view string) int {
-	if m.height <= 0 {
-		return 0
-	}
-	rows := m.liveRegionPhysicalRowsForView(view)
-	if rows <= 0 {
-		return m.height
-	}
-	top := m.height - rows + 1
-	if top < 1 {
-		return 1
-	}
-	return top
-}
-
-func (m *appProgramModel) liveRegionPhysicalRows() int {
-	view := m.View()
-	return m.liveRegionPhysicalRowsForView(view)
-}
-
-func (m *appProgramModel) liveRegionPhysicalRowsForView(view string) int {
-	if view == "" {
-		return 0
-	}
-	width := m.liveRegionWidth()
-	lines := strings.Split(view, "\n")
-	if width > 0 {
-		lines = appProgramFitPrintedLines(lines, width)
-	}
-	return len(lines)
-}
-
-func (m *appProgramModel) liveRegionWidth() int {
-	width := m.width
-	if width <= 0 {
-		width = defaultAppShellWidth
-	}
-	return appProgramLiveRegionWidth(width)
 }
 
 func (m *appProgramModel) withFlush(cmd tea.Cmd) tea.Cmd {
@@ -783,6 +535,9 @@ func (m *appProgramModel) resize() {
 }
 
 func (m *appProgramModel) View() string {
+	if m.quitting {
+		return ""
+	}
 	width := m.width
 	if width <= 0 {
 		width = defaultAppShellWidth
@@ -801,17 +556,10 @@ func (m *appProgramModel) View() string {
 		rows = append(rows, activity)
 	}
 	rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
-	composerRowStart := appProgramPhysicalRows(rows) + 1
 	rows = append(rows, m.composerView(renderWidth))
-	if m.customRenderer && m.liveCursor {
-		m.liveCursorRow += composerRowStart - 1
-	}
 	rows = append(rows, m.bottomStatusView(renderWidth))
 	if m.showHelp {
 		rows = append(rows, m.helpView(renderWidth))
-	}
-	if m.customRenderer {
-		return strings.Join(rows, "\n")
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
@@ -821,18 +569,6 @@ func appendAppProgramBlankRows(rows []string, count int) []string {
 		rows = append(rows, "")
 	}
 	return rows
-}
-
-func appProgramPhysicalRows(rows []string) int {
-	total := 0
-	for _, row := range rows {
-		if row == "" {
-			total++
-			continue
-		}
-		total += len(strings.Split(row, "\n"))
-	}
-	return total
 }
 
 func (m *appProgramModel) activityStatusView(width int) string {
@@ -949,9 +685,6 @@ func (m *appProgramModel) helpView(width int) string {
 }
 
 func (m *appProgramModel) composerView(width int) string {
-	if m.customRenderer {
-		return m.customComposerView(width)
-	}
 	contentWidth := appProgramComposerContentWidth(width)
 	lines := strings.Split(m.input.View(), "\n")
 	if m.input.Value() == "" {
@@ -963,218 +696,12 @@ func (m *appProgramModel) composerView(width int) string {
 	return appProgramComposerStyle.Width(width).Render(strings.Join(lines, "\n"))
 }
 
-func (m *appProgramModel) customComposerView(width int) string {
-	renderWidth := width
-	contentWidth := appProgramComposerContentWidth(renderWidth)
-	lines := m.customComposerLines(contentWidth)
-	rows := make([]string, 0, len(lines)+2)
-	rows = append(rows, appProgramComposerBackgroundRow()+appProgramResetStyle())
-	for _, line := range lines {
-		rows = append(rows, appProgramComposerBackgroundRow()+" "+line+appProgramResetStyle())
-	}
-	rows = append(rows, appProgramComposerBackgroundRow()+appProgramResetStyle())
-	return strings.Join(rows, "\n")
-}
-
-func (m *appProgramModel) customComposerLines(width int) []string {
-	value := m.input.Value()
-	cursorLine := m.input.Line()
-	cursorOffset := appProgramInputLogicalCursorOffset(m.input)
-	m.liveCursor = true
-	if value == "" {
-		line := appProgramAccentStyle.Background(appProgramComposerBackground).Render("› ") +
-			appProgramMarkdownStyle.Background(appProgramComposerBackground).Render(" ") +
-			appProgramMutedStyle.Background(appProgramComposerBackground).Render(m.input.Placeholder)
-		m.liveCursorRow = 2
-		m.liveCursorCol = 4
-		return []string{appProgramFitLine(line, width)}
-	}
-	rawLines := strings.Split(value, "\n")
-	lines := make([]string, 0, len(rawLines))
-	for i, raw := range rawLines {
-		prompt := "· "
-		if i == 0 {
-			prompt = "› "
-		}
-		chunks := appProgramWrapComposerLine(raw, max(1, width-lipgloss.Width(prompt)))
-		if len(chunks) == 0 {
-			chunks = []appProgramComposerChunk{{Text: "", Start: 0, End: 0}}
-		}
-		for chunkIndex, chunk := range chunks {
-			rowPrompt := prompt
-			if chunkIndex > 0 {
-				rowPrompt = "  "
-			}
-			if i == cursorLine && appProgramCursorBelongsToChunk(cursorOffset, chunk, chunkIndex == len(chunks)-1) {
-				m.liveCursorRow = len(lines) + 2
-				m.liveCursorCol = 1 + lipgloss.Width(rowPrompt) + appProgramComposerCursorWidth(chunk.Text, cursorOffset-chunk.Start) + 1
-			}
-			line := appProgramAccentStyle.Background(appProgramComposerBackground).Render(rowPrompt) +
-				appProgramMarkdownStyle.Background(appProgramComposerBackground).Render(chunk.Text)
-			lines = append(lines, appProgramFitLine(line, width))
-		}
-	}
-	if m.liveCursorRow == 0 {
-		m.liveCursorRow = len(lines) + 1
-		m.liveCursorCol = 4
-	}
-	return lines
-}
-
-func appProgramInputLogicalCursorOffset(input textarea.Model) int {
-	info := input.LineInfo()
-	offset := info.StartColumn + info.ColumnOffset
-	lines := strings.Split(input.Value(), "\n")
-	line := input.Line()
-	if line < 0 || line >= len(lines) {
-		return 0
-	}
-	runeCount := len([]rune(lines[line]))
-	if offset < 0 {
-		return 0
-	}
-	if offset > runeCount {
-		return runeCount
-	}
-	return offset
-}
-
-type appProgramComposerChunk struct {
-	Text       string
-	Start, End int
-}
-
-func appProgramWrapComposerLine(text string, width int) []appProgramComposerChunk {
-	if width <= 0 {
-		width = 1
-	}
-	runes := []rune(text)
-	if len(runes) == 0 {
-		return []appProgramComposerChunk{{Text: "", Start: 0, End: 0}}
-	}
-	chunks := make([]appProgramComposerChunk, 0, len(runes)/width+1)
-	for start := 0; start < len(runes); {
-		end := start
-		rowWidth := 0
-		for end < len(runes) {
-			nextWidth := lipgloss.Width(string(runes[end]))
-			if nextWidth <= 0 {
-				nextWidth = 1
-			}
-			if rowWidth > 0 && rowWidth+nextWidth > width {
-				break
-			}
-			rowWidth += nextWidth
-			end++
-			if rowWidth >= width {
-				break
-			}
-		}
-		if end == start {
-			end++
-		}
-		chunks = append(chunks, appProgramComposerChunk{
-			Text:  string(runes[start:end]),
-			Start: start,
-			End:   end,
-		})
-		start = end
-	}
-	return chunks
-}
-
-func appProgramCursorBelongsToChunk(cursorOffset int, chunk appProgramComposerChunk, last bool) bool {
-	if cursorOffset < chunk.Start {
-		return false
-	}
-	if cursorOffset < chunk.End {
-		return true
-	}
-	return last && cursorOffset == chunk.End
-}
-
-func appProgramComposerCursorWidth(text string, charOffset int) int {
-	runes := []rune(text)
-	if charOffset < 0 {
-		charOffset = 0
-	}
-	if charOffset > len(runes) {
-		charOffset = len(runes)
-	}
-	return lipgloss.Width(string(runes[:charOffset]))
-}
-
-func appProgramComposerBackgroundRow() string {
-	return "\x1b[48;5;235m\x1b[K"
-}
-
 func appProgramEmptyComposerLine(placeholder string) string {
 	return appProgramAccentStyle.
 		Background(appProgramComposerBackground).
 		Render("› ") + appProgramMutedStyle.
 		Background(appProgramComposerBackground).
 		Render(placeholder)
-}
-
-func appProgramTerminalText(text string) string {
-	return strings.ReplaceAll(text, "\n", appProgramTerminalNewline())
-}
-
-func appProgramTerminalLines(lines []string) string {
-	if len(lines) == 0 {
-		return ""
-	}
-	return appProgramTerminalText(strings.Join(lines, "\n")) + appProgramTerminalNewline()
-}
-
-func appProgramTerminalNewline() string {
-	return "\r\n"
-}
-
-func appProgramMoveCursor(row, col int) string {
-	if row < 1 {
-		row = 1
-	}
-	if col < 1 {
-		col = 1
-	}
-	return fmt.Sprintf("\x1b[%d;%dH", row, col)
-}
-
-func appProgramResetScrollRegion() string {
-	// Defensive reset: the custom renderer does not install a scroll region,
-	// but previous terminal programs or interrupted shells can leave one set.
-	return "\x1b[r"
-}
-
-func appProgramScrollUp(rows int) string {
-	if rows <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("\x1b[%dS", rows)
-}
-
-func appProgramClearToScreenEnd() string {
-	return "\x1b[J"
-}
-
-func appProgramResetStyle() string {
-	return "\x1b[0m"
-}
-
-func appProgramHideCursor() string {
-	return "\x1b[?25l"
-}
-
-func appProgramShowCursor() string {
-	return "\x1b[?25h"
-}
-
-func appProgramRestoreCursorForShell(height int) string {
-	if height > 0 {
-		return appProgramMoveCursor(height, 1) + appProgramClearToScreenEnd() + appProgramShowCursor() + appProgramTerminalNewline()
-	}
-	return appProgramShowCursor() + appProgramTerminalNewline()
 }
 
 func appProgramComposerContentWidth(width int) int {
@@ -2515,23 +2042,8 @@ func runInteractiveAppWithEvents(ctx context.Context, stdin io.Reader, stdout io
 		tea.WithOutput(stdout),
 		tea.WithContext(ctx),
 	}
-	if terminal {
-		model.output = stdout
-		model.customRenderer = true
-		programOpts = append(programOpts, tea.WithoutRenderer())
-	}
 	program := tea.NewProgram(model, programOpts...)
 	model.program = program
-	var cleanup func()
-	var terminalErr error
-	if model.customRenderer {
-		cleanup, terminalErr = startAppProgramCustomTerminal(ctx, stdin, stdout, program)
-		if terminalErr != nil {
-			return terminalErr
-		}
-		defer cleanup()
-		model.renderLiveRegion()
-	}
 	finalModel, err := program.Run()
 	if err != nil {
 		return err
@@ -2540,53 +2052,4 @@ func runInteractiveAppWithEvents(ctx context.Context, stdin io.Reader, stdout io
 		return result.firstErr
 	}
 	return nil
-}
-
-func startAppProgramCustomTerminal(ctx context.Context, stdin io.Reader, stdout io.Writer, program *tea.Program) (func(), error) {
-	cleanup := func() {}
-	inputFile, inputOK := stdin.(*os.File)
-	if inputOK && term.IsTerminal(int(inputFile.Fd())) {
-		previous, err := term.MakeRaw(int(inputFile.Fd()))
-		if err != nil {
-			return nil, fmt.Errorf("enable raw terminal input: %w", err)
-		}
-		cleanup = func() {
-			_ = term.Restore(int(inputFile.Fd()), previous)
-		}
-	}
-	outputFile, outputOK := stdout.(*os.File)
-	if !outputOK || !term.IsTerminal(int(outputFile.Fd())) {
-		return cleanup, nil
-	}
-	fmt.Fprint(stdout, appProgramHideCursor())
-	resizeCtx, cancelResize := context.WithCancel(ctx)
-	previousCleanup := cleanup
-	cleanup = func() {
-		cancelResize()
-		_, height, _ := term.GetSize(int(outputFile.Fd()))
-		fmt.Fprint(stdout, appProgramRestoreCursorForShell(height))
-		previousCleanup()
-	}
-	resizeSignals := make(chan os.Signal, 1)
-	signal.Notify(resizeSignals, syscall.SIGWINCH)
-	go func() {
-		defer signal.Stop(resizeSignals)
-		sendSize := func() {
-			width, height, err := term.GetSize(int(outputFile.Fd()))
-			if err != nil || width <= 0 || height <= 0 {
-				return
-			}
-			program.Send(tea.WindowSizeMsg{Width: width, Height: height})
-		}
-		sendSize()
-		for {
-			select {
-			case <-resizeCtx.Done():
-				return
-			case <-resizeSignals:
-				sendSize()
-			}
-		}
-	}()
-	return cleanup, nil
 }

@@ -1791,7 +1791,7 @@ func TestRunResumeWithoutPromptStartsInteractiveShellOnTerminalIO(t *testing.T) 
 	}
 }
 
-func TestRunWithoutPromptStartsAppShellOnTerminalIO(t *testing.T) {
+func TestRunWithoutPromptStartsAppOnTerminalIO(t *testing.T) {
 	ctx := context.Background()
 	ptmx, tty, err := pty.Open()
 	if err != nil {
@@ -1814,6 +1814,7 @@ func TestRunWithoutPromptStartsAppShellOnTerminalIO(t *testing.T) {
 		}, tty, tty, tty)
 	}()
 
+	time.Sleep(100 * time.Millisecond)
 	if _, err := io.WriteString(ptmx, "/quit\r"); err != nil {
 		t.Fatalf("WriteString() error = %v", err)
 	}
@@ -1839,8 +1840,8 @@ func TestRunWithoutPromptStartsAppShellOnTerminalIO(t *testing.T) {
 	}
 	out := output.String()
 	for _, want := range []string{
-		"Memax Code",
 		"Welcome. Type a task or /help.",
+		"Memax Code",
 		"session none",
 		"bye",
 	} {
@@ -1850,6 +1851,9 @@ func TestRunWithoutPromptStartsAppShellOnTerminalIO(t *testing.T) {
 	}
 	if strings.Contains(out, "\x1b[?1049h") {
 		t.Fatalf("interactive output entered alt screen:\n%s", out)
+	}
+	if strings.Contains(out, "\x1b[2J") {
+		t.Fatalf("interactive output used full-screen clear:\n%s", out)
 	}
 }
 
@@ -1889,6 +1893,32 @@ func TestShouldImplicitlyStartInteractiveWithTerminalIO(t *testing.T) {
 
 	if !shouldImplicitlyStartInteractive(tty, tty, tty, options{UI: renderModePlain}) {
 		t.Fatal("shouldImplicitlyStartInteractive() = false, want true for terminal stdin and shell output")
+	}
+}
+
+func TestShouldImplicitlyStartInteractiveUsesStderrForShellSurface(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Fatalf("pty.Open() error = %v", err)
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+
+	if !shouldImplicitlyStartInteractive(tty, &bytes.Buffer{}, tty, options{UI: renderModeApp}) {
+		t.Fatal("shouldImplicitlyStartInteractive() = false, want true when stdin/stderr are terminals even if stdout is redirected")
+	}
+}
+
+func TestShouldImplicitlyStartInteractiveUsesStdoutForAppSurface(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Fatalf("pty.Open() error = %v", err)
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+
+	if !shouldImplicitlyStartInteractive(tty, tty, &bytes.Buffer{}, options{UI: renderModeApp}) {
+		t.Fatal("shouldImplicitlyStartInteractive() = false, want true when stdin/stdout are terminals even if stderr is redirected")
 	}
 }
 
@@ -2130,7 +2160,7 @@ func TestRunInteractiveRejectsPromptAndConflictingFlags(t *testing.T) {
 	}
 }
 
-func TestRunInteractiveAppUsesSingleOutputSurface(t *testing.T) {
+func TestRunInteractiveAppFlagUsesInlineApp(t *testing.T) {
 	ptmx, tty, err := pty.Open()
 	if err != nil {
 		t.Fatalf("pty.Open() error = %v", err)
@@ -2160,6 +2190,7 @@ func TestRunInteractiveAppUsesSingleOutputSurface(t *testing.T) {
 		)
 	}()
 
+	time.Sleep(100 * time.Millisecond)
 	if _, err := io.WriteString(ptmx, "/help\r/quit\r"); err != nil {
 		t.Fatalf("WriteString() error = %v", err)
 	}
@@ -2185,23 +2216,27 @@ func TestRunInteractiveAppUsesSingleOutputSurface(t *testing.T) {
 
 	out := output.String()
 	for _, want := range []string{
+		"Welcome. Type a task or /help.",
 		"Memax Code",
-		"none",
 		"session none",
 		"input draft: inactive",
+		"slash commands:",
 		"/quit              exit",
 		"bye",
 	} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("interactive app stdout missing %q:\n%s", want, out)
+			t.Fatalf("interactive app-compat output missing %q:\n%s", want, out)
 		}
 	}
 	if strings.Contains(out, "\x1b[?1049h") {
-		t.Fatalf("interactive app stdout entered alt screen:\n%s", out)
+		t.Fatalf("interactive app-compat output entered alt screen:\n%s", out)
+	}
+	if strings.Contains(out, "\x1b[2J") {
+		t.Fatalf("interactive app output used full-screen clear:\n%s", out)
 	}
 }
 
-func TestRunInteractiveAppCapturesPromptRunTranscript(t *testing.T) {
+func TestRunInteractiveAppFlagCapturesPromptRunTranscript(t *testing.T) {
 	ptmx, tty, err := pty.Open()
 	if err != nil {
 		t.Fatalf("pty.Open() error = %v", err)
@@ -2225,6 +2260,9 @@ func TestRunInteractiveAppCapturesPromptRunTranscript(t *testing.T) {
 			tty,
 			options{SessionDir: t.TempDir(), UI: renderModeApp},
 			func(_ context.Context, w io.Writer, opts options) (string, error) {
+				if opts.UI != renderModeTUI {
+					return "", fmt.Errorf("prompt runner UI = %q, want %q", opts.UI, renderModeTUI)
+				}
 				fmt.Fprintln(w, "[assistant]")
 				fmt.Fprintln(w, "working on it")
 				fmt.Fprintln(w, "[result]")
@@ -2263,16 +2301,20 @@ func TestRunInteractiveAppCapturesPromptRunTranscript(t *testing.T) {
 
 	out := output.String()
 	for _, want := range []string{
-		"Memax Code",
-		"00000000-0000-7000-8000-000000000123",
+		"Welcome. Type a task or /help.",
+		"first prompt",
 		"working on it",
+		"bye",
 	} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("interactive app stdout missing %q:\n%s", want, out)
+			t.Fatalf("interactive app-compat output missing %q:\n%s", want, out)
 		}
 	}
 	if strings.Contains(out, "\x1b[?1049h") {
-		t.Fatalf("interactive app stdout entered alt screen:\n%s", out)
+		t.Fatalf("interactive app-compat output entered alt screen:\n%s", out)
+	}
+	if strings.Contains(out, "\x1b[2J") {
+		t.Fatalf("interactive app output used full-screen clear:\n%s", out)
 	}
 }
 

@@ -39,7 +39,7 @@ func runInteractiveWithEventRunner(ctx context.Context, stdin io.Reader, stdout,
 	if resolvedUI == renderModeApp {
 		return runInteractiveAppWithEvents(ctx, stdin, stdout, opts, runPrompt, runEvents)
 	}
-	shellOut := interactiveShellWriter(resolvedUI, stdout, stderr)
+	shellOut := stderr
 	var inputObserver interactiveInputObserver
 	currentSession := opts.ResumeSessionID
 	composer := &interactiveComposer{}
@@ -99,6 +99,7 @@ func runInteractiveWithEventRunner(ctx context.Context, stdin io.Reader, stdout,
 		turnOpts := opts
 		turnOpts.Prompt = promptText
 		turnOpts.ResumeSessionID = currentSession
+		turnOpts.UI = resolvedUI
 		sessionID, err := runPrompt(ctx, stdout, turnOpts)
 		if err != nil {
 			if sessionID != "" {
@@ -122,21 +123,14 @@ func runInteractiveWithEventRunner(ctx context.Context, stdin io.Reader, stdout,
 	return firstErr
 }
 
-func interactiveShellWriter(mode renderMode, stdout, stderr io.Writer) io.Writer {
-	if mode == renderModeApp {
-		return stdout
-	}
-	return stderr
-}
-
 func resolveInteractiveMode(mode renderMode, stdout io.Writer) renderMode {
-	if mode != renderModeAuto {
-		return mode
+	if mode == renderModeAuto || mode == renderModeApp {
+		if writerIsTerminal(stdout) {
+			return renderModeApp
+		}
+		return renderModePlain
 	}
-	if writerIsTerminal(stdout) {
-		return renderModeApp
-	}
-	return renderModePlain
+	return mode
 }
 
 type interactiveCommandResult struct {
@@ -314,9 +308,7 @@ func showInteractiveSession(ctx context.Context, w io.Writer, opts options, curr
 	if err != nil {
 		return err
 	}
-	// Interactive shell commands follow the active shell surface: app mode uses
-	// stdout so transcript output and bottom controls share one terminal stream,
-	// while the other interactive UIs keep shell commands on stderr. The standalone
+	// Interactive shell commands follow the active shell surface. The standalone
 	// --show-session command still writes to stdout for scriptability.
 	showOpts := opts
 	showOpts.ShowSessionID = id
