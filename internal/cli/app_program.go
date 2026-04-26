@@ -20,7 +20,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
-	"golang.org/x/term"
 )
 
 const (
@@ -2227,31 +2226,6 @@ func runInteractiveAppWithEvents(ctx context.Context, stdin io.Reader, stdout io
 	model := newAppProgramModelWithEvents(ctx, opts, runPrompt, runEvents)
 	terminal, terminalWidth, terminalHeight := terminalWriterInfo(stdout)
 	if terminal {
-		var rawState *term.State
-		rawFD := -1
-		if fd, ok := stdin.(interface{ Fd() uintptr }); ok {
-			rawFD = int(fd.Fd())
-			if term.IsTerminal(rawFD) {
-				state, err := term.MakeRaw(rawFD)
-				if err != nil {
-					return fmt.Errorf("enter raw terminal mode: %w", err)
-				}
-				rawState = state
-			}
-		}
-		model.output = stdout
-		fmt.Fprint(stdout, xansi.SetBracketedPasteMode)
-		defer func() {
-			model.renderMu.Lock()
-			defer model.renderMu.Unlock()
-			model.clearLiveRegionLocked(model.renderWidth())
-			fmt.Fprint(stdout, xansi.ResetStyle)
-			fmt.Fprint(stdout, xansi.ResetBracketedPasteMode)
-			fmt.Fprint(stdout, xansi.ShowCursor)
-			if rawState != nil && rawFD >= 0 {
-				_ = term.Restore(rawFD, rawState)
-			}
-		}()
 		// terminalWriterInfo reserves one physical column for terminal wrapping.
 		// appProgramModel.width stores the real terminal width and applies its
 		// own width reserve when wrapping printed transcript lines.
@@ -2273,7 +2247,9 @@ func runInteractiveAppWithEvents(ctx context.Context, stdin io.Reader, stdout io
 		tea.WithInput(stdin),
 		tea.WithOutput(stdout),
 		tea.WithContext(ctx),
-		tea.WithoutRenderer(),
+	}
+	if !terminal {
+		programOpts = append(programOpts, tea.WithoutRenderer())
 	}
 	program := tea.NewProgram(model, programOpts...)
 	model.program = program
