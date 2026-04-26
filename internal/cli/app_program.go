@@ -572,6 +572,9 @@ func (m *appProgramModel) View() string {
 	rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 	rows = append(rows, m.composerView(renderWidth))
 	rows = append(rows, m.bottomStatusView(renderWidth))
+	if m.height <= 0 || len(rows) < m.height {
+		rows = append(rows, "")
+	}
 	if m.showHelp {
 		rows = append(rows, m.helpView(renderWidth))
 	}
@@ -707,6 +710,9 @@ func (m *appProgramModel) composerView(width int) string {
 	for i, line := range lines {
 		lines[i] = appProgramFitLine(line, contentWidth)
 	}
+	// The caller passes the live-region width, which is already one physical
+	// column narrower than the terminal. Rendering to exactly this width keeps
+	// the gray prompt band visually full-width while avoiding terminal auto-wrap.
 	return appProgramComposerStyle.Width(width).Render(strings.Join(lines, "\n"))
 }
 
@@ -2057,11 +2063,6 @@ func runInteractiveAppWithEvents(ctx context.Context, stdin io.Reader, stdout io
 	}
 	program := tea.NewProgram(model, programOpts...)
 	model.program = program
-	stopResizeWatcher := func() {}
-	if terminal {
-		stopResizeWatcher = startAppProgramResizeWatcher(ctx, program, stdout)
-	}
-	defer stopResizeWatcher()
 	finalModel, err := program.Run()
 	if err != nil {
 		return err

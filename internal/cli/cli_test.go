@@ -2311,8 +2311,8 @@ func TestRunInteractiveAppUsesInlineRendererWithoutAltScreen(t *testing.T) {
 	if strings.Contains(out, "\x1b[2J") {
 		t.Fatalf("inline app output used full-screen clear:\n%s", out)
 	}
-	// Memax Code writes these explicitly because app mode disables Bubble
-	// Tea's standard renderer and owns the inline live region.
+	// The Bubble Tea inline renderer owns bracketed paste and cursor visibility
+	// for terminal app mode.
 	if !strings.Contains(out, ansi.SetBracketedPasteMode) {
 		t.Fatalf("inline app output did not enable bracketed paste:\n%s", out)
 	}
