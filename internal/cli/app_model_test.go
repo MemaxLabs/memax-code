@@ -162,6 +162,34 @@ func TestAppProgramClearLiveRegionDoesNotOverEraseAfterWiden(t *testing.T) {
 	}
 }
 
+func TestAppProgramRenderBottomAnchorsLiveRegion(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.width = 81
+	model.height = 20
+	model.resize()
+	var out bytes.Buffer
+	model.output = &out
+
+	width := model.renderWidth()
+	view := model.fitLiveRegionView(model.View(), width)
+	rows := appProgramPhysicalRows(strings.Split(view, "\n"), width)
+	wantPosition := ansi.CursorPosition(1, model.liveRegionStartRow(rows))
+
+	if cmd := model.Init(); cmd != nil {
+		_ = cmd()
+	}
+	got := out.String()
+	if !strings.Contains(got, wantPosition) {
+		t.Fatalf("render did not anchor live region at bottom row %q:\n%q", wantPosition, got)
+	}
+	if !strings.Contains(got, ansi.EraseScreenBelow) {
+		t.Fatalf("render did not clear the bottom live region:\n%q", got)
+	}
+	if strings.Contains(got, ansi.CursorUp(1)) {
+		t.Fatalf("bottom-anchored render should not depend on cursor-up clearing:\n%q", got)
+	}
+}
+
 func TestAppProgramResizeDoesNotRepaintIdleLiveRegion(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	var out bytes.Buffer
@@ -213,7 +241,7 @@ func TestAppProgramResizeDoesNotRepaintIdleLiveRegion(t *testing.T) {
 	}
 	model = updated.(*appProgramModel)
 	got := out.String()
-	if !strings.Contains(got, ansi.EraseEntireLine) {
+	if !strings.Contains(got, ansi.EraseScreenBelow) {
 		t.Fatalf("settled resize render did not clear old live region:\n%q", got)
 	}
 	if count := strings.Count(ansi.Strip(got), "Ask Memax Code"); count != 1 {
@@ -226,7 +254,7 @@ func TestAppProgramResizeDoesNotRepaintIdleLiveRegion(t *testing.T) {
 		_ = cmd()
 	}
 	got = out.String()
-	if !strings.Contains(got, ansi.EraseEntireLine) {
+	if !strings.Contains(got, ansi.EraseScreenBelow) {
 		t.Fatalf("post-resize render did not clear old live region:\n%q", got)
 	}
 	if count := strings.Count(ansi.Strip(got), "Ask Memax Code"); count != 1 {

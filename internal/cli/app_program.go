@@ -580,18 +580,21 @@ func (m *appProgramModel) renderLiveRegion() {
 	}
 	width := m.renderWidth()
 	view := m.fitLiveRegionView(m.View(), width)
+	lines := strings.Split(view, "\n")
+	rows := appProgramPhysicalRows(lines, width)
 	m.renderMu.Lock()
 	defer m.renderMu.Unlock()
-	m.clearLiveRegionLocked(width)
+	m.clearLiveRegionLocked(width, rows)
 	if view == "" {
 		return
 	}
 	fmt.Fprint(m.output, xansi.HideCursor)
-	// The live renderer always leaves the terminal cursor at column 0 of the
-	// bottom physical row. Re-assert that invariant before every paint so the
-	// first render and any resize-triggered repaint start from the same place.
-	fmt.Fprint(m.output, "\r")
-	lines := strings.Split(view, "\n")
+	if m.height > 0 {
+		fmt.Fprint(m.output, xansi.CursorPosition(1, m.liveRegionStartRow(rows)))
+		fmt.Fprint(m.output, xansi.EraseScreenBelow)
+	} else {
+		fmt.Fprint(m.output, "\r")
+	}
 	for i, line := range lines {
 		if i > 0 {
 			fmt.Fprint(m.output, "\r\n")
@@ -602,7 +605,7 @@ func (m *appProgramModel) renderLiveRegion() {
 	fmt.Fprint(m.output, "\r")
 	m.liveLines = append(m.liveLines[:0], lines...)
 	m.liveWidth = width
-	m.liveRows = appProgramPhysicalRows(lines, width)
+	m.liveRows = rows
 }
 
 func (m *appProgramModel) fitLiveRegionView(view string, width int) string {
@@ -633,7 +636,7 @@ func (m *appProgramModel) fitLiveRegionView(view string, width int) string {
 	return strings.Join(lines[start:], "\n")
 }
 
-func (m *appProgramModel) clearLiveRegionLocked(width int) {
+func (m *appProgramModel) clearLiveRegionLocked(width int, targetRows ...int) {
 	if m.output == nil || m.liveRows <= 0 {
 		return
 	}
@@ -641,13 +644,15 @@ func (m *appProgramModel) clearLiveRegionLocked(width int) {
 		width = m.liveWidth
 	}
 	rows := appProgramPhysicalRows(m.liveLines, width)
-	if width > 0 && m.liveWidth > 0 && width < m.liveWidth {
-		// Terminal reflow after narrowing can make the already-painted live
-		// region occupy more physical rows than it did at paint time. Clear the
-		// larger of the recorded and reflowed heights so prompt/status ghosts do
-		// not remain in scrollback. When widening, use the reflowed height to
-		// avoid erasing transcript rows above the live region.
+	// Terminal reflow after narrowing can make the already-painted live region
+	// occupy more physical rows than it did at paint time. The repaint may also
+	// need more rows than the previous view. Clear the largest known bottom
+	// region instead of trusting the current cursor location after resize.
+	if m.height > 0 || (width > 0 && m.liveWidth > 0 && width < m.liveWidth) {
 		rows = max(m.liveRows, rows)
+	}
+	for _, target := range targetRows {
+		rows = max(rows, target)
 	}
 	if rows <= 0 {
 		rows = m.liveRows
@@ -656,23 +661,41 @@ func (m *appProgramModel) clearLiveRegionLocked(width int) {
 		return
 	}
 	fmt.Fprint(m.output, xansi.ResetStyle)
-	fmt.Fprint(m.output, "\r")
-	if rows > 1 {
-		fmt.Fprint(m.output, xansi.CursorUp(rows-1))
-	}
-	for i := 0; i < rows; i++ {
-		fmt.Fprint(m.output, xansi.EraseEntireLine)
-		if i < rows-1 {
-			fmt.Fprint(m.output, "\r\n")
+	if m.height > 0 {
+		fmt.Fprint(m.output, xansi.CursorPosition(1, m.liveRegionStartRow(rows)))
+		fmt.Fprint(m.output, xansi.EraseScreenBelow)
+	} else {
+		fmt.Fprint(m.output, "\r")
+		if rows > 1 {
+			fmt.Fprint(m.output, xansi.CursorUp(rows-1))
 		}
-	}
-	if rows > 1 {
-		fmt.Fprint(m.output, xansi.CursorUp(rows-1))
+		for i := 0; i < rows; i++ {
+			fmt.Fprint(m.output, xansi.EraseEntireLine)
+			if i < rows-1 {
+				fmt.Fprint(m.output, "\r\n")
+			}
+		}
+		if rows > 1 {
+			fmt.Fprint(m.output, xansi.CursorUp(rows-1))
+		}
 	}
 	fmt.Fprint(m.output, "\r")
 	m.liveRows = 0
 	m.liveWidth = 0
 	m.liveLines = nil
+}
+
+func (m *appProgramModel) liveRegionStartRow(rows int) int {
+	if m.height <= 0 {
+		return 1
+	}
+	if rows <= 0 {
+		rows = 1
+	}
+	if rows > m.height {
+		rows = m.height
+	}
+	return max(1, m.height-rows+1)
 }
 
 func appProgramPhysicalRows(lines []string, width int) int {
