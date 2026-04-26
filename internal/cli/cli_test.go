@@ -13,7 +13,6 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 )
@@ -2421,35 +2420,33 @@ func TestInteractiveAppProgramHandlesExplicitResizeMessages(t *testing.T) {
 		copyDone <- err
 	}()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	model := newAppProgramModel(ctx, options{SessionDir: t.TempDir(), UI: renderModeApp}, func(_ context.Context, w io.Writer, opts options) (string, error) {
-		fmt.Fprintf(w, "ran prompt %q\n", opts.Prompt)
-		return "", nil
-	})
-	model.width = 121
-	model.height = 30
-	model.resize()
-	model.output = tty
-	program := tea.NewProgram(model, tea.WithInput(tty), tea.WithOutput(tty), tea.WithContext(ctx), tea.WithoutRenderer())
-	model.program = program
-
 	runDone := make(chan error, 1)
 	go func() {
-		_, err := program.Run()
-		runDone <- err
+		runDone <- runInteractiveWithRunner(
+			context.Background(),
+			tty,
+			tty,
+			tty,
+			options{SessionDir: t.TempDir(), UI: renderModeApp},
+			func(_ context.Context, w io.Writer, opts options) (string, error) {
+				fmt.Fprintf(w, "ran prompt %q\n", opts.Prompt)
+				return "", nil
+			},
+		)
 	}()
 
 	time.Sleep(150 * time.Millisecond)
-	for _, size := range []tea.WindowSizeMsg{
-		{Width: 58, Height: 18},
-		{Width: 34, Height: 36},
-		{Width: 132, Height: 32},
-		{Width: 34, Height: 36},
-		{Width: 72, Height: 20},
-		{Width: 118, Height: 28},
+	for _, size := range []pty.Winsize{
+		{Rows: 18, Cols: 58},
+		{Rows: 36, Cols: 34},
+		{Rows: 32, Cols: 132},
+		{Rows: 36, Cols: 34},
+		{Rows: 20, Cols: 72},
+		{Rows: 28, Cols: 118},
 	} {
-		program.Send(size)
+		if err := pty.Setsize(ptmx, &size); err != nil {
+			t.Fatalf("resize pty: %v", err)
+		}
 		time.Sleep(40 * time.Millisecond)
 	}
 	if _, err := io.WriteString(ptmx, "/quit\r"); err != nil {

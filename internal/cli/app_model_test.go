@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -124,84 +123,8 @@ func TestAppProgramComposerShrinksAfterDeletion(t *testing.T) {
 	}
 }
 
-func TestAppProgramClearLiveRegionAccountsForResizeReflow(t *testing.T) {
+func TestAppProgramResizeUpdatesLayoutState(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
-	var out bytes.Buffer
-	model.output = &out
-	model.liveLines = []string{strings.Repeat("x", 119)}
-	model.liveRows = 1
-	model.liveWidth = 119
-
-	model.clearLiveRegionLocked(40)
-
-	got := out.String()
-	if !strings.Contains(got, ansi.CursorUp(2)) {
-		t.Fatalf("clear did not move over reflowed physical rows; output = %q", got)
-	}
-	if model.liveRows != 0 || model.liveWidth != 0 || model.liveLines != nil {
-		t.Fatalf("clear did not reset live region state: rows=%d width=%d lines=%v", model.liveRows, model.liveWidth, model.liveLines)
-	}
-}
-
-func TestAppProgramClearLiveRegionDoesNotOverEraseAfterWiden(t *testing.T) {
-	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
-	var out bytes.Buffer
-	model.output = &out
-	model.liveLines = []string{strings.Repeat("x", 119)}
-	model.liveRows = 3
-	model.liveWidth = 40
-
-	model.clearLiveRegionLocked(120)
-
-	got := out.String()
-	if strings.Contains(got, ansi.CursorUp(2)) {
-		t.Fatalf("clear over-erased widened live region; output = %q", got)
-	}
-	if !strings.Contains(got, ansi.EraseEntireLine) {
-		t.Fatalf("clear did not erase widened live region; output = %q", got)
-	}
-}
-
-func TestAppProgramRenderBottomAnchorsLiveRegion(t *testing.T) {
-	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
-	model.width = 81
-	model.height = 20
-	model.resize()
-	var out bytes.Buffer
-	model.output = &out
-
-	width := model.renderWidth()
-	view := model.fitLiveRegionView(model.View(), width)
-	rows := appProgramPhysicalRows(strings.Split(view, "\n"), width)
-	wantPosition := ansi.CursorPosition(1, model.liveRegionStartRow(rows))
-
-	if cmd := model.Init(); cmd != nil {
-		_ = cmd()
-	}
-	got := out.String()
-	if !strings.Contains(got, wantPosition) {
-		t.Fatalf("render did not anchor live region at bottom row %q:\n%q", wantPosition, got)
-	}
-	if !strings.Contains(got, ansi.EraseScreenBelow) {
-		t.Fatalf("render did not clear the bottom live region:\n%q", got)
-	}
-	if strings.Contains(got, ansi.CursorUp(1)) {
-		t.Fatalf("bottom-anchored render should not depend on cursor-up clearing:\n%q", got)
-	}
-}
-
-func TestAppProgramResizeDoesNotRepaintIdleLiveRegion(t *testing.T) {
-	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
-	var out bytes.Buffer
-	model.output = &out
-
-	if cmd := model.Init(); cmd != nil {
-		_ = cmd()
-	}
-	if got := ansi.Strip(out.String()); strings.Count(got, "Ask Memax Code") != 1 {
-		t.Fatalf("initial render should paint one composer, got:\n%s", got)
-	}
-	out.Reset()
 
 	sizes := []tea.WindowSizeMsg{
 		{Width: 42, Height: 20},
@@ -212,56 +135,15 @@ func TestAppProgramResizeDoesNotRepaintIdleLiveRegion(t *testing.T) {
 	}
 	for _, size := range sizes {
 		updated, cmd := model.Update(size)
-		if cmd == nil {
-			t.Fatal("resize did not schedule settled render")
+		if cmd != nil {
+			t.Fatal("resize should be handled by Bubble Tea renderer without scheduling manual repaint")
 		}
 		model = updated.(*appProgramModel)
 	}
 
-	if got := out.String(); got != "" {
-		t.Fatalf("idle resizes repainted live region:\n%q", got)
-	}
 	last := sizes[len(sizes)-1]
 	if model.width != last.Width || model.height != last.Height {
 		t.Fatalf("resize did not update dimensions: width=%d height=%d", model.width, model.height)
-	}
-
-	updated, cmd := model.Update(appProgramResizeSettledMsg{seq: 1})
-	if cmd != nil {
-		_ = cmd()
-	}
-	model = updated.(*appProgramModel)
-	if got := out.String(); got != "" {
-		t.Fatalf("stale settled resize repainted live region:\n%q", got)
-	}
-
-	updated, cmd = model.Update(appProgramResizeSettledMsg{seq: model.resizeSeq})
-	if cmd != nil {
-		_ = cmd()
-	}
-	model = updated.(*appProgramModel)
-	got := out.String()
-	if !strings.Contains(got, ansi.EraseScreenBelow) {
-		t.Fatalf("settled resize render did not clear old live region:\n%q", got)
-	}
-	if count := strings.Count(ansi.Strip(got), "Ask Memax Code"); count != 1 {
-		t.Fatalf("settled resize render should paint one composer, got %d:\n%s", count, ansi.Strip(got))
-	}
-	out.Reset()
-
-	model.appendLocalTranscriptLine("assistant", "after resize")
-	if cmd := model.withRender(nil); cmd != nil {
-		_ = cmd()
-	}
-	got = out.String()
-	if !strings.Contains(got, ansi.EraseScreenBelow) {
-		t.Fatalf("post-resize render did not clear old live region:\n%q", got)
-	}
-	if count := strings.Count(ansi.Strip(got), "Ask Memax Code"); count != 1 {
-		t.Fatalf("post-resize render should paint one composer, got %d:\n%s", count, ansi.Strip(got))
-	}
-	if !strings.Contains(ansi.Strip(got), "after resize") {
-		t.Fatalf("post-resize render missing transcript line:\n%s", ansi.Strip(got))
 	}
 }
 

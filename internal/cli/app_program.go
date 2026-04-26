@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
@@ -26,7 +25,6 @@ const (
 	appProgramMinComposer = 1
 	appProgramStatusInset = 2
 	appProgramBottomInset = 1
-	appProgramResizeDelay = 90 * time.Millisecond
 )
 
 var (
@@ -65,17 +63,12 @@ type appProgramPromptDoneMsg struct {
 
 type appProgramTickMsg time.Time
 
-type appProgramResizeSettledMsg struct {
-	seq uint64
-}
-
 type appProgramModel struct {
 	ctx       context.Context
 	opts      options
 	runPrompt interactivePromptRunner
 	runEvents interactiveEventPromptRunner
 	program   *tea.Program
-	output    io.Writer
 	plainOut  io.Writer
 	history   persistentPromptHistory
 	composer  interactiveComposer
@@ -95,12 +88,7 @@ type appProgramModel struct {
 	firstErr      error
 	spinner       int
 	tickArmed     bool
-	resizeSeq     uint64
 	turnStartedAt time.Time
-	liveRows      int
-	liveWidth     int
-	liveLines     []string
-	renderMu      sync.Mutex
 }
 
 func newAppProgramModel(ctx context.Context, opts options, runPrompt interactivePromptRunner) *appProgramModel {
@@ -173,20 +161,7 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resize()
-		if m.output != nil {
-			// In inline scrollback mode, a pure resize has already caused the
-			// terminal to reflow previously-painted prompt/status rows. Repainting
-			// immediately on every WindowSizeMsg can leave gray ghosts while the
-			// user drags the terminal size. Treat resize as a layout-state update
-			// and repaint once after the stream of resize events settles.
-			m.resizeSeq++
-			return m, m.resizeSettled(m.resizeSeq)
-		}
-	case appProgramResizeSettledMsg:
-		if msg.seq != m.resizeSeq {
-			return m, nil
-		}
-		return m, m.withRender(nil)
+		return m, nil
 	case tea.KeyMsg:
 		if cmd, handled := m.updateKey(msg); handled {
 			return m, m.withRender(cmd)
@@ -533,24 +508,10 @@ func (m *appProgramModel) flushPrints() tea.Cmd {
 		}
 		return nil
 	}
-	if m.output != nil {
-		m.renderMu.Lock()
-		defer m.renderMu.Unlock()
-		m.clearLiveRegionLocked(m.renderWidth())
-		for _, line := range lines {
-			fmt.Fprint(m.output, line, "\r\n")
-		}
-		return nil
-	}
 	return tea.Println(strings.Join(lines, "\n"))
 }
 
 func (m *appProgramModel) withRender(cmd tea.Cmd) tea.Cmd {
-	if m.output != nil {
-		_ = m.flushPrints()
-		m.renderLiveRegion()
-		return cmd
-	}
 	return m.withFlush(cmd)
 }
 
@@ -565,157 +526,6 @@ func (m *appProgramModel) withFlush(cmd tea.Cmd) tea.Cmd {
 	return tea.Sequence(flush, cmd)
 }
 
-func (m *appProgramModel) renderWidth() int {
-	width := m.width
-	if width <= 0 {
-		width = defaultAppShellWidth
-	}
-	return appProgramLiveRegionWidth(width)
-}
-
-func (m *appProgramModel) renderLiveRegion() {
-	if m.output == nil || m.quitting {
-		return
-	}
-	width := m.renderWidth()
-	view := m.fitLiveRegionView(m.View(), width)
-	lines := strings.Split(view, "\n")
-	rows := appProgramPhysicalRows(lines, width)
-	m.renderMu.Lock()
-	defer m.renderMu.Unlock()
-	m.clearLiveRegionLocked(width, rows)
-	if view == "" {
-		return
-	}
-	fmt.Fprint(m.output, xansi.HideCursor)
-	if m.height > 0 {
-		fmt.Fprint(m.output, xansi.CursorPosition(1, m.liveRegionStartRow(rows)))
-		fmt.Fprint(m.output, xansi.EraseScreenBelow)
-	} else {
-		fmt.Fprint(m.output, "\r")
-	}
-	for i, line := range lines {
-		if i > 0 {
-			fmt.Fprint(m.output, "\r\n")
-		}
-		fmt.Fprint(m.output, line)
-	}
-	fmt.Fprint(m.output, xansi.ResetStyle)
-	fmt.Fprint(m.output, "\r")
-	m.liveLines = append(m.liveLines[:0], lines...)
-	m.liveWidth = width
-	m.liveRows = rows
-}
-
-func (m *appProgramModel) fitLiveRegionView(view string, width int) string {
-	if view == "" || m.height <= 0 {
-		return view
-	}
-	maxRows := max(1, m.height-1)
-	lines := strings.Split(view, "\n")
-	if appProgramPhysicalRows(lines, width) <= maxRows {
-		return view
-	}
-	start := len(lines)
-	used := 0
-	for i := len(lines) - 1; i >= 0; i-- {
-		lineRows := appProgramPhysicalRows([]string{lines[i]}, width)
-		if used > 0 && used+lineRows > maxRows {
-			break
-		}
-		used += lineRows
-		start = i
-		if used >= maxRows {
-			break
-		}
-	}
-	if start >= len(lines) {
-		start = len(lines) - 1
-	}
-	return strings.Join(lines[start:], "\n")
-}
-
-func (m *appProgramModel) clearLiveRegionLocked(width int, targetRows ...int) {
-	if m.output == nil || m.liveRows <= 0 {
-		return
-	}
-	if width <= 0 {
-		width = m.liveWidth
-	}
-	rows := appProgramPhysicalRows(m.liveLines, width)
-	// Terminal reflow after narrowing can make the already-painted live region
-	// occupy more physical rows than it did at paint time. The repaint may also
-	// need more rows than the previous view. Clear the largest known bottom
-	// region instead of trusting the current cursor location after resize.
-	if m.height > 0 || (width > 0 && m.liveWidth > 0 && width < m.liveWidth) {
-		rows = max(m.liveRows, rows)
-	}
-	for _, target := range targetRows {
-		rows = max(rows, target)
-	}
-	if rows <= 0 {
-		rows = m.liveRows
-	}
-	if rows <= 0 {
-		return
-	}
-	fmt.Fprint(m.output, xansi.ResetStyle)
-	if m.height > 0 {
-		fmt.Fprint(m.output, xansi.CursorPosition(1, m.liveRegionStartRow(rows)))
-		fmt.Fprint(m.output, xansi.EraseScreenBelow)
-	} else {
-		fmt.Fprint(m.output, "\r")
-		if rows > 1 {
-			fmt.Fprint(m.output, xansi.CursorUp(rows-1))
-		}
-		for i := 0; i < rows; i++ {
-			fmt.Fprint(m.output, xansi.EraseEntireLine)
-			if i < rows-1 {
-				fmt.Fprint(m.output, "\r\n")
-			}
-		}
-		if rows > 1 {
-			fmt.Fprint(m.output, xansi.CursorUp(rows-1))
-		}
-	}
-	fmt.Fprint(m.output, "\r")
-	m.liveRows = 0
-	m.liveWidth = 0
-	m.liveLines = nil
-}
-
-func (m *appProgramModel) liveRegionStartRow(rows int) int {
-	if m.height <= 0 {
-		return 1
-	}
-	if rows <= 0 {
-		rows = 1
-	}
-	if rows > m.height {
-		rows = m.height
-	}
-	return max(1, m.height-rows+1)
-}
-
-func appProgramPhysicalRows(lines []string, width int) int {
-	if len(lines) == 0 {
-		return 0
-	}
-	if width <= 0 {
-		return len(lines)
-	}
-	rows := 0
-	for _, line := range lines {
-		lineWidth := xansi.StringWidth(line)
-		if lineWidth <= 0 {
-			rows++
-			continue
-		}
-		rows += (lineWidth + width - 1) / width
-	}
-	return rows
-}
-
 func (m *appProgramModel) tick() tea.Cmd {
 	if m.tickArmed {
 		return nil
@@ -723,12 +533,6 @@ func (m *appProgramModel) tick() tea.Cmd {
 	m.tickArmed = true
 	return tea.Tick(appShellTickInterval, func(t time.Time) tea.Msg {
 		return appProgramTickMsg(t)
-	})
-}
-
-func (m *appProgramModel) resizeSettled(seq uint64) tea.Cmd {
-	return tea.Tick(appProgramResizeDelay, func(time.Time) tea.Msg {
-		return appProgramResizeSettledMsg{seq: seq}
 	})
 }
 
