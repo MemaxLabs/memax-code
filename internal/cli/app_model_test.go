@@ -184,8 +184,8 @@ func TestAppProgramResizeDoesNotRepaintIdleLiveRegion(t *testing.T) {
 	}
 	for _, size := range sizes {
 		updated, cmd := model.Update(size)
-		if cmd != nil {
-			_ = cmd()
+		if cmd == nil {
+			t.Fatal("resize did not schedule settled render")
 		}
 		model = updated.(*appProgramModel)
 	}
@@ -198,11 +198,34 @@ func TestAppProgramResizeDoesNotRepaintIdleLiveRegion(t *testing.T) {
 		t.Fatalf("resize did not update dimensions: width=%d height=%d", model.width, model.height)
 	}
 
+	updated, cmd := model.Update(appProgramResizeSettledMsg{seq: 1})
+	if cmd != nil {
+		_ = cmd()
+	}
+	model = updated.(*appProgramModel)
+	if got := out.String(); got != "" {
+		t.Fatalf("stale settled resize repainted live region:\n%q", got)
+	}
+
+	updated, cmd = model.Update(appProgramResizeSettledMsg{seq: model.resizeSeq})
+	if cmd != nil {
+		_ = cmd()
+	}
+	model = updated.(*appProgramModel)
+	got := out.String()
+	if !strings.Contains(got, ansi.EraseEntireLine) {
+		t.Fatalf("settled resize render did not clear old live region:\n%q", got)
+	}
+	if count := strings.Count(ansi.Strip(got), "Ask Memax Code"); count != 1 {
+		t.Fatalf("settled resize render should paint one composer, got %d:\n%s", count, ansi.Strip(got))
+	}
+	out.Reset()
+
 	model.appendLocalTranscriptLine("assistant", "after resize")
 	if cmd := model.withRender(nil); cmd != nil {
 		_ = cmd()
 	}
-	got := out.String()
+	got = out.String()
 	if !strings.Contains(got, ansi.EraseEntireLine) {
 		t.Fatalf("post-resize render did not clear old live region:\n%q", got)
 	}

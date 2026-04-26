@@ -27,6 +27,7 @@ const (
 	appProgramMinComposer = 1
 	appProgramStatusInset = 2
 	appProgramBottomInset = 1
+	appProgramResizeDelay = 90 * time.Millisecond
 )
 
 var (
@@ -65,6 +66,10 @@ type appProgramPromptDoneMsg struct {
 
 type appProgramTickMsg time.Time
 
+type appProgramResizeSettledMsg struct {
+	seq uint64
+}
+
 type appProgramModel struct {
 	ctx       context.Context
 	opts      options
@@ -91,6 +96,7 @@ type appProgramModel struct {
 	firstErr      error
 	spinner       int
 	tickArmed     bool
+	resizeSeq     uint64
 	turnStartedAt time.Time
 	liveRows      int
 	liveWidth     int
@@ -172,11 +178,16 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// In inline scrollback mode, a pure resize has already caused the
 			// terminal to reflow previously-painted prompt/status rows. Repainting
 			// immediately on every WindowSizeMsg can leave gray ghosts while the
-			// user drags the terminal size. Treat resize as a layout-state update;
-			// input, transcript, tool events, and running ticks repaint with the
-			// latest dimensions.
+			// user drags the terminal size. Treat resize as a layout-state update
+			// and repaint once after the stream of resize events settles.
+			m.resizeSeq++
+			return m, m.resizeSettled(m.resizeSeq)
+		}
+	case appProgramResizeSettledMsg:
+		if msg.seq != m.resizeSeq {
 			return m, nil
 		}
+		return m, m.withRender(nil)
 	case tea.KeyMsg:
 		if cmd, handled := m.updateKey(msg); handled {
 			return m, m.withRender(cmd)
@@ -690,6 +701,12 @@ func (m *appProgramModel) tick() tea.Cmd {
 	m.tickArmed = true
 	return tea.Tick(appShellTickInterval, func(t time.Time) tea.Msg {
 		return appProgramTickMsg(t)
+	})
+}
+
+func (m *appProgramModel) resizeSettled(seq uint64) tea.Cmd {
+	return tea.Tick(appProgramResizeDelay, func(time.Time) tea.Msg {
+		return appProgramResizeSettledMsg{seq: seq}
 	})
 }
 
