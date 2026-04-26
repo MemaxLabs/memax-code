@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -22,7 +21,6 @@ func hydrateModelRegistry(ctx context.Context, opts *options) {
 	}
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv("MEMAX_CODE_MODEL_REGISTRY")))
 	if mode == "off" || mode == "false" || mode == "0" {
-		opts.ModelRegistryInfo = "disabled"
 		return
 	}
 	cachePath := strings.TrimSpace(os.Getenv("MEMAX_CODE_MODEL_REGISTRY_CACHE"))
@@ -54,9 +52,6 @@ func hydrateModelRegistry(ctx context.Context, opts *options) {
 		URL:       url,
 		CachePath: cachePath,
 		MaxAge:    maxAge,
-		Client: &http.Client{
-			Timeout: timeout,
-		},
 	})
 	if err != nil || registry == nil {
 		return

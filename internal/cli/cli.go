@@ -424,7 +424,7 @@ func defaultHistoryPath() string {
 func defaultModelRegistryCachePath() string {
 	home, err := os.UserHomeDir()
 	if err != nil || strings.TrimSpace(home) == "" {
-		return ".memax-code/cache/models.dev.api.json"
+		return filepath.Join(os.TempDir(), "memax-code", "cache", "models.dev.api.json")
 	}
 	return filepath.Join(home, ".memax-code", "cache", "models.dev.api.json")
 }
