@@ -14,12 +14,14 @@ type mcpServerConfig struct {
 	Command                   string            `json:"command,omitempty"`
 	Args                      []string          `json:"args,omitempty"`
 	Env                       map[string]string `json:"env,omitempty"`
+	InheritEnv                bool              `json:"inherit_env,omitempty"`
 	CWD                       string            `json:"cwd,omitempty"`
 	Enabled                   *bool             `json:"enabled,omitempty"`
 	SupportsParallelToolCalls bool              `json:"supports_parallel_tool_calls,omitempty"`
 	StartupTimeout            string            `json:"startup_timeout,omitempty"`
 	ToolTimeout               string            `json:"tool_timeout,omitempty"`
 	MaxResultBytes            int               `json:"max_result_bytes,omitempty"`
+	MaxRPCMessageBytes        int               `json:"max_rpc_message_bytes,omitempty"`
 }
 
 func (c mcpServerConfig) enabled() bool {
@@ -69,9 +71,11 @@ func runMCPAdd(args []string, stdout, stderr io.Writer) error {
 	cwd := fs.String("cwd", "", "working directory for the MCP server process")
 	parallel := fs.Bool("parallel", false, "mark this server's tools safe for parallel calls")
 	disabled := fs.Bool("disabled", false, "add the server but keep it disabled")
+	inheritEnv := fs.Bool("inherit-env", false, "forward the full parent environment to the MCP server; default only passes safe process variables plus --env")
 	startupTimeout := fs.String("startup-timeout", "", "startup timeout for initialize/tools/list, such as 30s; empty uses the SDK default")
 	toolTimeout := fs.String("tool-timeout", "", "per-tool-call timeout, such as 120s; empty uses the SDK default")
 	maxResultBytes := fs.Int("max-result-bytes", 0, "maximum bytes returned per MCP tool result; 0 uses the SDK default")
+	maxRPCMessageBytes := fs.Int("max-rpc-message-bytes", 0, "maximum bytes per MCP JSON-RPC message; 0 uses the SDK default")
 	envs := newMCPEnvFlag()
 	fs.Var(envs, "env", "environment variable KEY=VALUE for the MCP server; repeatable")
 	fs.Usage = func() {
@@ -101,6 +105,12 @@ func runMCPAdd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := validateMCPByteLimitFlag("max-result-bytes", *maxResultBytes); err != nil {
+		return err
+	}
+	if err := validateMCPByteLimitFlag("max-rpc-message-bytes", *maxRPCMessageBytes); err != nil {
+		return err
+	}
 	configPath, cfg, err := loadWritableConfig(*configRaw)
 	if err != nil {
 		return err
@@ -113,12 +123,14 @@ func runMCPAdd(args []string, stdout, stderr io.Writer) error {
 		Command:                   command,
 		Args:                      append([]string(nil), rest[1:]...),
 		Env:                       cloneStringMap(envs.values),
+		InheritEnv:                *inheritEnv,
 		CWD:                       strings.TrimSpace(*cwd),
 		Enabled:                   boolPtr(enabled),
 		SupportsParallelToolCalls: *parallel,
 		StartupTimeout:            startupTimeoutValue,
 		ToolTimeout:               toolTimeoutValue,
 		MaxResultBytes:            *maxResultBytes,
+		MaxRPCMessageBytes:        *maxRPCMessageBytes,
 	}
 	if err := writeConfigFile(configPath, cfg, true); err != nil {
 		return err
@@ -180,14 +192,28 @@ func normalizeMCPDurationFlag(flagName, value string) (string, error) {
 	if value == "" {
 		return "", nil
 	}
-	if _, err := time.ParseDuration(value); err != nil {
+	duration, err := time.ParseDuration(value)
+	if err != nil {
 		return "", fmt.Errorf("--%s must be a Go duration like 30s or 2m: %w", flagName, err)
+	}
+	if duration < 0 {
+		return "", fmt.Errorf("--%s must be non-negative", flagName)
 	}
 	return value, nil
 }
 
+func validateMCPByteLimitFlag(flagName string, value int) error {
+	if value < 0 {
+		return fmt.Errorf("--%s must be non-negative", flagName)
+	}
+	return nil
+}
+
 func (c mcpServerConfig) runtimeSummary() string {
 	var parts []string
+	if c.InheritEnv {
+		parts = append(parts, "inherit_env=true")
+	}
 	if c.StartupTimeout != "" {
 		parts = append(parts, "startup_timeout="+c.StartupTimeout)
 	}
@@ -196,6 +222,9 @@ func (c mcpServerConfig) runtimeSummary() string {
 	}
 	if c.MaxResultBytes != 0 {
 		parts = append(parts, fmt.Sprintf("max_result_bytes=%d", c.MaxResultBytes))
+	}
+	if c.MaxRPCMessageBytes != 0 {
+		parts = append(parts, fmt.Sprintf("max_rpc_message_bytes=%d", c.MaxRPCMessageBytes))
 	}
 	return strings.Join(parts, " ")
 }

@@ -152,10 +152,12 @@ Example config:
       "env": {
         "DOCS_TOKEN": "..."
       },
+      "inherit_env": false,
       "supports_parallel_tool_calls": true,
       "startup_timeout": "30s",
       "tool_timeout": "120s",
-      "max_result_bytes": 131072
+      "max_result_bytes": 131072,
+      "max_rpc_message_bytes": 67108864
     }
   },
   "verify_commands": {
@@ -308,10 +310,13 @@ memax-code mcp remove docs
 Inside the interactive shell, `/mcp` shows the configured servers. Disabled
 servers stay in config but are not started. `supports_parallel_tool_calls`
 should only be enabled for servers whose tools are safe to call concurrently.
-MCP startup, tool calls, and result sizes are bounded by SDK defaults; config
-can override them with `startup_timeout`, `tool_timeout`, and
-`max_result_bytes`. Interactive sessions start configured MCP servers once and
-reuse the discovered tools across turns.
+MCP servers do not inherit the full parent process environment by default; pass
+secrets explicitly with `--env KEY=VALUE`, or use `--inherit-env` only for
+trusted local servers. MCP startup, tool calls, result sizes, and JSON-RPC
+message sizes are bounded by SDK defaults; config can override them with
+`startup_timeout`, `tool_timeout`, `max_result_bytes`, and
+`max_rpc_message_bytes`. Interactive sessions start configured MCP servers once
+and reuse the discovered tools across turns.
 
 ### Verification
 

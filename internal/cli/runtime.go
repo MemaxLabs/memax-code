@@ -523,16 +523,24 @@ func mcpBridgeServerConfig(name string, server mcpServerConfig) (mcpbridge.Serve
 	if err != nil {
 		return mcpbridge.ServerConfig{}, err
 	}
+	if server.MaxResultBytes < 0 {
+		return mcpbridge.ServerConfig{}, fmt.Errorf("configure MCP server %s: max_result_bytes must be non-negative", name)
+	}
+	if server.MaxRPCMessageBytes < 0 {
+		return mcpbridge.ServerConfig{}, fmt.Errorf("configure MCP server %s: max_rpc_message_bytes must be non-negative", name)
+	}
 	return mcpbridge.ServerConfig{
 		Name:                      name,
 		Command:                   server.Command,
 		Args:                      append([]string(nil), server.Args...),
 		Env:                       cloneStringMap(server.Env),
+		InheritEnv:                server.InheritEnv,
 		CWD:                       server.CWD,
 		SupportsParallelToolCalls: server.SupportsParallelToolCalls,
 		StartupTimeout:            startupTimeout,
 		ToolTimeout:               toolTimeout,
 		MaxResultBytes:            server.MaxResultBytes,
+		MaxRPCMessageBytes:        server.MaxRPCMessageBytes,
 	}, nil
 }
 
@@ -544,6 +552,9 @@ func parseOptionalMCPDuration(serverName, field, raw string) (time.Duration, err
 	value, err := time.ParseDuration(raw)
 	if err != nil {
 		return 0, fmt.Errorf("configure MCP server %s: %s must be a Go duration like 30s or 2m: %w", serverName, field, err)
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("configure MCP server %s: %s must be non-negative", serverName, field)
 	}
 	return value, nil
 }

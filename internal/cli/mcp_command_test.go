@@ -22,9 +22,11 @@ func TestMCPAddListRemoveUpdatesConfig(t *testing.T) {
 		"--config", configPath,
 		"--env", "TOKEN=abc",
 		"--parallel",
+		"--inherit-env",
 		"--startup-timeout", "45s",
 		"--tool-timeout", "2m",
 		"--max-result-bytes", "32768",
+		"--max-rpc-message-bytes", "1048576",
 		"--",
 		"docs-server", "--stdio",
 	}, &stdout, &stderr)
@@ -45,10 +47,12 @@ func TestMCPAddListRemoveUpdatesConfig(t *testing.T) {
 		`"command": "docs-server"`,
 		`"--stdio"`,
 		`"TOKEN": "abc"`,
+		`"inherit_env": true`,
 		`"supports_parallel_tool_calls": true`,
 		`"startup_timeout": "45s"`,
 		`"tool_timeout": "2m"`,
 		`"max_result_bytes": 32768`,
+		`"max_rpc_message_bytes": 1048576`,
 	} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("config missing %q:\n%s", want, body)
@@ -60,7 +64,7 @@ func TestMCPAddListRemoveUpdatesConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mcp list error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "docs\tenabled\tparallel\tdocs-server --stdio\tstartup_timeout=45s tool_timeout=2m max_result_bytes=32768") {
+	if !strings.Contains(stdout.String(), "docs\tenabled\tparallel\tdocs-server --stdio\tinherit_env=true startup_timeout=45s tool_timeout=2m max_result_bytes=32768 max_rpc_message_bytes=1048576") {
 		t.Fatalf("list stdout = %q", stdout.String())
 	}
 
@@ -92,7 +96,9 @@ func TestParseArgsLoadsMCPServersFromConfig(t *testing.T) {
 				"supports_parallel_tool_calls": true,
 				"startup_timeout": "45s",
 				"tool_timeout": "2m",
-				"max_result_bytes": 32768
+				"max_result_bytes": 32768,
+				"max_rpc_message_bytes": 1048576,
+				"inherit_env": true
 			}
 		}
 	}`), 0o600); err != nil {
@@ -109,7 +115,8 @@ func TestParseArgsLoadsMCPServersFromConfig(t *testing.T) {
 		t.Fatalf("MCPServers missing docs: %#v", opts.MCPServers)
 	}
 	if server.Command != "docs-server" || len(server.Args) != 1 || server.Args[0] != "--stdio" || !server.SupportsParallelToolCalls ||
-		server.StartupTimeout != "45s" || server.ToolTimeout != "2m" || server.MaxResultBytes != 32768 {
+		server.StartupTimeout != "45s" || server.ToolTimeout != "2m" || server.MaxResultBytes != 32768 ||
+		server.MaxRPCMessageBytes != 1048576 || !server.InheritEnv {
 		t.Fatalf("server = %#v", server)
 	}
 }
@@ -127,6 +134,82 @@ func TestMCPAddRejectsInvalidTimeout(t *testing.T) {
 	}, &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "--startup-timeout must be a Go duration") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestMCPAddRejectsNegativeTimeoutAndByteLimits(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "negative startup timeout",
+			args: []string{"mcp", "add", "docs", "--config", configPath, "--startup-timeout", "-1s", "--", "docs-server"},
+			want: "--startup-timeout must be non-negative",
+		},
+		{
+			name: "negative result bytes",
+			args: []string{"mcp", "add", "docs", "--config", configPath, "--max-result-bytes", "-1", "--", "docs-server"},
+			want: "--max-result-bytes must be non-negative",
+		},
+		{
+			name: "negative rpc bytes",
+			args: []string{"mcp", "add", "docs", "--config", configPath, "--max-rpc-message-bytes", "-1", "--", "docs-server"},
+			want: "--max-rpc-message-bytes must be non-negative",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			err := Run(context.Background(), tt.args, &stdout, &stderr)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestMCPBridgeServerConfigRejectsNegativeConfigValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		server mcpServerConfig
+		want   string
+	}{
+		{
+			name: "negative config timeout",
+			server: mcpServerConfig{
+				Command:        "docs-server",
+				StartupTimeout: "-1s",
+			},
+			want: "startup_timeout must be non-negative",
+		},
+		{
+			name: "negative result bytes",
+			server: mcpServerConfig{
+				Command:        "docs-server",
+				MaxResultBytes: -1,
+			},
+			want: "max_result_bytes must be non-negative",
+		},
+		{
+			name: "negative rpc bytes",
+			server: mcpServerConfig{
+				Command:            "docs-server",
+				MaxRPCMessageBytes: -1,
+			},
+			want: "max_rpc_message_bytes must be non-negative",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := mcpBridgeServerConfig("docs", tt.server)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 
