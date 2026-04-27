@@ -168,10 +168,13 @@ must exist and decode as strict JSON.
 
 Long sessions compact automatically by default. `context_window` controls the
 approximate token budget used before compaction, and `context_summary_tokens`
-controls the summary budget. The local estimator is conservative because
-provider tokenizers differ; the runtime preserves headroom rather than risking
-a provider context-window error. Set `"compaction": "off"` or pass
-`--compaction off` to disable this behavior for debugging.
+controls the summary budget. Compaction is persisted as an active-session
+checkpoint: the raw JSONL transcript remains available for inspection, while
+future model turns continue from the summary checkpoint plus newer messages
+instead of re-summarizing the same old prefix repeatedly. The local estimator is
+conservative because provider tokenizers differ; the runtime preserves headroom
+rather than risking a provider context-window error. Set `"compaction": "off"`
+or pass `--compaction off` to disable this behavior for debugging.
 
 ## Interactive shell
 
