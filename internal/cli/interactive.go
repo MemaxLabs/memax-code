@@ -355,7 +355,7 @@ func printInteractiveStatus(ctx context.Context, w io.Writer, opts options, curr
 			if server.SupportsParallelToolCalls {
 				parallel = "parallel"
 			}
-			fmt.Fprintf(w, "  mcp_server.%s: %s %s %s", name, status, parallel, server.Command)
+			fmt.Fprintf(w, "  mcp_server.%s: %s %s %s", name, status, parallel, mcpServerCommandDisplay(server))
 			if suffix := server.runtimeSummary(); suffix != "" {
 				fmt.Fprintf(w, " %s", suffix)
 			}
@@ -382,10 +382,7 @@ func printInteractiveMCP(w io.Writer, opts options) {
 		if server.SupportsParallelToolCalls {
 			parallel = "parallel"
 		}
-		fmt.Fprintf(w, "  %s: %s %s %s", name, status, parallel, server.Command)
-		if len(server.Args) > 0 {
-			fmt.Fprintf(w, " %s", strings.Join(server.Args, " "))
-		}
+		fmt.Fprintf(w, "  %s: %s %s %s", name, status, parallel, mcpServerCommandDisplay(server))
 		if suffix := server.runtimeSummary(); suffix != "" {
 			fmt.Fprintf(w, " (%s)", suffix)
 		}

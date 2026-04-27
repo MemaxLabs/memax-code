@@ -785,7 +785,7 @@ func renderDryRun(w io.Writer, opts options) error {
 			if server.SupportsParallelToolCalls {
 				parallel = "parallel"
 			}
-			fmt.Fprintf(w, "mcp_server.%s: %s %s %s\n", name, status, parallel, server.Command)
+			fmt.Fprintf(w, "mcp_server.%s: %s %s %s\n", name, status, parallel, mcpServerCommandDisplay(server))
 		}
 	}
 	fmt.Fprintf(w, "inherit_command_env: %t\n", opts.InheritCommandEnv)

@@ -491,6 +491,16 @@ func redactMCPServerConfig(server mcpServerConfig) mcpServerConfig {
 	return out
 }
 
+func mcpServerCommandDisplay(server mcpServerConfig) string {
+	redacted := redactMCPServerConfig(server)
+	parts := []string{}
+	if strings.TrimSpace(redacted.Command) != "" {
+		parts = append(parts, redacted.Command)
+	}
+	parts = append(parts, redacted.Args...)
+	return strings.Join(parts, " ")
+}
+
 func redactMCPArgs(args []string) []string {
 	if len(args) == 0 {
 		return nil

@@ -1775,6 +1775,64 @@ func TestRunInteractiveStatus(t *testing.T) {
 	}
 }
 
+func TestMCPStatusRenderersRedactServerCommandAndArgs(t *testing.T) {
+	ctx := context.Background()
+	server := mcpServerConfig{
+		Command:                   "https://user:password@example.com/docs-server",
+		Args:                      []string{"--token=secret-token", "password=hunter2", "client_secret=client-secret-value", "/etc/auth-tokens/config.json", "--server-with-secret-feature", "value-that-is-not-a-secret"},
+		SupportsParallelToolCalls: true,
+		InheritEnv:                true,
+	}
+	opts := options{
+		Provider:   providerOpenAI,
+		Model:      "example-model",
+		Profile:    "fast",
+		Effort:     "auto",
+		Preset:     "interactive_dev",
+		UI:         "plain",
+		CWD:        repoRoot(t),
+		SessionDir: t.TempDir(),
+		MCPServers: map[string]mcpServerConfig{"docs": server},
+	}
+
+	var dryRun bytes.Buffer
+	if err := renderDryRun(&dryRun, opts); err != nil {
+		t.Fatalf("renderDryRun() error = %v", err)
+	}
+	assertMCPStatusRedacted(t, dryRun.String())
+
+	var status bytes.Buffer
+	if err := printInteractiveStatus(ctx, &status, opts, ""); err != nil {
+		t.Fatalf("printInteractiveStatus() error = %v", err)
+	}
+	assertMCPStatusRedacted(t, status.String())
+
+	var mcp bytes.Buffer
+	printInteractiveMCP(&mcp, opts)
+	assertMCPStatusRedacted(t, mcp.String())
+}
+
+func assertMCPStatusRedacted(t *testing.T, out string) {
+	t.Helper()
+	for _, leaked := range []string{"password@example.com", "secret-token", "hunter2", "client-secret-value"} {
+		if strings.Contains(out, leaked) {
+			t.Fatalf("MCP status leaked %q:\n%s", leaked, out)
+		}
+	}
+	for _, want := range []string{
+		"https://redacted@example.com/docs-server",
+		"--token=<redacted>",
+		"password=<redacted>",
+		"client_secret=<redacted>",
+		"/etc/auth-tokens/config.json",
+		"--server-with-secret-feature value-that-is-not-a-secret",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("MCP status missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestRunInteractiveContextShowsActiveCompactionCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	sessionDir := t.TempDir()
