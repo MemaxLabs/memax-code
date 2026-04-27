@@ -1,13 +1,17 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/MemaxLabs/memax-go-agent-sdk/mcpbridge"
 )
 
 type mcpServerConfig struct {
@@ -28,7 +32,7 @@ func (c mcpServerConfig) enabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
-func runMCPCommand(args []string, stdout, stderr io.Writer) error {
+func runMCPCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		printMCPUsage(stdout)
 		return nil
@@ -38,24 +42,32 @@ func runMCPCommand(args []string, stdout, stderr io.Writer) error {
 		return runMCPAdd(args[1:], stdout, stderr)
 	case "list":
 		return runMCPList(args[1:], stdout, stderr)
+	case "get":
+		return runMCPGet(args[1:], stdout, stderr)
+	case "test":
+		return runMCPTest(ctx, args[1:], stdout, stderr)
 	case "remove", "rm":
 		return runMCPRemove(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		printMCPUsage(stdout)
 		return nil
 	default:
-		return fmt.Errorf("unknown mcp command %q (want add, list, or remove)", args[0])
+		return fmt.Errorf("unknown mcp command %q (want add, list, get, test, or remove)", args[0])
 	}
 }
 
 func printMCPUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: memax-code mcp add NAME [flags] -- COMMAND [ARGS...]")
 	fmt.Fprintln(w, "       memax-code mcp list [flags]")
+	fmt.Fprintln(w, "       memax-code mcp get NAME [flags]")
+	fmt.Fprintln(w, "       memax-code mcp test NAME [flags]")
 	fmt.Fprintln(w, "       memax-code mcp remove NAME [flags]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  add      add or update a stdio MCP server")
 	fmt.Fprintln(w, "  list     list configured MCP servers")
+	fmt.Fprintln(w, "  get      show one MCP server with secrets redacted")
+	fmt.Fprintln(w, "  test     start one MCP server and list discovered tools")
 	fmt.Fprintln(w, "  remove   remove a configured MCP server")
 }
 
@@ -157,7 +169,7 @@ func runMCPList(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("resolve config path: %w", err)
 	}
-	cfg, loaded, err := loadConfig(configPath, false)
+	cfg, loaded, err := loadConfig(configPath, mcpConfigExplicit(fs))
 	if err != nil {
 		return err
 	}
@@ -187,6 +199,199 @@ func runMCPList(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
+func runMCPGet(args []string, stdout, stderr io.Writer) error {
+	name := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		name = strings.TrimSpace(args[0])
+		args = args[1:]
+	}
+	fs := flag.NewFlagSet("memax-code mcp get", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	configRaw := fs.String("config", envDefault("MEMAX_CODE_CONFIG", defaultConfigPath()), "path to JSON config file")
+	jsonOutput := fs.Bool("json", false, "print redacted server configuration as JSON")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage: memax-code mcp get NAME [flags]")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if name == "" && len(fs.Args()) > 0 {
+		name = strings.TrimSpace(fs.Args()[0])
+	}
+	if name == "" || len(fs.Args()) > 1 {
+		return fmt.Errorf("mcp get requires exactly one NAME")
+	}
+	server, ok, err := loadMCPServer(*configRaw, name, mcpConfigExplicit(fs))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("no MCP server named %q found", name)
+	}
+	redacted := redactMCPServerConfig(server)
+	if *jsonOutput {
+		return writeMCPJSON(stdout, redacted)
+	}
+	fmt.Fprintf(stdout, "name: %s\n", name)
+	fmt.Fprintf(stdout, "enabled: %t\n", server.enabled())
+	fmt.Fprintf(stdout, "command: %s\n", redacted.Command)
+	if len(redacted.Args) > 0 {
+		fmt.Fprintf(stdout, "args: %s\n", strings.Join(redacted.Args, " "))
+	}
+	if redacted.CWD != "" {
+		fmt.Fprintf(stdout, "cwd: %s\n", redacted.CWD)
+	}
+	if len(redacted.Env) > 0 {
+		fmt.Fprintln(stdout, "env:")
+		for _, key := range sortedStringKeys(redacted.Env) {
+			fmt.Fprintf(stdout, "  %s=%s\n", key, redacted.Env[key])
+		}
+	}
+	if redacted.InheritEnv {
+		fmt.Fprintln(stdout, "inherit_env: true")
+	}
+	if redacted.SupportsParallelToolCalls {
+		fmt.Fprintln(stdout, "supports_parallel_tool_calls: true")
+	}
+	if suffix := redacted.runtimeSummary(); suffix != "" {
+		fmt.Fprintf(stdout, "bounds: %s\n", suffix)
+	}
+	return nil
+}
+
+func runMCPTest(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	name := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		name = strings.TrimSpace(args[0])
+		args = args[1:]
+	}
+	fs := flag.NewFlagSet("memax-code mcp test", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	configRaw := fs.String("config", envDefault("MEMAX_CODE_CONFIG", defaultConfigPath()), "path to JSON config file")
+	jsonOutput := fs.Bool("json", false, "print diagnostics as JSON")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage: memax-code mcp test NAME [flags]")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if name == "" && len(fs.Args()) > 0 {
+		name = strings.TrimSpace(fs.Args()[0])
+	}
+	if name == "" || len(fs.Args()) > 1 {
+		return fmt.Errorf("mcp test requires exactly one NAME")
+	}
+	server, ok, err := loadMCPServer(*configRaw, name, mcpConfigExplicit(fs))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("no MCP server named %q found", name)
+	}
+	cfg, err := mcpBridgeServerConfig(name, server)
+	if err != nil {
+		return err
+	}
+	diagnostic := mcpTestDiagnostic{
+		Name:       name,
+		Enabled:    server.enabled(),
+		Command:    server.Command,
+		Args:       append([]string(nil), server.Args...),
+		InheritEnv: server.InheritEnv,
+	}
+	client, err := mcpbridge.NewStdioClient(ctx, cfg)
+	if err != nil {
+		diagnostic.OK = false
+		diagnostic.Error = err.Error()
+		if writeErr := writeMCPTestDiagnostic(stdout, diagnostic, *jsonOutput); writeErr != nil {
+			return writeErr
+		}
+		return fmt.Errorf("mcp server %q test failed: %s", name, diagnostic.Error)
+	}
+	defer client.Close()
+	set, err := mcpbridge.DiscoverTools(ctx, client, cfg)
+	if err != nil {
+		diagnostic.OK = false
+		diagnostic.Error = err.Error()
+		if writeErr := writeMCPTestDiagnostic(stdout, diagnostic, *jsonOutput); writeErr != nil {
+			return writeErr
+		}
+		return fmt.Errorf("mcp server %q test failed: %s", name, diagnostic.Error)
+	}
+	diagnostic.OK = true
+	for _, discovered := range set.Tools() {
+		spec := discovered.Spec()
+		diagnostic.Tools = append(diagnostic.Tools, mcpTestToolDiagnostic{
+			Name:            spec.Name,
+			Description:     spec.Description,
+			ReadOnly:        spec.ReadOnly,
+			Destructive:     spec.Destructive,
+			ConcurrencySafe: spec.ConcurrencySafe,
+		})
+	}
+	return writeMCPTestDiagnostic(stdout, diagnostic, *jsonOutput)
+}
+
+type mcpTestDiagnostic struct {
+	Name       string                  `json:"name"`
+	OK         bool                    `json:"ok"`
+	Enabled    bool                    `json:"enabled"`
+	Command    string                  `json:"command"`
+	Args       []string                `json:"args,omitempty"`
+	InheritEnv bool                    `json:"inherit_env,omitempty"`
+	Error      string                  `json:"error,omitempty"`
+	Tools      []mcpTestToolDiagnostic `json:"tools,omitempty"`
+}
+
+type mcpTestToolDiagnostic struct {
+	Name            string `json:"name"`
+	Description     string `json:"description,omitempty"`
+	ReadOnly        bool   `json:"read_only,omitempty"`
+	Destructive     bool   `json:"destructive,omitempty"`
+	ConcurrencySafe bool   `json:"concurrency_safe,omitempty"`
+}
+
+func writeMCPTestDiagnostic(stdout io.Writer, diagnostic mcpTestDiagnostic, jsonOutput bool) error {
+	if jsonOutput {
+		return writeMCPJSON(stdout, diagnostic)
+	}
+	if diagnostic.OK {
+		fmt.Fprintf(stdout, "[ok] MCP server %q started and returned %d tool(s).\n", diagnostic.Name, len(diagnostic.Tools))
+	} else {
+		fmt.Fprintf(stdout, "[error] MCP server %q failed: %s\n", diagnostic.Name, diagnostic.Error)
+		return nil
+	}
+	if !diagnostic.Enabled {
+		fmt.Fprintln(stdout, "[warn] server is disabled in config; test started it anyway")
+	}
+	if diagnostic.InheritEnv {
+		fmt.Fprintln(stdout, "[warn] inherit_env=true forwards the full parent process environment")
+	}
+	for _, discovered := range diagnostic.Tools {
+		var flags []string
+		if discovered.ReadOnly {
+			flags = append(flags, "read-only")
+		}
+		if discovered.Destructive {
+			flags = append(flags, "destructive")
+		}
+		if discovered.ConcurrencySafe {
+			flags = append(flags, "parallel")
+		}
+		suffix := ""
+		if len(flags) > 0 {
+			suffix = " [" + strings.Join(flags, ", ") + "]"
+		}
+		fmt.Fprintf(stdout, "tool: %s%s\n", discovered.Name, suffix)
+		if discovered.Description != "" {
+			fmt.Fprintf(stdout, "  %s\n", discovered.Description)
+		}
+	}
+	return nil
+}
+
 func normalizeMCPDurationFlag(flagName, value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -207,6 +412,59 @@ func validateMCPByteLimitFlag(flagName string, value int) error {
 		return fmt.Errorf("--%s must be non-negative", flagName)
 	}
 	return nil
+}
+
+func writeMCPJSON(stdout io.Writer, value any) error {
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(value)
+}
+
+func mcpConfigExplicit(fs *flag.FlagSet) bool {
+	return flagWasSet(fs, "config") || strings.TrimSpace(os.Getenv("MEMAX_CODE_CONFIG")) != ""
+}
+
+func loadMCPServer(rawConfigPath, name string, explicit bool) (mcpServerConfig, bool, error) {
+	configPath, err := resolvePath(rawConfigPath)
+	if err != nil {
+		return mcpServerConfig{}, false, fmt.Errorf("resolve config path: %w", err)
+	}
+	cfg, loaded, err := loadConfig(configPath, explicit)
+	if err != nil {
+		return mcpServerConfig{}, false, err
+	}
+	if !loaded || len(cfg.MCPServers) == 0 {
+		return mcpServerConfig{}, false, nil
+	}
+	server, ok := cfg.MCPServers[name]
+	return server, ok, nil
+}
+
+func redactMCPServerConfig(server mcpServerConfig) mcpServerConfig {
+	out := server
+	out.Args = append([]string(nil), server.Args...)
+	out.Env = map[string]string{}
+	for key := range server.Env {
+		out.Env[key] = "<redacted>"
+	}
+	if len(out.Env) == 0 {
+		out.Env = nil
+	}
+	if server.Enabled != nil {
+		enabled := *server.Enabled
+		out.Enabled = &enabled
+	}
+	return out
+}
+
+func sortedStringKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (c mcpServerConfig) runtimeSummary() string {

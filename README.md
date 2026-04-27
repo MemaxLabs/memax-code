@@ -304,10 +304,14 @@ Add, inspect, and remove servers with:
 ```sh
 memax-code mcp add docs --env DOCS_TOKEN=... --startup-timeout 30s --tool-timeout 120s -- docs-mcp-server --stdio
 memax-code mcp list
+memax-code mcp get docs
+memax-code mcp test docs
 memax-code mcp remove docs
 ```
 
-Inside the interactive shell, `/mcp` shows the configured servers. Disabled
+`mcp get` prints one server with environment values redacted. `mcp test`
+starts the configured server, performs the MCP initialize and tools/list
+handshake, and prints the model-facing tool names plus safety hints. Disabled
 servers stay in config but are not started. `supports_parallel_tool_calls`
 should only be enabled for servers whose tools are safe to call concurrently.
 MCP servers do not inherit the full parent process environment by default; pass

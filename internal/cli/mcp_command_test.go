@@ -85,6 +85,121 @@ func TestMCPAddListRemoveUpdatesConfig(t *testing.T) {
 	}
 }
 
+func TestMCPGetRedactsEnvironment(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+		"mcp_servers": {
+			"docs": {
+				"command": "docs-server",
+				"args": ["--stdio"],
+				"env": {"DOCS_TOKEN": "secret-token", "PUBLIC_HINT": "also-hidden"},
+				"inherit_env": true,
+				"startup_timeout": "45s",
+				"tool_timeout": "2m",
+				"max_result_bytes": 32768,
+				"max_rpc_message_bytes": 1048576
+			}
+		}
+	}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{"mcp", "get", "docs", "--config", configPath}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("mcp get error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"name: docs",
+		"enabled: true",
+		"command: docs-server",
+		"args: --stdio",
+		"DOCS_TOKEN=<redacted>",
+		"PUBLIC_HINT=<redacted>",
+		"inherit_env: true",
+		"bounds: inherit_env=true startup_timeout=45s tool_timeout=2m max_result_bytes=32768 max_rpc_message_bytes=1048576",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("mcp get output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "secret-token") || strings.Contains(out, "also-hidden") {
+		t.Fatalf("mcp get leaked env value:\n%s", out)
+	}
+
+	stdout.Reset()
+	err = Run(context.Background(), []string{"mcp", "get", "docs", "--config", configPath, "--json"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("mcp get --json error = %v", err)
+	}
+	if strings.Contains(stdout.String(), "secret-token") || !strings.Contains(stdout.String(), `"<redacted>"`) {
+		t.Fatalf("mcp get --json redaction output:\n%s", stdout.String())
+	}
+}
+
+func TestMCPTestStartsServerAndListsTools(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	cfg := fmt.Sprintf(`{
+		"mcp_servers": {
+			"docs": {
+				"command": %q,
+				"args": ["-test.run=TestMemaxCodeMCPServerHelper", "--"],
+				"env": {"MEMAX_CODE_MCP_TEST_SERVER": "1"},
+				"supports_parallel_tool_calls": true
+			}
+		}
+	}`, os.Args[0])
+	if err := os.WriteFile(configPath, []byte(cfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{"mcp", "test", "docs", "--config", configPath}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("mcp test error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		`[ok] MCP server "docs" started and returned 1 tool(s).`,
+		"tool: mcp__docs__lookup [read-only, parallel]",
+		"Lookup docs.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("mcp test output missing %q:\n%s", want, out)
+		}
+	}
+
+	stdout.Reset()
+	err = Run(context.Background(), []string{"mcp", "test", "docs", "--config", configPath, "--json"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("mcp test --json error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"ok": true`) || !strings.Contains(stdout.String(), `"name": "mcp__docs__lookup"`) {
+		t.Fatalf("mcp test --json output:\n%s", stdout.String())
+	}
+}
+
+func TestMCPTestReportsStartupFailure(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+		"mcp_servers": {
+			"broken": {"command": "definitely-not-a-memax-code-test-command"}
+		}
+	}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{"mcp", "test", "broken", "--config", configPath}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), `mcp server "broken" test failed`) {
+		t.Fatalf("mcp test error = %v, want failure", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, `[error] MCP server "broken" failed:`) {
+		t.Fatalf("mcp test failure output:\n%s", out)
+	}
+}
+
 func TestParseArgsLoadsMCPServersFromConfig(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(configPath, []byte(`{
@@ -326,6 +441,7 @@ func TestMemaxCodeMCPServerHelper(t *testing.T) {
 				"tools": []map[string]any{{
 					"name":        "lookup",
 					"description": "Lookup docs.",
+					"annotations": map[string]any{"readOnlyHint": true},
 					"inputSchema": map[string]any{
 						"type":       "object",
 						"properties": map[string]any{"query": map[string]any{"type": "string"}},

@@ -28,7 +28,7 @@ func RunWithIO(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		return runConfigCommand(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "mcp" {
-		return runMCPCommand(args[1:], stdout, stderr)
+		return runMCPCommand(ctx, args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "doctor" {
 		return runDoctorCommand(args[1:], stdout, stderr)
