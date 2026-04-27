@@ -527,13 +527,17 @@ func oneLine(value string) string {
 }
 
 func truncateDisplay(value string, limit int) string {
-	if limit <= 0 || len(value) <= limit {
+	if limit <= 0 {
 		return value
 	}
 	if limit <= 1 {
 		return "…"
 	}
-	return value[:limit-1] + "…"
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit-1]) + "…"
 }
 
 func shellQuoteArg(value string) string {

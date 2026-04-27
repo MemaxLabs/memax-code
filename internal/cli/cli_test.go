@@ -1935,6 +1935,13 @@ func TestInteractiveMCPGroupsToolsForSanitizedServerNames(t *testing.T) {
 	}
 }
 
+func TestTruncateDisplayPreservesUTF8(t *testing.T) {
+	got := truncateDisplay("café café café", 5)
+	if got != "café…" {
+		t.Fatalf("truncateDisplay() = %q, want %q", got, "café…")
+	}
+}
+
 func TestInteractiveMCPCanFocusOneServer(t *testing.T) {
 	opts := options{
 		MCPServers: map[string]mcpServerConfig{
