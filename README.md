@@ -177,6 +177,8 @@ rather than risking a provider context-window error. Set `"compaction": "off"`
 or pass `--compaction off` to disable this behavior for debugging. In the
 interactive shell, `/context` shows the active context budgets, raw transcript
 message count, model-visible message count, and latest persisted checkpoint.
+The displayed budget is the configured or registry-derived planning budget; a
+live provider client may still report a more specific limit when a turn is sent.
 
 ## Interactive shell
 
