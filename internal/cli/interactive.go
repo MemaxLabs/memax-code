@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -159,7 +160,7 @@ func interactiveCommandSpecs() []interactiveCommandSpec {
 		{Name: "/help", Usage: "/help", Description: "show available slash commands"},
 		{Name: "/status", Usage: "/status", Description: "show active runtime settings"},
 		{Name: "/context", Usage: "/context [TARGET]", Description: "show context budgets and active checkpoint"},
-		{Name: "/mcp", Usage: "/mcp", Description: "show configured MCP servers"},
+		{Name: "/mcp", Usage: "/mcp [NAME]", Description: "show configured MCP servers and loaded tools"},
 		{Name: "/session", Usage: "/session", Description: "show the active session"},
 		{Name: "/pick", Usage: "/pick", Description: "list recent sessions with numbers"},
 		{Name: "/show", Usage: "/show [TARGET]", Description: "show current, latest, number, or ID"},
@@ -219,7 +220,7 @@ func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, cu
 			fmt.Fprintf(w, "error: %v\n", err)
 		}
 	case "/mcp":
-		printInteractiveMCP(w, opts)
+		printInteractiveMCP(w, opts, arg)
 	case "/draft":
 		if composer == nil {
 			fmt.Fprintln(w, "drafts are unavailable")
@@ -366,13 +367,25 @@ func printInteractiveStatus(ctx context.Context, w io.Writer, opts options, curr
 	return nil
 }
 
-func printInteractiveMCP(w io.Writer, opts options) {
+func printInteractiveMCP(w io.Writer, opts options, raw string) {
 	if len(opts.MCPServers) == 0 {
-		fmt.Fprintln(w, "no MCP servers")
+		fmt.Fprintln(w, "mcp: no servers configured")
 		return
 	}
-	fmt.Fprintln(w, "mcp servers:")
+	target := strings.TrimSpace(raw)
+	if target != "" {
+		if _, ok := opts.MCPServers[target]; !ok {
+			fmt.Fprintf(w, "mcp: no server named %q\n", target)
+			fmt.Fprintf(w, "available: %s\n", strings.Join(sortedMapKeysMCP(opts.MCPServers), ", "))
+			return
+		}
+	}
+	fmt.Fprintln(w, "mcp:")
+	runtimeTools := runtimeMCPToolsByServer(opts)
 	for _, name := range sortedMapKeysMCP(opts.MCPServers) {
+		if target != "" && name != target {
+			continue
+		}
 		server := opts.MCPServers[name]
 		status := "enabled"
 		if !server.enabled() {
@@ -382,12 +395,115 @@ func printInteractiveMCP(w io.Writer, opts options) {
 		if server.SupportsParallelToolCalls {
 			parallel = "parallel"
 		}
-		fmt.Fprintf(w, "  %s: %s %s %s", name, status, parallel, mcpServerCommandDisplay(server))
-		if suffix := server.runtimeSummary(); suffix != "" {
-			fmt.Fprintf(w, " (%s)", suffix)
+		loaded := "not loaded"
+		tools := runtimeTools[normalizeMCPServerNameForDisplay(name)]
+		if opts.RuntimeMCPReady {
+			loaded = fmt.Sprintf("%d tool(s) loaded", len(tools))
 		}
-		fmt.Fprintln(w)
+		fmt.Fprintf(w, "  %s  %s · %s · %s\n", name, status, parallel, loaded)
+		fmt.Fprintf(w, "    command: %s\n", valueOrUnset(mcpServerCommandDisplay(server)))
+		if server.CWD != "" {
+			fmt.Fprintf(w, "    cwd: %s\n", redactMCPDisplayValue(server.CWD))
+		}
+		if len(server.Env) > 0 {
+			fmt.Fprintf(w, "    env: %d explicit variable(s), values redacted\n", len(server.Env))
+		}
+		if suffix := server.runtimeSummary(); suffix != "" {
+			fmt.Fprintf(w, "    bounds: %s\n", suffix)
+		}
+		if len(tools) > 0 {
+			fmt.Fprintln(w, "    tools:")
+			for _, discovered := range summarizeRuntimeMCPTools(tools, 8) {
+				fmt.Fprintf(w, "      - %s", discovered.Name)
+				if discovered.Description != "" {
+					fmt.Fprintf(w, " — %s", discovered.Description)
+				}
+				if discovered.Flags != "" {
+					fmt.Fprintf(w, " [%s]", discovered.Flags)
+				}
+				fmt.Fprintln(w)
+			}
+			if omitted := len(tools) - min(len(tools), 8); omitted > 0 {
+				fmt.Fprintf(w, "      ... %d more\n", omitted)
+			}
+		} else if opts.RuntimeMCPReady && server.enabled() {
+			fmt.Fprintln(w, "    tools: none advertised")
+		}
+		if server.enabled() {
+			fmt.Fprintf(w, "    diagnostics: memax-code mcp get %s | memax-code mcp test %s\n", name, name)
+		} else {
+			fmt.Fprintf(w, "    diagnostics: memax-code mcp get %s\n", name)
+		}
 	}
+}
+
+type runtimeMCPToolInfo struct {
+	Name        string
+	Description string
+	Flags       string
+}
+
+func runtimeMCPToolsByServer(opts options) map[string][]runtimeMCPToolInfo {
+	out := map[string][]runtimeMCPToolInfo{}
+	for _, t := range opts.RuntimeMCPTools {
+		spec := t.Spec()
+		server, remote, ok := splitRuntimeMCPToolName(spec.Name)
+		if !ok {
+			continue
+		}
+		var flags []string
+		if spec.ReadOnly {
+			flags = append(flags, "read-only")
+		}
+		if spec.Destructive {
+			flags = append(flags, "destructive")
+		}
+		if spec.ConcurrencySafe {
+			flags = append(flags, "parallel")
+		}
+		out[server] = append(out[server], runtimeMCPToolInfo{
+			Name:        remote,
+			Description: oneLine(spec.Description),
+			Flags:       strings.Join(flags, ", "),
+		})
+	}
+	for server := range out {
+		sort.Slice(out[server], func(i, j int) bool {
+			return out[server][i].Name < out[server][j].Name
+		})
+	}
+	return out
+}
+
+func summarizeRuntimeMCPTools(tools []runtimeMCPToolInfo, limit int) []runtimeMCPToolInfo {
+	if limit <= 0 || len(tools) <= limit {
+		return tools
+	}
+	return tools[:limit]
+}
+
+func splitRuntimeMCPToolName(name string) (server, remote string, ok bool) {
+	parts := strings.SplitN(name, "__", 3)
+	if len(parts) != 3 || parts[0] != "mcp" || parts[1] == "" || parts[2] == "" {
+		return "", "", false
+	}
+	return parts[1], parts[2], true
+}
+
+func normalizeMCPServerNameForDisplay(name string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(name) {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	return strings.Trim(b.String(), "_-")
+}
+
+func oneLine(value string) string {
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func printInteractiveContext(ctx context.Context, w io.Writer, opts options, currentSession, raw string) error {

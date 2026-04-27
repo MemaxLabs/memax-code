@@ -16,6 +16,7 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 )
@@ -1808,7 +1809,7 @@ func TestMCPStatusRenderersRedactServerCommandAndArgs(t *testing.T) {
 	assertMCPStatusRedacted(t, status.String())
 
 	var mcp bytes.Buffer
-	printInteractiveMCP(&mcp, opts)
+	printInteractiveMCP(&mcp, opts, "")
 	assertMCPStatusRedacted(t, mcp.String())
 }
 
@@ -1830,6 +1831,83 @@ func assertMCPStatusRedacted(t *testing.T, out string) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("MCP status missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestInteractiveMCPShowsLoadedToolsAndDiagnostics(t *testing.T) {
+	opts := options{
+		MCPServers: map[string]mcpServerConfig{
+			"docs": {
+				Command:                   "docs-server",
+				Args:                      []string{"--token=secret-token", "--stdio"},
+				Env:                       map[string]string{"DOCS_TOKEN": "secret"},
+				SupportsParallelToolCalls: true,
+				StartupTimeout:            "30s",
+				ToolTimeout:               "2m",
+			},
+			"disabled": {
+				Command: "disabled-server",
+				Enabled: boolPtr(false),
+			},
+		},
+		RuntimeMCPReady: true,
+		RuntimeMCPTools: []tool.Tool{
+			tool.Definition{ToolSpec: model.ToolSpec{
+				Name:            "mcp__docs__search",
+				Description:     "Search docs\nwith extra spacing.",
+				ReadOnly:        true,
+				ConcurrencySafe: true,
+			}},
+			tool.Definition{ToolSpec: model.ToolSpec{
+				Name:        "mcp__docs__write",
+				Description: "Write docs",
+				Destructive: true,
+			}},
+		},
+	}
+
+	var out bytes.Buffer
+	printInteractiveMCP(&out, opts, "")
+	got := out.String()
+	for _, want := range []string{
+		"mcp:",
+		"docs  enabled · parallel · 2 tool(s) loaded",
+		"command: docs-server --token=<redacted> --stdio",
+		"env: 1 explicit variable(s), values redacted",
+		"bounds: startup_timeout=30s tool_timeout=2m",
+		"- search — Search docs with extra spacing. [read-only, parallel]",
+		"- write — Write docs [destructive]",
+		"diagnostics: memax-code mcp get docs | memax-code mcp test docs",
+		"disabled  disabled · serial · 0 tool(s) loaded",
+		"diagnostics: memax-code mcp get disabled",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("interactive MCP output missing %q:\n%s", want, got)
+		}
+	}
+	for _, leaked := range []string{"secret-token", "DOCS_TOKEN=secret"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("interactive MCP output leaked %q:\n%s", leaked, got)
+		}
+	}
+}
+
+func TestInteractiveMCPCanFocusOneServer(t *testing.T) {
+	opts := options{
+		MCPServers: map[string]mcpServerConfig{
+			"docs":  {Command: "docs-server"},
+			"notes": {Command: "notes-server"},
+		},
+	}
+
+	var out bytes.Buffer
+	printInteractiveMCP(&out, opts, "notes")
+	got := out.String()
+	if !strings.Contains(got, "notes  enabled") {
+		t.Fatalf("focused MCP output missing selected server:\n%s", got)
+	}
+	if strings.Contains(got, "docs  enabled") {
+		t.Fatalf("focused MCP output included other server:\n%s", got)
 	}
 }
 
