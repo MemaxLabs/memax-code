@@ -1910,6 +1910,7 @@ func TestInteractiveStatusShowsMCPRuntimeSummary(t *testing.T) {
 		RuntimeMCPTools: []tool.Tool{
 			tool.Definition{ToolSpec: model.ToolSpec{Name: "mcp__docs__search"}},
 			tool.Definition{ToolSpec: model.ToolSpec{Name: "mcp__docs__lookup"}},
+			tool.Definition{ToolSpec: model.ToolSpec{Name: "mcp__disabled__hidden"}},
 			tool.Definition{ToolSpec: model.ToolSpec{Name: "mcp__orphan__inspect"}},
 		},
 	}

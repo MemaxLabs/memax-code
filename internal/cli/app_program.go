@@ -122,6 +122,7 @@ func newAppProgramModelWithEvents(ctx context.Context, opts options, runPrompt i
 	}
 	model.appTranscriptFormatter.liveCommandGroups = true
 	model.appTranscriptFormatter.mcpServerKeys = runtimeMCPServerKeys(opts.MCPServers)
+	model.appTranscriptFormatter.compactor.mcpServerKeys = model.appTranscriptFormatter.mcpServerKeys
 	model.appendLocalTranscriptLine("dim", "Welcome. Type a task or /help.")
 	if opts.ResumeSessionID != "" {
 		model.sessionID = opts.ResumeSessionID
@@ -1105,6 +1106,7 @@ func compactAppProgramTranscriptText(text string) string {
 
 type appProgramTranscriptCompactor struct {
 	width                   int
+	mcpServerKeys           []string
 	section                 string
 	skipActivityDetail      bool
 	assistantInCodeBlock    bool
@@ -1863,7 +1865,7 @@ func (c *appProgramTranscriptCompactor) compactActivityLine(trimmed string) []st
 		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
 		c.lastActivityTool = appActivityToolName(trimmed)
-		return append(out, appProgramToolStyle.Render("• "+appFormatToolLine(strings.TrimSpace(strings.TrimPrefix(trimmed, "> ")))))
+		return append(out, appProgramToolStyle.Render("• "+c.formatToolLine(strings.TrimSpace(strings.TrimPrefix(trimmed, "> ")))))
 	}
 	if strings.HasPrefix(trimmed, "< tool ") {
 		out := c.flushActivityDetail()
@@ -1872,13 +1874,13 @@ func (c *appProgramTranscriptCompactor) compactActivityLine(trimmed string) []st
 		if appToolResultIsRedundant(c.lastActivityTool) {
 			return out
 		}
-		return append(out, appProgramDimStyle.Render("  "+appFormatToolLine(strings.TrimSpace(strings.TrimPrefix(trimmed, "< ")))))
+		return append(out, appProgramDimStyle.Render("  "+c.formatToolLine(strings.TrimSpace(strings.TrimPrefix(trimmed, "< ")))))
 	}
 	if strings.HasPrefix(trimmed, "! tool ") {
 		out := c.flushActivityDetail()
 		c.skipActivityDetail = false
 		c.lastActivityTool = appActivityToolName(trimmed)
-		return append(out, appProgramErrorStyle.Render("! "+appFormatToolLine(strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))))
+		return append(out, appProgramErrorStyle.Render("! "+c.formatToolLine(strings.TrimSpace(strings.TrimPrefix(trimmed, "! ")))))
 	}
 	if strings.HasPrefix(trimmed, "$ command ") {
 		out := c.flushActivityDetail()
@@ -1957,12 +1959,20 @@ func appActivityToolName(trimmed string) string {
 	return fields[2]
 }
 
+func (c *appProgramTranscriptCompactor) formatToolLine(line string) string {
+	return appFormatToolLineWithMCPServers(line, c.mcpServerKeys)
+}
+
 func appFormatToolLine(line string) string {
+	return appFormatToolLineWithMCPServers(line, nil)
+}
+
+func appFormatToolLineWithMCPServers(line string, serverKeys []string) string {
 	fields := strings.Fields(line)
 	if len(fields) < 2 || fields[0] != "tool" {
 		return line
 	}
-	name := appToolDisplayName(fields[1])
+	name := appToolDisplayNameWithMCPServers(fields[1], serverKeys)
 	if len(fields) > 2 {
 		rest := strings.Join(fields[2:], " ")
 		if rest == "call" {
@@ -2020,7 +2030,7 @@ func appMCPToolDisplayName(name string, serverKeys []string) (string, bool) {
 	}
 	body := strings.TrimPrefix(trimmed, "mcp__")
 	if server, remote, ok := splitRuntimeMCPToolName(trimmed, serverKeys); ok {
-		return "MCP " + appMCPSegmentForDisplay(server) + "." + appMCPSegmentForDisplay(remote), true
+		return appMCPDisplayFromSegments(server, remote), true
 	}
 	server, remote, ok := strings.Cut(body, "__")
 	if !ok || strings.TrimSpace(server) == "" || strings.TrimSpace(remote) == "" {
@@ -2035,7 +2045,22 @@ func appMCPToolDisplayName(name string, serverKeys []string) (string, bool) {
 		server = body[:i]
 		remote = body[i+2:]
 	}
-	return "MCP " + appMCPSegmentForDisplay(server) + "." + appMCPSegmentForDisplay(remote), true
+	return appMCPDisplayFromSegments(server, remote), true
+}
+
+func appMCPDisplayFromSegments(server, remote string) string {
+	server = appMCPSegmentForDisplay(server)
+	remote = appMCPSegmentForDisplay(remote)
+	switch {
+	case server != "" && remote != "":
+		return "MCP " + server + "." + remote
+	case server != "":
+		return "MCP " + server
+	case remote != "":
+		return "MCP " + remote
+	default:
+		return "MCP"
+	}
 }
 
 func appMCPSegmentForDisplay(value string) string {

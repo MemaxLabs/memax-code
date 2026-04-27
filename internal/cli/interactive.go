@@ -480,7 +480,7 @@ type runtimeMCPToolInfo struct {
 
 func runtimeMCPToolsByServer(opts options) map[string][]runtimeMCPToolInfo {
 	out := map[string][]runtimeMCPToolInfo{}
-	serverKeys := runtimeMCPServerKeys(opts.MCPServers)
+	serverKeys := runtimeMCPEnabledServerKeys(opts.MCPServers)
 	for _, t := range opts.RuntimeMCPTools {
 		spec := t.Spec()
 		server, remote, ok := splitRuntimeMCPToolName(spec.Name, serverKeys)
@@ -524,9 +524,22 @@ func runtimeMCPOrphanToolCount(opts options) int {
 }
 
 func runtimeMCPServerKeys(servers map[string]mcpServerConfig) []string {
+	return runtimeMCPServerKeysWithFilter(servers, nil)
+}
+
+func runtimeMCPEnabledServerKeys(servers map[string]mcpServerConfig) []string {
+	return runtimeMCPServerKeysWithFilter(servers, func(server mcpServerConfig) bool {
+		return server.enabled()
+	})
+}
+
+func runtimeMCPServerKeysWithFilter(servers map[string]mcpServerConfig, include func(mcpServerConfig) bool) []string {
 	keys := make([]string, 0, len(servers))
 	seen := map[string]bool{}
-	for name := range servers {
+	for name, server := range servers {
+		if include != nil && !include(server) {
+			continue
+		}
 		key := normalizeMCPServerNameForDisplay(name)
 		if key == "" || seen[key] {
 			continue

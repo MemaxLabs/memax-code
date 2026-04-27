@@ -1634,6 +1634,47 @@ func TestAppProgramStructuredMCPToolLabelsUseConfiguredServerBoundary(t *testing
 	}
 }
 
+func TestAppProgramStructuredMCPToolLabelsHandleDegenerateRemoteName(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{
+		CWD: ".",
+		MCPServers: map[string]mcpServerConfig{
+			"server": {Command: "server"},
+		},
+	}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:   "tool-1",
+		Name: "mcp__server__-",
+	}})
+	got := ansi.Strip(strings.Join(m.activeActivityLines(), "\n"))
+	if !strings.Contains(got, "• MCP server") {
+		t.Fatalf("MCP tool label lost server fallback:\n%s", got)
+	}
+	if strings.Contains(got, "MCP server.") {
+		t.Fatalf("MCP tool label kept trailing dot for empty remote segment:\n%s", got)
+	}
+}
+
+func TestAppProgramCompactorMCPToolLabelsUseConfiguredServerBoundary(t *testing.T) {
+	compactor := appProgramTranscriptCompactor{
+		width:         defaultAppShellWidth,
+		mcpServerKeys: runtimeMCPServerKeys(map[string]mcpServerConfig{"server": {Command: "server"}}),
+	}
+
+	got := ansi.Strip(compactor.compact(strings.Join([]string{
+		"[activity]",
+		"> tool mcp__server__do__thing call",
+		"< tool mcp__server__do__thing ok",
+	}, "\n")) + compactor.flush())
+	if !strings.Contains(got, "• MCP server.do_thing") {
+		t.Fatalf("compacted MCP tool label did not use configured server boundary:\n%s", got)
+	}
+	if strings.Contains(got, "MCP server_do.thing") {
+		t.Fatalf("compacted MCP tool label used fallback boundary despite configured server:\n%s", got)
+	}
+}
+
 func TestAppProgramStructuredToolUseStartMergesWithFinalToolUse(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
