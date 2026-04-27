@@ -382,14 +382,19 @@ func printInteractiveMCPStatusSummary(w io.Writer, opts options) {
 		}
 	}
 	loadedTools := 0
+	orphanTools := 0
 	if opts.RuntimeMCPReady {
 		for _, tools := range runtimeMCPToolsByServer(opts) {
 			loadedTools += len(tools)
 		}
+		orphanTools = runtimeMCPOrphanToolCount(opts)
 	}
 	loaded := "not loaded"
 	if opts.RuntimeMCPReady {
-		loaded = fmt.Sprintf("%d tool(s) loaded", loadedTools)
+		loaded = fmt.Sprintf("%d tool(s) loaded across enabled servers", loadedTools)
+		if orphanTools > 0 {
+			loaded += fmt.Sprintf(", %d orphan tool(s)", orphanTools)
+		}
 	}
 	fmt.Fprintf(w, "  mcp: %d configured, %d enabled, %d disabled, %s\n", len(opts.MCPServers), enabled, disabled, loaded)
 	fmt.Fprintln(w, "  mcp_details: /mcp or /mcp NAME")
@@ -504,6 +509,18 @@ func runtimeMCPToolsByServer(opts options) map[string][]runtimeMCPToolInfo {
 		})
 	}
 	return out
+}
+
+func runtimeMCPOrphanToolCount(opts options) int {
+	serverKeys := runtimeMCPServerKeys(opts.MCPServers)
+	orphanTools := 0
+	for _, t := range opts.RuntimeMCPTools {
+		spec := t.Spec()
+		if _, _, ok := splitRuntimeMCPToolName(spec.Name, serverKeys); !ok {
+			orphanTools++
+		}
+	}
+	return orphanTools
 }
 
 func runtimeMCPServerKeys(servers map[string]mcpServerConfig) []string {

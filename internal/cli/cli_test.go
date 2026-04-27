@@ -1910,6 +1910,7 @@ func TestInteractiveStatusShowsMCPRuntimeSummary(t *testing.T) {
 		RuntimeMCPTools: []tool.Tool{
 			tool.Definition{ToolSpec: model.ToolSpec{Name: "mcp__docs__search"}},
 			tool.Definition{ToolSpec: model.ToolSpec{Name: "mcp__docs__lookup"}},
+			tool.Definition{ToolSpec: model.ToolSpec{Name: "mcp__orphan__inspect"}},
 		},
 	}
 
@@ -1919,7 +1920,7 @@ func TestInteractiveStatusShowsMCPRuntimeSummary(t *testing.T) {
 	}
 	got := out.String()
 	for _, want := range []string{
-		"mcp: 2 configured, 1 enabled, 1 disabled, 2 tool(s) loaded",
+		"mcp: 2 configured, 1 enabled, 1 disabled, 2 tool(s) loaded across enabled servers, 1 orphan tool(s)",
 		"mcp_details: /mcp or /mcp NAME",
 		"mcp_server.docs: enabled parallel docs-server",
 		"mcp_server.disabled: disabled serial disabled-server",

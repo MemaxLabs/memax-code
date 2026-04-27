@@ -34,6 +34,7 @@ type appTranscriptFormatter struct {
 	liveActivityBlockOpen  bool
 	flushedAnonymous       bool
 	liveCommandGroups      bool
+	mcpServerKeys          []string
 	nextCommandGroup       int
 }
 
@@ -179,11 +180,11 @@ func (f *appTranscriptFormatter) appendToolUse(toolUse *model.ToolUse) {
 		return
 	}
 	if f.toolUseUsesLiveGroup(toolUse.Name) {
-		f.pendingToolGroup(f.toolUseKey(toolUse), toolUse.Name, appToolUseDisplay(toolUse))
+		f.pendingToolGroup(f.toolUseKey(toolUse), toolUse.Name, f.toolUseDisplay(toolUse))
 		return
 	}
 	f.printUnprintedCommandGroups()
-	display := appToolUseDisplay(toolUse)
+	display := f.toolUseDisplay(toolUse)
 	f.appendToolBlock(f.toolUseKey(toolUse), appProgramToolStyle.Render("• "+display))
 	f.markToolUseRendered(toolUse)
 }
@@ -198,13 +199,13 @@ func (f *appTranscriptFormatter) appendToolResult(result *model.ToolResult) {
 		return
 	}
 	rendered, renderedKey, renderedDisplay := f.consumeRenderedToolUse(toolUse, result.ToolUseID)
-	name := appToolDisplayName(result.Name)
+	name := f.toolDisplayName(result.Name)
 	if result.IsError {
 		lines := make([]string, 0, 4)
 		if !rendered && toolUse == nil {
-			lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplayOrName(nil, name)))
+			lines = append(lines, appProgramToolStyle.Render("• "+f.toolUseDisplayOrName(nil, name)))
 		} else if !rendered {
-			lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplay(toolUse)))
+			lines = append(lines, appProgramToolStyle.Render("• "+f.toolUseDisplay(toolUse)))
 		}
 		lines = append(lines, appToolResultStatusLines(toolUse, result)...)
 		if rendered {
@@ -221,9 +222,9 @@ func (f *appTranscriptFormatter) appendToolResult(result *model.ToolResult) {
 			}
 			lines := make([]string, 0, 1)
 			if toolUse == nil {
-				lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplayOrName(nil, name)))
+				lines = append(lines, appProgramToolStyle.Render("• "+f.toolUseDisplayOrName(nil, name)))
 			} else {
-				lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplay(toolUse)))
+				lines = append(lines, appProgramToolStyle.Render("• "+f.toolUseDisplay(toolUse)))
 			}
 			f.appendActivityGroup(lines...)
 		} else {
@@ -233,9 +234,9 @@ func (f *appTranscriptFormatter) appendToolResult(result *model.ToolResult) {
 	}
 	lines := make([]string, 0, 4)
 	if !rendered && toolUse == nil {
-		lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplayOrName(nil, name)))
+		lines = append(lines, appProgramToolStyle.Render("• "+f.toolUseDisplayOrName(nil, name)))
 	} else if !rendered {
-		lines = append(lines, appProgramToolStyle.Render("• "+appToolUseDisplay(toolUse)))
+		lines = append(lines, appProgramToolStyle.Render("• "+f.toolUseDisplay(toolUse)))
 	}
 	lines = append(lines, appToolResultStatusLines(toolUse, result)...)
 	if rendered {
@@ -516,7 +517,7 @@ func (f *appTranscriptFormatter) markToolUseRendered(toolUse *model.ToolUse) {
 		f.renderedToolDisplays = make(map[string]string)
 	}
 	f.renderedToolKeys[key] = true
-	f.renderedToolDisplays[key] = appToolUseDisplay(toolUse)
+	f.renderedToolDisplays[key] = f.toolUseDisplay(toolUse)
 }
 
 func (f *appTranscriptFormatter) consumeRenderedToolUse(toolUse *model.ToolUse, resultID string) (bool, string, string) {
@@ -554,9 +555,17 @@ func (f *appTranscriptFormatter) toolUseKey(toolUse *model.ToolUse) string {
 	return fmt.Sprintf("tool:ptr:%p", toolUse)
 }
 
-func appToolUseDisplayOrName(toolUse *model.ToolUse, fallback string) string {
+func (f *appTranscriptFormatter) toolDisplayName(name string) string {
+	return appToolDisplayNameWithMCPServers(name, f.mcpServerKeys)
+}
+
+func (f *appTranscriptFormatter) toolUseDisplay(toolUse *model.ToolUse) string {
+	return appToolUseDisplayWithMCPServers(toolUse, f.mcpServerKeys)
+}
+
+func (f *appTranscriptFormatter) toolUseDisplayOrName(toolUse *model.ToolUse, fallback string) string {
 	if toolUse != nil {
-		return appToolUseDisplay(toolUse)
+		return f.toolUseDisplay(toolUse)
 	}
 	if strings.TrimSpace(fallback) == "" {
 		return "tool"
@@ -1425,7 +1434,7 @@ func (f *appTranscriptFormatter) markCommandGroupRendered(group *appProgramComma
 	}
 	display := appCommandDisplay(group.display)
 	for id, toolUse := range f.pendingToolsByID {
-		if appToolUseDisplay(toolUse) != display {
+		if f.toolUseDisplay(toolUse) != display {
 			continue
 		}
 		if f.renderedCommandToolIDs == nil {

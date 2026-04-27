@@ -121,6 +121,7 @@ func newAppProgramModelWithEvents(ctx context.Context, opts options, runPrompt i
 		statusLine: "idle",
 	}
 	model.appTranscriptFormatter.liveCommandGroups = true
+	model.appTranscriptFormatter.mcpServerKeys = runtimeMCPServerKeys(opts.MCPServers)
 	model.appendLocalTranscriptLine("dim", "Welcome. Type a task or /help.")
 	if opts.ResumeSessionID != "" {
 		model.sessionID = opts.ResumeSessionID
@@ -1973,7 +1974,11 @@ func appFormatToolLine(line string) string {
 }
 
 func appToolDisplayName(name string) string {
-	if display, ok := appMCPToolDisplayName(name); ok {
+	return appToolDisplayNameWithMCPServers(name, nil)
+}
+
+func appToolDisplayNameWithMCPServers(name string, serverKeys []string) string {
+	if display, ok := appMCPToolDisplayName(name, serverKeys); ok {
 		return display
 	}
 	switch name {
@@ -2008,32 +2013,45 @@ func appToolDisplayName(name string) string {
 	}
 }
 
-func appMCPToolDisplayName(name string) (string, bool) {
+func appMCPToolDisplayName(name string, serverKeys []string) (string, bool) {
 	trimmed := strings.TrimSpace(name)
 	if !strings.HasPrefix(trimmed, "mcp__") {
 		return "", false
 	}
 	body := strings.TrimPrefix(trimmed, "mcp__")
+	if server, remote, ok := splitRuntimeMCPToolName(trimmed, serverKeys); ok {
+		return "MCP " + appMCPSegmentForDisplay(server) + "." + appMCPSegmentForDisplay(remote), true
+	}
 	server, remote, ok := strings.Cut(body, "__")
 	if !ok || strings.TrimSpace(server) == "" || strings.TrimSpace(remote) == "" {
+		if body := appMCPSegmentForDisplay(body); body != "" {
+			return "MCP " + body, true
+		}
 		return "MCP", true
 	}
-	// MCP server names may contain the sanitized "__" separator. The rightmost
-	// separator is the best display boundary for Memax-generated tool names.
+	// Configured server names may contain "__". Without configured server keys,
+	// the rightmost separator is the least lossy fallback display boundary.
 	if i := strings.LastIndex(body, "__"); i > 0 && i+2 < len(body) {
 		server = body[:i]
 		remote = body[i+2:]
 	}
-	server = strings.ReplaceAll(server, "__", "_")
-	remote = strings.ReplaceAll(remote, "__", "_")
-	return "MCP " + server + "." + remote, true
+	return "MCP " + appMCPSegmentForDisplay(server) + "." + appMCPSegmentForDisplay(remote), true
+}
+
+func appMCPSegmentForDisplay(value string) string {
+	value = strings.ReplaceAll(strings.TrimSpace(value), "__", "_")
+	return strings.Trim(value, "_-. ")
 }
 
 func appToolUseDisplay(toolUse *model.ToolUse) string {
+	return appToolUseDisplayWithMCPServers(toolUse, nil)
+}
+
+func appToolUseDisplayWithMCPServers(toolUse *model.ToolUse, serverKeys []string) string {
 	if toolUse == nil {
 		return ""
 	}
-	name := appToolDisplayName(toolUse.Name)
+	name := appToolDisplayNameWithMCPServers(toolUse.Name, serverKeys)
 	if strings.TrimSpace(name) == "" {
 		name = "tool"
 	}

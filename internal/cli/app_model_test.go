@@ -1612,6 +1612,28 @@ func TestAppProgramStructuredMCPToolLabelsAreFriendly(t *testing.T) {
 	}
 }
 
+func TestAppProgramStructuredMCPToolLabelsUseConfiguredServerBoundary(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{
+		CWD: ".",
+		MCPServers: map[string]mcpServerConfig{
+			"server": {Command: "server"},
+		},
+	}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:   "tool-1",
+		Name: "mcp__server__do__thing",
+	}})
+	got := ansi.Strip(strings.Join(m.activeActivityLines(), "\n"))
+	if !strings.Contains(got, "• MCP server.do_thing") {
+		t.Fatalf("MCP tool label did not use configured server boundary:\n%s", got)
+	}
+	if strings.Contains(got, "MCP server_do.thing") {
+		t.Fatalf("MCP tool label used fallback boundary despite configured server:\n%s", got)
+	}
+}
+
 func TestAppProgramStructuredToolUseStartMergesWithFinalToolUse(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
