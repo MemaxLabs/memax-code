@@ -1,7 +1,7 @@
 github.com/MakeNowJust/heredoc v1.0.0 h1:cXCdzVdstXyiTqTvfqk9SDHpKNjxuom+DOlyEeQ4pzQ=
 github.com/MakeNowJust/heredoc v1.0.0/go.mod h1:mG5amYoWBHf8vpLOuehzbGGw0EHxpZZ6lCpQ4fNJ8LE=
-github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260427185034-90eb261ce8ab h1:Z3/ZCsfnNo3375O6x4E6p3QPYd0q6Gibm6VNCqVknAU=
-github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260427185034-90eb261ce8ab/go.mod h1:3gwC28HU+igj2X3xDc7GEsYPU1iLqRW2y5WlecO5Oo8=
+github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260427190521-d1352959dec8 h1:6X37mlRwIQIVAPlrABzw1PCPi9XUoWCs2dEda237fbk=
+github.com/MemaxLabs/memax-go-agent-sdk v0.0.0-20260427190521-d1352959dec8/go.mod h1:3gwC28HU+igj2X3xDc7GEsYPU1iLqRW2y5WlecO5Oo8=
 github.com/atotto/clipboard v0.1.4 h1:EH0zSVneZPSuFR11BlR9YppQTVDbh5+16AmcJi4g1z4=
 github.com/atotto/clipboard v0.1.4/go.mod h1:ZY9tmq7sm5xIbd9bOK4onWV4S6X0u6GY7Vn0Yu86PYI=
 github.com/aymanbagabas/go-osc52/v2 v2.0.1 h1:HwpRHbFMcZLEVr42D4p7XBqjyuxQH5SMiErDT4WkJ2k=
