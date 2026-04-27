@@ -2603,12 +2603,19 @@ func TestAppProgramUserPromptTranscriptHasVerticalPadding(t *testing.T) {
 }
 
 func TestAppProgramUserPromptTranscriptResetsBeforeSpacer(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.transcript = appTranscriptTail{}
+	_ = model.drainPendingPrints()
+	model.appendLocalTranscriptLine("dim", "previous")
+	_ = model.drainPendingPrints()
 
 	model.appendLocalTranscriptLine("user", "› inspect the repo")
 	lines := model.drainPendingPrints()
-	if len(lines) < 2 {
+	if len(lines) < 3 {
 		t.Fatalf("user prompt should emit prompt row and spacer, got %#v", lines)
 	}
 	promptAt := -1
@@ -2624,8 +2631,11 @@ func TestAppProgramUserPromptTranscriptResetsBeforeSpacer(t *testing.T) {
 	if !strings.HasSuffix(lines[promptAt], appProgramResetSGR) {
 		t.Fatalf("prompt row must reset before Bubble Tea paints the following spacer:\n%q", lines[promptAt])
 	}
-	if promptAt+1 >= len(lines) || lines[promptAt+1] != "" {
-		t.Fatalf("prompt row should be followed by a plain blank spacer, got %#v", lines)
+	if promptAt == 0 || ansi.Strip(lines[promptAt-1]) != "" || !strings.HasSuffix(lines[promptAt-1], appProgramResetSGR) {
+		t.Fatalf("prompt row should be preceded by a reset-only spacer, got %#v", lines)
+	}
+	if promptAt+1 >= len(lines) || ansi.Strip(lines[promptAt+1]) != "" || !strings.HasSuffix(lines[promptAt+1], appProgramResetSGR) {
+		t.Fatalf("prompt row should be followed by a reset-only spacer, got %#v", lines)
 	}
 }
 

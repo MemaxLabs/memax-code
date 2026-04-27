@@ -114,7 +114,7 @@ func (t *appTranscriptTail) appendBlankLine() []string {
 		return appended
 	}
 	if t.appendLine(appTranscriptBlankLine) {
-		appended = append(appended, "")
+		appended = append(appended, displayTranscriptLine(appTranscriptBlankLine))
 	}
 	return appended
 }
@@ -154,7 +154,7 @@ func (t *appTranscriptTail) appendLine(line string) bool {
 
 func displayTranscriptLine(line string) string {
 	if line == appTranscriptBlankLine {
-		return ""
+		return appProgramResetSGR
 	}
 	return line
 }
