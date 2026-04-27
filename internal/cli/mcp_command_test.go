@@ -90,8 +90,8 @@ func TestMCPGetRedactsEnvironment(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(`{
 		"mcp_servers": {
 			"docs": {
-				"command": "docs-server",
-				"args": ["--stdio"],
+				"command": "https://user:password@example.com/docs-server",
+				"args": ["--stdio", "--token=secret-token", "--api-key", "sk-test-secret-value-12345"],
 				"env": {"DOCS_TOKEN": "secret-token", "PUBLIC_HINT": "also-hidden"},
 				"inherit_env": true,
 				"startup_timeout": "45s",
@@ -113,8 +113,8 @@ func TestMCPGetRedactsEnvironment(t *testing.T) {
 	for _, want := range []string{
 		"name: docs",
 		"enabled: true",
-		"command: docs-server",
-		"args: --stdio",
+		"command: https://redacted@example.com/docs-server",
+		"args: --stdio --token=<redacted> --api-key <redacted>",
 		"DOCS_TOKEN=<redacted>",
 		"PUBLIC_HINT=<redacted>",
 		"inherit_env: true",
@@ -124,8 +124,10 @@ func TestMCPGetRedactsEnvironment(t *testing.T) {
 			t.Fatalf("mcp get output missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "secret-token") || strings.Contains(out, "also-hidden") {
-		t.Fatalf("mcp get leaked env value:\n%s", out)
+	for _, leaked := range []string{"secret-token", "also-hidden", "password", "sk-test-secret-value-12345"} {
+		if strings.Contains(out, leaked) {
+			t.Fatalf("mcp get leaked %q:\n%s", leaked, out)
+		}
 	}
 
 	stdout.Reset()
@@ -133,8 +135,33 @@ func TestMCPGetRedactsEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mcp get --json error = %v", err)
 	}
-	if strings.Contains(stdout.String(), "secret-token") || !strings.Contains(stdout.String(), `"<redacted>"`) {
+	if strings.Contains(stdout.String(), "secret-token") || strings.Contains(stdout.String(), "password") ||
+		strings.Contains(stdout.String(), "sk-test-secret-value-12345") || !strings.Contains(stdout.String(), `"<redacted>"`) ||
+		!strings.Contains(stdout.String(), `"enabled": true`) {
 		t.Fatalf("mcp get --json redaction output:\n%s", stdout.String())
+	}
+
+	stdout.Reset()
+	err = Run(context.Background(), []string{"mcp", "list", "--config", configPath}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("mcp list error = %v", err)
+	}
+	if strings.Contains(stdout.String(), "secret-token") || strings.Contains(stdout.String(), "password") ||
+		strings.Contains(stdout.String(), "sk-test-secret-value-12345") {
+		t.Fatalf("mcp list leaked a secret-bearing value:\n%s", stdout.String())
+	}
+}
+
+func TestMCPGetRejectsExtraPositionals(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"mcp_servers":{"docs":{"command":"docs-server"}}}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{"mcp", "get", "docs", "extra", "--config", configPath}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "mcp get requires exactly one NAME") {
+		t.Fatalf("error = %v, want exactly-one-name failure", err)
 	}
 }
 
@@ -161,8 +188,9 @@ func TestMCPTestStartsServerAndListsTools(t *testing.T) {
 	}
 	out := stdout.String()
 	for _, want := range []string{
+		"[info] server tools are configured as parallel-allowed",
 		`[ok] MCP server "docs" started and returned 1 tool(s).`,
-		"tool: mcp__docs__lookup [read-only, parallel]",
+		"tool: mcp__docs__lookup [read-only]",
 		"Lookup docs.",
 	} {
 		if !strings.Contains(out, want) {
@@ -177,6 +205,22 @@ func TestMCPTestStartsServerAndListsTools(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"ok": true`) || !strings.Contains(stdout.String(), `"name": "mcp__docs__lookup"`) {
 		t.Fatalf("mcp test --json output:\n%s", stdout.String())
+	}
+}
+
+func TestMCPTestJSONReportsMissingServer(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"mcp_servers":{"docs":{"command":"docs-server"}}}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{"mcp", "test", "missing", "--config", configPath, "--json"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), `no MCP server named "missing" found`) {
+		t.Fatalf("error = %v, want missing-server failure", err)
+	}
+	if !strings.Contains(stdout.String(), `"ok": false`) || !strings.Contains(stdout.String(), `"error": "no MCP server named \"missing\" found"`) {
+		t.Fatalf("json diagnostic:\n%s", stdout.String())
 	}
 }
 

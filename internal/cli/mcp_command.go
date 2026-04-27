@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -179,6 +180,7 @@ func runMCPList(args []string, stdout, stderr io.Writer) error {
 	}
 	for _, name := range sortedMapKeysMCP(cfg.MCPServers) {
 		server := cfg.MCPServers[name]
+		redacted := redactMCPServerConfig(server)
 		status := "enabled"
 		if !server.enabled() {
 			status = "disabled"
@@ -187,11 +189,11 @@ func runMCPList(args []string, stdout, stderr io.Writer) error {
 		if server.SupportsParallelToolCalls {
 			parallel = "parallel"
 		}
-		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s", name, status, parallel, server.Command)
-		if len(server.Args) > 0 {
-			fmt.Fprintf(stdout, " %s", strings.Join(server.Args, " "))
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s", name, status, parallel, redacted.Command)
+		if len(redacted.Args) > 0 {
+			fmt.Fprintf(stdout, " %s", strings.Join(redacted.Args, " "))
 		}
-		if suffix := server.runtimeSummary(); suffix != "" {
+		if suffix := redacted.runtimeSummary(); suffix != "" {
 			fmt.Fprintf(stdout, "\t%s", suffix)
 		}
 		fmt.Fprintln(stdout)
@@ -216,10 +218,12 @@ func runMCPGet(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if name == "" && len(fs.Args()) > 0 {
-		name = strings.TrimSpace(fs.Args()[0])
+	rest := fs.Args()
+	if name == "" && len(rest) > 0 {
+		name = strings.TrimSpace(rest[0])
+		rest = rest[1:]
 	}
-	if name == "" || len(fs.Args()) > 1 {
+	if name == "" || len(rest) > 0 {
 		return fmt.Errorf("mcp get requires exactly one NAME")
 	}
 	server, ok, err := loadMCPServer(*configRaw, name, mcpConfigExplicit(fs))
@@ -277,29 +281,49 @@ func runMCPTest(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if name == "" && len(fs.Args()) > 0 {
-		name = strings.TrimSpace(fs.Args()[0])
+	rest := fs.Args()
+	if name == "" && len(rest) > 0 {
+		name = strings.TrimSpace(rest[0])
+		rest = rest[1:]
 	}
-	if name == "" || len(fs.Args()) > 1 {
+	if name == "" || len(rest) > 0 {
 		return fmt.Errorf("mcp test requires exactly one NAME")
 	}
 	server, ok, err := loadMCPServer(*configRaw, name, mcpConfigExplicit(fs))
 	if err != nil {
+		if *jsonOutput {
+			if writeErr := writeMCPDiagnosticError(stdout, name, err); writeErr != nil {
+				return writeErr
+			}
+		}
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("no MCP server named %q found", name)
+		err := fmt.Errorf("no MCP server named %q found", name)
+		if *jsonOutput {
+			if writeErr := writeMCPDiagnosticError(stdout, name, err); writeErr != nil {
+				return writeErr
+			}
+		}
+		return err
 	}
 	cfg, err := mcpBridgeServerConfig(name, server)
 	if err != nil {
+		if *jsonOutput {
+			if writeErr := writeMCPDiagnosticError(stdout, name, err); writeErr != nil {
+				return writeErr
+			}
+		}
 		return err
 	}
+	redacted := redactMCPServerConfig(server)
 	diagnostic := mcpTestDiagnostic{
 		Name:       name,
 		Enabled:    server.enabled(),
-		Command:    server.Command,
-		Args:       append([]string(nil), server.Args...),
+		Command:    redacted.Command,
+		Args:       append([]string(nil), redacted.Args...),
 		InheritEnv: server.InheritEnv,
+		Parallel:   server.SupportsParallelToolCalls,
 	}
 	client, err := mcpbridge.NewStdioClient(ctx, cfg)
 	if err != nil {
@@ -341,6 +365,7 @@ type mcpTestDiagnostic struct {
 	Command    string                  `json:"command"`
 	Args       []string                `json:"args,omitempty"`
 	InheritEnv bool                    `json:"inherit_env,omitempty"`
+	Parallel   bool                    `json:"parallel,omitempty"`
 	Error      string                  `json:"error,omitempty"`
 	Tools      []mcpTestToolDiagnostic `json:"tools,omitempty"`
 }
@@ -358,16 +383,19 @@ func writeMCPTestDiagnostic(stdout io.Writer, diagnostic mcpTestDiagnostic, json
 		return writeMCPJSON(stdout, diagnostic)
 	}
 	if diagnostic.OK {
+		if !diagnostic.Enabled {
+			fmt.Fprintln(stdout, "[warn] server is disabled in config; test started it anyway")
+		}
+		if diagnostic.InheritEnv {
+			fmt.Fprintln(stdout, "[warn] inherit_env=true forwards the full parent process environment")
+		}
+		if diagnostic.Parallel {
+			fmt.Fprintln(stdout, "[info] server tools are configured as parallel-allowed")
+		}
 		fmt.Fprintf(stdout, "[ok] MCP server %q started and returned %d tool(s).\n", diagnostic.Name, len(diagnostic.Tools))
 	} else {
 		fmt.Fprintf(stdout, "[error] MCP server %q failed: %s\n", diagnostic.Name, diagnostic.Error)
 		return nil
-	}
-	if !diagnostic.Enabled {
-		fmt.Fprintln(stdout, "[warn] server is disabled in config; test started it anyway")
-	}
-	if diagnostic.InheritEnv {
-		fmt.Fprintln(stdout, "[warn] inherit_env=true forwards the full parent process environment")
 	}
 	for _, discovered := range diagnostic.Tools {
 		var flags []string
@@ -376,9 +404,6 @@ func writeMCPTestDiagnostic(stdout io.Writer, diagnostic mcpTestDiagnostic, json
 		}
 		if discovered.Destructive {
 			flags = append(flags, "destructive")
-		}
-		if discovered.ConcurrencySafe {
-			flags = append(flags, "parallel")
 		}
 		suffix := ""
 		if len(flags) > 0 {
@@ -390,6 +415,14 @@ func writeMCPTestDiagnostic(stdout io.Writer, diagnostic mcpTestDiagnostic, json
 		}
 	}
 	return nil
+}
+
+func writeMCPDiagnosticError(stdout io.Writer, name string, err error) error {
+	return writeMCPJSON(stdout, mcpTestDiagnostic{
+		Name:  name,
+		OK:    false,
+		Error: err.Error(),
+	})
 }
 
 func normalizeMCPDurationFlag(flagName, value string) (string, error) {
@@ -443,7 +476,9 @@ func loadMCPServer(rawConfigPath, name string, explicit bool) (mcpServerConfig, 
 
 func redactMCPServerConfig(server mcpServerConfig) mcpServerConfig {
 	out := server
-	out.Args = append([]string(nil), server.Args...)
+	out.Command = redactMCPDisplayValue(server.Command)
+	out.Args = redactMCPArgs(server.Args)
+	out.CWD = redactMCPDisplayValue(server.CWD)
 	out.Env = map[string]string{}
 	for key := range server.Env {
 		out.Env[key] = "<redacted>"
@@ -451,11 +486,106 @@ func redactMCPServerConfig(server mcpServerConfig) mcpServerConfig {
 	if len(out.Env) == 0 {
 		out.Env = nil
 	}
-	if server.Enabled != nil {
-		enabled := *server.Enabled
-		out.Enabled = &enabled
+	enabled := server.enabled()
+	out.Enabled = &enabled
+	return out
+}
+
+func redactMCPArgs(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make([]string, len(args))
+	redactNext := false
+	for i, arg := range args {
+		if redactNext {
+			out[i] = "<redacted>"
+			redactNext = false
+			continue
+		}
+		key, _, hasValue := strings.Cut(arg, "=")
+		if hasValue && isMCPSecretKey(key) {
+			out[i] = key + "=<redacted>"
+			continue
+		}
+		if isMCPSecretKey(arg) {
+			out[i] = arg
+			redactNext = true
+			continue
+		}
+		out[i] = redactMCPDisplayValue(arg)
 	}
 	return out
+}
+
+func redactMCPDisplayValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return value
+	}
+	if redacted, ok := redactMCPURLUserinfo(value); ok {
+		return redacted
+	}
+	if looksLikeMCPSecretValue(value) {
+		return "<redacted>"
+	}
+	return value
+}
+
+func redactMCPURLUserinfo(value string) (string, bool) {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.User == nil || parsed.Scheme == "" || parsed.Host == "" {
+		return value, false
+	}
+	parsed.User = url.User("redacted")
+	return parsed.String(), true
+}
+
+func isMCPSecretKey(value string) bool {
+	value = strings.TrimLeft(strings.ToLower(strings.TrimSpace(value)), "-")
+	value = strings.ReplaceAll(value, "_", "-")
+	for _, marker := range []string{
+		"api-key",
+		"apikey",
+		"auth",
+		"authorization",
+		"bearer",
+		"client-secret",
+		"credential",
+		"password",
+		"passwd",
+		"private-key",
+		"secret",
+		"token",
+	} {
+		if value == marker || strings.HasSuffix(value, "-"+marker) || strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeMCPSecretValue(value string) bool {
+	value = strings.TrimSpace(value)
+	lower := strings.ToLower(value)
+	for _, prefix := range []string{
+		"sk-",
+		"sk_or_",
+		"ghp_",
+		"github_pat_",
+		"glpat-",
+		"xoxb-",
+		"xoxp-",
+		"ya29.",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	if len(value) >= 20 && strings.HasPrefix(value, "AKIA") {
+		return true
+	}
+	return false
 }
 
 func sortedStringKeys(m map[string]string) []string {
@@ -503,10 +633,12 @@ func runMCPRemove(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if name == "" && len(fs.Args()) > 0 {
-		name = strings.TrimSpace(fs.Args()[0])
+	rest := fs.Args()
+	if name == "" && len(rest) > 0 {
+		name = strings.TrimSpace(rest[0])
+		rest = rest[1:]
 	}
-	if name == "" || len(fs.Args()) > 1 {
+	if name == "" || len(rest) > 0 {
 		return fmt.Errorf("mcp remove requires exactly one NAME")
 	}
 	configPath, cfg, err := loadWritableConfig(*configRaw)

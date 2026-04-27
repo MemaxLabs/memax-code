@@ -309,11 +309,12 @@ memax-code mcp test docs
 memax-code mcp remove docs
 ```
 
-`mcp get` prints one server with environment values redacted. `mcp test`
-starts the configured server, performs the MCP initialize and tools/list
-handshake, and prints the model-facing tool names plus safety hints. Disabled
-servers stay in config but are not started. `supports_parallel_tool_calls`
-should only be enabled for servers whose tools are safe to call concurrently.
+`mcp get` prints one server with environment values and secret-looking
+command/argument values redacted. `mcp test` starts the configured server,
+performs the MCP initialize and tools/list handshake, and prints the
+model-facing tool names plus safety hints. Disabled servers stay in config but
+are not started. `supports_parallel_tool_calls` should only be enabled for
+servers whose tools are safe to call concurrently.
 MCP servers do not inherit the full parent process environment by default; pass
 secrets explicitly with `--env KEY=VALUE`, or use `--inherit-env` only for
 trusted local servers. MCP startup, tool calls, result sizes, and JSON-RPC
