@@ -2430,8 +2430,14 @@ func TestAppProgramComposerViewPaintsTrailingWhitespace(t *testing.T) {
 	}
 	lines := strings.Split(raw, "\n")
 	for _, line := range lines {
-		if !strings.Contains(line, ansi.EraseLineRight) || !strings.HasSuffix(line, appProgramResetSGR) {
-			t.Fatalf("composer line should explicitly erase to end of line and reset style:\n%q", raw)
+		if strings.Contains(line, ansi.EraseLineRight) {
+			t.Fatalf("composer view should leave line erasing to Bubble Tea renderer:\n%q", raw)
+		}
+		if strings.HasSuffix(line, appProgramResetSGR) {
+			t.Fatalf("composer line should leave the background active for renderer end-of-line erase:\n%q", raw)
+		}
+		if got := lipgloss.Width(line); got >= 20 {
+			t.Fatalf("composer line width = %d, want below 20 to avoid reflowable spacer cells:\n%q", got, raw)
 		}
 	}
 	stripped := ansi.Strip(raw)

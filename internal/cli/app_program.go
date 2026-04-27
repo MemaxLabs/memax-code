@@ -702,6 +702,9 @@ func (m *appProgramModel) helpView(width int) string {
 }
 
 func (m *appProgramModel) composerView(width int) string {
+	if width <= 0 {
+		width = defaultAppShellWidth
+	}
 	contentWidth := appProgramComposerContentWidth(width)
 	lines := appProgramTextareaRows(m.input.View(), m.input.Height())
 	if m.input.Value() == "" {
@@ -709,16 +712,12 @@ func (m *appProgramModel) composerView(width int) string {
 	}
 	for i, line := range lines {
 		line = appProgramTrimRightVisibleSpace(line)
-		lines[i] = appProgramComposerContentLine(appProgramFitLine(line, contentWidth))
+		lines[i] = appProgramComposerContentLine(appProgramFitLine(line, contentWidth), width)
 	}
-	// The live prompt must look like a full-width gray band, but literal
-	// trailing spaces reflow into ghost rows when terminals are resized.
-	// Keeping the background active until Bubble Tea's end-of-line erase lets
-	// the terminal paint the band without inserting reflowable cells.
 	rows := make([]string, 0, len(lines)+2)
-	rows = append(rows, appProgramComposerFillLine())
+	rows = append(rows, appProgramComposerFillLine(width))
 	rows = append(rows, lines...)
-	rows = append(rows, appProgramComposerFillLine())
+	rows = append(rows, appProgramComposerFillLine(width))
 	return strings.Join(rows, "\n")
 }
 
@@ -726,12 +725,24 @@ func appProgramNoWrap(s string) string {
 	return xansi.ResetModeAutoWrap + s + xansi.SetModeAutoWrap
 }
 
-func appProgramComposerFillLine() string {
-	return appProgramComposerBackgroundSGR + xansi.EraseLineRight + appProgramResetSGR
+func appProgramComposerFillLine(width int) string {
+	if width <= 0 {
+		return ""
+	}
+	// Keep the background active so Bubble Tea's own end-of-line erase paints
+	// the full-width band without writing reflowable spacer cells.
+	return appProgramResetSGR + appProgramComposerBackgroundSGR
 }
 
-func appProgramComposerContentLine(line string) string {
-	return appProgramComposerBackgroundSGR + " " + line + appProgramComposerBackgroundSGR + " " + xansi.EraseLineRight + appProgramResetSGR
+func appProgramComposerContentLine(line string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	body := appProgramResetSGR + appProgramComposerBackgroundSGR + " " + line
+	if xansi.StringWidth(body) > width {
+		body = xansi.Truncate(body, width, "")
+	}
+	return body + appProgramComposerBackgroundSGR
 }
 
 func appProgramTextareaRows(view string, height int) []string {

@@ -2732,6 +2732,16 @@ func TestInteractiveAppTmuxResizeVisiblePaneDoesNotGhostPrompt(t *testing.T) {
 		waitForTmuxPaneStableSingleLivePrompt(t, sessionName, "Ask Memax Code", 2*time.Second)
 	}
 	waitForTmuxPaneStableSingleLivePrompt(t, sessionName, "Ask Memax Code", 2*time.Second)
+	for i := 0; i < 12; i++ {
+		for _, size := range [][2]string{{"46", "20"}, {"150", "40"}} {
+			cmd := exec.Command("tmux", "resize-window", "-t", sessionName, "-x", size[0], "-y", size[1])
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("rapid resize tmux to %sx%s: %v\n%s", size[0], size[1], err, out)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	waitForTmuxPaneStableSingleLivePrompt(t, sessionName, "Ask Memax Code", 3*time.Second)
 
 	longDraft := "areaw rewarwar wrewar awer ewar awr awr"
 	if out, err := exec.Command("tmux", "send-keys", "-t", sessionName, "-l", longDraft).CombinedOutput(); err != nil {
@@ -2753,6 +2763,16 @@ func TestInteractiveAppTmuxResizeVisiblePaneDoesNotGhostPrompt(t *testing.T) {
 		}
 		waitForTmuxPaneStableSingleLiveDraft(t, sessionName, longDraft, 2*time.Second)
 	}
+	for i := 0; i < 12; i++ {
+		for _, size := range [][2]string{{"42", "18"}, {"140", "36"}} {
+			cmd := exec.Command("tmux", "resize-window", "-t", sessionName, "-x", size[0], "-y", size[1])
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("rapid resize tmux with draft to %sx%s: %v\n%s", size[0], size[1], err, out)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	waitForTmuxPaneStableSingleLiveDraft(t, sessionName, longDraft, 3*time.Second)
 }
 
 func waitForTmuxPaneStableSingleLiveDraft(t *testing.T, sessionName, draft string, timeout time.Duration) {
@@ -2805,6 +2825,9 @@ func tmuxPaneHasSingleLivePrompt(t *testing.T, sessionName, promptNeedle string)
 	}
 	out := string(capture)
 	if promptNeedle != "" && strings.Count(out, promptNeedle) != 1 {
+		return false, out
+	}
+	if count := strings.Count(out, "Welcome. Type a task or /help."); count > 1 {
 		return false, out
 	}
 	if count := strings.Count(out, "F1 help"); count != 1 {
