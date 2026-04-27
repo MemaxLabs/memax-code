@@ -434,6 +434,9 @@ func printInteractiveMCP(w io.Writer, opts options, raw string) {
 		}
 		loaded := "not loaded"
 		tools := runtimeTools[normalizeMCPServerNameForDisplay(name)]
+		if !server.enabled() {
+			tools = nil
+		}
 		if opts.RuntimeMCPReady && server.enabled() {
 			loaded = fmt.Sprintf("%d tool(s) loaded", len(tools))
 		} else if opts.RuntimeMCPReady {
@@ -524,7 +527,6 @@ func runtimeMCPToolsByServer(opts options) map[string][]runtimeMCPToolInfo {
 func runtimeMCPToolStatusCounts(opts options) runtimeMCPToolCounts {
 	enabledKeys := runtimeMCPEnabledServerKeys(opts.MCPServers)
 	disabledKeys := runtimeMCPDisabledServerKeys(opts.MCPServers)
-	allKeys := runtimeMCPServerKeys(opts.MCPServers)
 	var counts runtimeMCPToolCounts
 	for _, t := range opts.RuntimeMCPTools {
 		spec := t.Spec()
@@ -536,9 +538,7 @@ func runtimeMCPToolStatusCounts(opts options) runtimeMCPToolCounts {
 			counts.DisabledServer++
 			continue
 		}
-		if _, _, ok := splitRuntimeMCPToolName(spec.Name, allKeys); !ok {
-			counts.Orphan++
-		}
+		counts.Orphan++
 	}
 	return counts
 }

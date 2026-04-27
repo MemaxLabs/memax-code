@@ -2006,6 +2006,39 @@ func TestInteractiveMCPGroupsToolsForSanitizedServerNames(t *testing.T) {
 	}
 }
 
+func TestInteractiveMCPDoesNotShowEnabledToolsUnderDisabledServerOnKeyCollision(t *testing.T) {
+	opts := options{
+		MCPServers: map[string]mcpServerConfig{
+			"docs api": {Command: "docs-server"},
+			"docs.api": {Command: "disabled-docs-server", Enabled: boolPtr(false)},
+		},
+		RuntimeMCPReady: true,
+		RuntimeMCPTools: []tool.Tool{
+			tool.Definition{ToolSpec: model.ToolSpec{
+				Name:        "mcp__docs_api__search",
+				Description: "Search enabled docs",
+			}},
+		},
+	}
+
+	var out bytes.Buffer
+	printInteractiveMCP(&out, opts, "docs.api")
+	got := out.String()
+	for _, want := range []string{
+		"docs.api  disabled · serial · tools not loaded (server disabled)",
+		"diagnostics: memax-code mcp get 'docs.api'",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("interactive MCP output missing %q:\n%s", want, got)
+		}
+	}
+	for _, notWant := range []string{"tools:", "- search", "Search enabled docs"} {
+		if strings.Contains(got, notWant) {
+			t.Fatalf("interactive MCP output unexpectedly contains %q:\n%s", notWant, got)
+		}
+	}
+}
+
 func TestTruncateDisplayPreservesUTF8(t *testing.T) {
 	got := truncateDisplay("café café café", 5)
 	if got != "café…" {
