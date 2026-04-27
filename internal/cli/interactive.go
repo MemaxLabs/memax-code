@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +15,8 @@ import (
 )
 
 const interactiveScannerMaxBytes = 1024 * 1024
+
+var mcpDisplayNameSanitizer = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
 
 type interactiveInputObserver interface {
 	ObservePrompt(prompt string, buffer composerBuffer, composer *interactiveComposer)
@@ -397,8 +400,10 @@ func printInteractiveMCP(w io.Writer, opts options, raw string) {
 		}
 		loaded := "not loaded"
 		tools := runtimeTools[normalizeMCPServerNameForDisplay(name)]
-		if opts.RuntimeMCPReady {
+		if opts.RuntimeMCPReady && server.enabled() {
 			loaded = fmt.Sprintf("%d tool(s) loaded", len(tools))
+		} else if opts.RuntimeMCPReady {
+			loaded = "tools not loaded (server disabled)"
 		}
 		fmt.Fprintf(w, "  %s  %s · %s · %s\n", name, status, parallel, loaded)
 		fmt.Fprintf(w, "    command: %s\n", valueOrUnset(mcpServerCommandDisplay(server)))
@@ -416,7 +421,7 @@ func printInteractiveMCP(w io.Writer, opts options, raw string) {
 			for _, discovered := range summarizeRuntimeMCPTools(tools, 8) {
 				fmt.Fprintf(w, "      - %s", discovered.Name)
 				if discovered.Description != "" {
-					fmt.Fprintf(w, " — %s", discovered.Description)
+					fmt.Fprintf(w, " — %s", truncateDisplay(discovered.Description, 120))
 				}
 				if discovered.Flags != "" {
 					fmt.Fprintf(w, " [%s]", discovered.Flags)
@@ -430,9 +435,9 @@ func printInteractiveMCP(w io.Writer, opts options, raw string) {
 			fmt.Fprintln(w, "    tools: none advertised")
 		}
 		if server.enabled() {
-			fmt.Fprintf(w, "    diagnostics: memax-code mcp get %s | memax-code mcp test %s\n", name, name)
+			fmt.Fprintf(w, "    diagnostics: memax-code mcp get %s; memax-code mcp test %s\n", shellQuoteArg(name), shellQuoteArg(name))
 		} else {
-			fmt.Fprintf(w, "    diagnostics: memax-code mcp get %s\n", name)
+			fmt.Fprintf(w, "    diagnostics: memax-code mcp get %s\n", shellQuoteArg(name))
 		}
 	}
 }
@@ -445,9 +450,10 @@ type runtimeMCPToolInfo struct {
 
 func runtimeMCPToolsByServer(opts options) map[string][]runtimeMCPToolInfo {
 	out := map[string][]runtimeMCPToolInfo{}
+	serverKeys := runtimeMCPServerKeys(opts.MCPServers)
 	for _, t := range opts.RuntimeMCPTools {
 		spec := t.Spec()
-		server, remote, ok := splitRuntimeMCPToolName(spec.Name)
+		server, remote, ok := splitRuntimeMCPToolName(spec.Name, serverKeys)
 		if !ok {
 			continue
 		}
@@ -475,6 +481,26 @@ func runtimeMCPToolsByServer(opts options) map[string][]runtimeMCPToolInfo {
 	return out
 }
 
+func runtimeMCPServerKeys(servers map[string]mcpServerConfig) []string {
+	keys := make([]string, 0, len(servers))
+	seen := map[string]bool{}
+	for name := range servers {
+		key := normalizeMCPServerNameForDisplay(name)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if len(keys[i]) != len(keys[j]) {
+			return len(keys[i]) > len(keys[j])
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
+}
+
 func summarizeRuntimeMCPTools(tools []runtimeMCPToolInfo, limit int) []runtimeMCPToolInfo {
 	if limit <= 0 || len(tools) <= limit {
 		return tools
@@ -482,28 +508,39 @@ func summarizeRuntimeMCPTools(tools []runtimeMCPToolInfo, limit int) []runtimeMC
 	return tools[:limit]
 }
 
-func splitRuntimeMCPToolName(name string) (server, remote string, ok bool) {
-	parts := strings.SplitN(name, "__", 3)
-	if len(parts) != 3 || parts[0] != "mcp" || parts[1] == "" || parts[2] == "" {
-		return "", "", false
+func splitRuntimeMCPToolName(name string, serverKeys []string) (server, remote string, ok bool) {
+	for _, server := range serverKeys {
+		prefix := "mcp__" + server + "__"
+		if remote := strings.TrimPrefix(name, prefix); remote != name && remote != "" {
+			return server, remote, true
+		}
 	}
-	return parts[1], parts[2], true
+	return "", "", false
 }
 
 func normalizeMCPServerNameForDisplay(name string) string {
-	var b strings.Builder
-	for _, r := range strings.TrimSpace(name) {
-		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte('_')
-		}
-	}
-	return strings.Trim(b.String(), "_-")
+	return strings.Trim(mcpDisplayNameSanitizer.ReplaceAllString(strings.TrimSpace(name), "_"), "_-")
 }
 
 func oneLine(value string) string {
 	return strings.Join(strings.Fields(value), " ")
+}
+
+func truncateDisplay(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 1 {
+		return "…"
+	}
+	return value[:limit-1] + "…"
+}
+
+func shellQuoteArg(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func printInteractiveContext(ctx context.Context, w io.Writer, opts options, currentSession, raw string) error {

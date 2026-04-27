@@ -1877,9 +1877,9 @@ func TestInteractiveMCPShowsLoadedToolsAndDiagnostics(t *testing.T) {
 		"bounds: startup_timeout=30s tool_timeout=2m",
 		"- search — Search docs with extra spacing. [read-only, parallel]",
 		"- write — Write docs [destructive]",
-		"diagnostics: memax-code mcp get docs | memax-code mcp test docs",
-		"disabled  disabled · serial · 0 tool(s) loaded",
-		"diagnostics: memax-code mcp get disabled",
+		"diagnostics: memax-code mcp get 'docs'; memax-code mcp test 'docs'",
+		"disabled  disabled · serial · tools not loaded (server disabled)",
+		"diagnostics: memax-code mcp get 'disabled'",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("interactive MCP output missing %q:\n%s", want, got)
@@ -1889,6 +1889,49 @@ func TestInteractiveMCPShowsLoadedToolsAndDiagnostics(t *testing.T) {
 		if strings.Contains(got, leaked) {
 			t.Fatalf("interactive MCP output leaked %q:\n%s", leaked, got)
 		}
+	}
+}
+
+func TestInteractiveMCPGroupsToolsForSanitizedServerNames(t *testing.T) {
+	opts := options{
+		MCPServers: map[string]mcpServerConfig{
+			"docs / api": {Command: "docs-server"},
+			"my__server": {Command: "other-server"},
+		},
+		RuntimeMCPReady: true,
+		RuntimeMCPTools: []tool.Tool{
+			tool.Definition{ToolSpec: model.ToolSpec{
+				Name:        "mcp__docs_api__search",
+				Description: strings.Repeat("long description ", 20),
+				ReadOnly:    true,
+			}},
+			tool.Definition{ToolSpec: model.ToolSpec{
+				Name:        "mcp__my__server__inspect",
+				Description: "Inspect safely",
+			}},
+		},
+	}
+
+	var out bytes.Buffer
+	printInteractiveMCP(&out, opts, "")
+	got := out.String()
+	for _, want := range []string{
+		"docs / api  enabled · serial · 1 tool(s) loaded",
+		"- search — long description",
+		"diagnostics: memax-code mcp get 'docs / api'; memax-code mcp test 'docs / api'",
+		"my__server  enabled · serial · 1 tool(s) loaded",
+		"- inspect — Inspect safely",
+		"diagnostics: memax-code mcp get 'my__server'; memax-code mcp test 'my__server'",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("interactive MCP output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "none advertised") {
+		t.Fatalf("interactive MCP output failed to group sanitized tools:\n%s", got)
+	}
+	if strings.Contains(got, strings.Repeat("long description ", 12)) {
+		t.Fatalf("interactive MCP output did not truncate long tool description:\n%s", got)
 	}
 }
 
