@@ -129,6 +129,56 @@ Check correctness first.
 	}
 }
 
+func TestInspectToolsOmitsSkillToolsWhenDefaultDirsAreEmpty(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--inspect-tools",
+		"--cwd", cwd,
+		"--provider", "openai",
+		"--model", "example-model",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	for _, notWant := range []string{
+		"tool: search_skills",
+		"tool: load_skill",
+	} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("inspect output included %q with empty default skill dirs:\n%s", notWant, out)
+		}
+	}
+}
+
+func TestInspectToolsIncludesSkillToolsForExplicitEmptySkillDir(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--inspect-tools",
+		"--cwd", repoRoot(t),
+		"--skill-dir", dir,
+		"--provider", "openai",
+		"--model", "example-model",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"tool: search_skills",
+		"tool: load_skill",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("inspect output missing %q for explicit empty skill dir:\n%s", want, out)
+		}
+	}
+}
+
 func TestInteractiveSkillsCommandListsDiscoveredSkills(t *testing.T) {
 	dir := t.TempDir()
 	writeTestSkill(t, dir, "cli", `---

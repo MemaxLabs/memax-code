@@ -334,7 +334,9 @@ and reuse the discovered tools across turns.
 
 Memax Code discovers local skills by default from user and workspace skill
 directories containing `*/SKILL.md` files. Workspace skills load after user
-skills, so project-local skills take precedence when names collide. Skills use progressive disclosure:
+skills, so project-local skills take precedence when names collide. The default
+search order is `~/.memax-code/skills`, `.memax-code/skills`, `.agents/skills`,
+`.claude/skills`, then `.codex/skills`. Skills use progressive disclosure:
 the model sees lightweight metadata first, can search large catalogs with
 `search_skills`, and must call `load_skill` before full instructions enter
 context.

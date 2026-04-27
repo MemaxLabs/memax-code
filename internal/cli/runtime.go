@@ -424,7 +424,11 @@ func buildStackWithModelForRun(ctx context.Context, opts options, client model.C
 	} else {
 		baseRegistry = baseRegistry.Clone()
 	}
-	if opts.SkillsEnabled {
+	configureSkills, err := shouldConfigureSkillRuntime(ctx, opts)
+	if err != nil {
+		return coding.Stack{}, nil, fmt.Errorf("configure skills: %w", err)
+	}
+	if configureSkills {
 		source := &skill.CachedSource{Source: cliSkillSource(opts.SkillDirs)}
 		config.Base.SkillSource = source
 		config.Base.SkillDisclosure = skill.DisclosureProgressive
@@ -692,6 +696,9 @@ func workerSubagentOptions(client model.Client, config coding.Config, webFetch t
 	// arbitrary parent Base.Tools, so delegation stays bounded and cannot
 	// accidentally regain run_subagent or host-specific tools.
 	child.Base.Tools = nil
+	child.Base.SkillSource = nil
+	child.Base.SkillResourceSource = nil
+	child.Base.SkillDisclosure = ""
 	if webFetch != nil {
 		child.Base.Tools = tool.NewRegistry(webFetch)
 	}

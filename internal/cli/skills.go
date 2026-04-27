@@ -97,6 +97,22 @@ func cliSkillSource(dirs []string) skill.Source {
 	})
 }
 
+func shouldConfigureSkillRuntime(ctx context.Context, opts options) (bool, error) {
+	if !opts.SkillsEnabled {
+		return false, nil
+	}
+	if opts.SkillDirsConfigured {
+		return true, nil
+	}
+	items, err := loadCLISkills(ctx, opts.SkillDirs)
+	if err != nil {
+		// Keep the skill tools available so /skills or search_skills can surface
+		// the concrete loader error instead of silently hiding a broken skill dir.
+		return true, nil
+	}
+	return len(items) > 0, nil
+}
+
 func loadCLISkills(ctx context.Context, dirs []string) ([]skill.Skill, error) {
 	var out []skill.Skill
 	for _, dir := range dirs {
@@ -163,15 +179,15 @@ func printInteractiveSkills(ctx context.Context, w io.Writer, opts options) {
 		fmt.Fprintln(w, "skills: disabled")
 		return
 	}
+	for _, dir := range opts.SkillDirs {
+		fmt.Fprintf(w, "  dir: %s\n", dir)
+	}
 	items, err := loadCLISkills(ctx, opts.SkillDirs)
 	if err != nil {
 		fmt.Fprintf(w, "skills: error: %v\n", err)
 		return
 	}
 	fmt.Fprintf(w, "skills: %d loaded\n", len(items))
-	for _, dir := range opts.SkillDirs {
-		fmt.Fprintf(w, "  dir: %s\n", dir)
-	}
 	if len(items) == 0 {
 		return
 	}
