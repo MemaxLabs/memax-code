@@ -504,11 +504,11 @@ func redactMCPArgs(args []string) []string {
 			continue
 		}
 		key, _, hasValue := strings.Cut(arg, "=")
-		if hasValue && isMCPSecretKey(key) {
+		if hasValue && isMCPSecretFlag(key) {
 			out[i] = key + "=<redacted>"
 			continue
 		}
-		if isMCPSecretKey(arg) {
+		if isMCPSecretFlag(arg) {
 			out[i] = arg
 			redactNext = true
 			continue
@@ -519,14 +519,14 @@ func redactMCPArgs(args []string) []string {
 }
 
 func redactMCPDisplayValue(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
 		return value
 	}
-	if redacted, ok := redactMCPURLUserinfo(value); ok {
+	if redacted, ok := redactMCPURLUserinfo(trimmed); ok {
 		return redacted
 	}
-	if looksLikeMCPSecretValue(value) {
+	if looksLikeMCPSecretValue(trimmed) {
 		return "<redacted>"
 	}
 	return value
@@ -541,7 +541,11 @@ func redactMCPURLUserinfo(value string) (string, bool) {
 	return parsed.String(), true
 }
 
-func isMCPSecretKey(value string) bool {
+func isMCPSecretFlag(value string) bool {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "-") {
+		return false
+	}
 	value = strings.TrimLeft(strings.ToLower(strings.TrimSpace(value)), "-")
 	value = strings.ReplaceAll(value, "_", "-")
 	for _, marker := range []string{
@@ -558,7 +562,7 @@ func isMCPSecretKey(value string) bool {
 		"secret",
 		"token",
 	} {
-		if value == marker || strings.HasSuffix(value, "-"+marker) || strings.Contains(value, marker) {
+		if value == marker || strings.HasSuffix(value, "-"+marker) {
 			return true
 		}
 	}
