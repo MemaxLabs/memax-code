@@ -19,9 +19,11 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/mcpbridge"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/coding"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/skilltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
@@ -202,7 +204,10 @@ func inspectTools(ctx context.Context, stdout io.Writer, opts options) error {
 		return err
 	}
 	defer cleanup()
-	specs := append([]model.ToolSpec(nil), stack.Registry().Specs()...)
+	specs, err := memaxagent.EffectiveToolSpecs(stack.WithModel(nil))
+	if err != nil {
+		return err
+	}
 	sort.SliceStable(specs, func(i, j int) bool {
 		return specs[i].Name < specs[j].Name
 	})
@@ -418,6 +423,18 @@ func buildStackWithModelForRun(ctx context.Context, opts options, client model.C
 		baseRegistry = tool.NewRegistry()
 	} else {
 		baseRegistry = baseRegistry.Clone()
+	}
+	if opts.SkillsEnabled {
+		source := &skill.CachedSource{Source: cliSkillSource(opts.SkillDirs)}
+		config.Base.SkillSource = source
+		config.Base.SkillDisclosure = skill.DisclosureProgressive
+		searchSkills, err := skilltools.NewSearchTool(skilltools.Config{Source: source})
+		if err != nil {
+			return coding.Stack{}, nil, fmt.Errorf("configure skills: %w", err)
+		}
+		if err := baseRegistry.Register(searchSkills); err != nil {
+			return coding.Stack{}, nil, fmt.Errorf("configure skills: %w", err)
+		}
 	}
 	if webFetch != nil {
 		if err := baseRegistry.Register(webFetch); err != nil {

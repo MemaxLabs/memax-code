@@ -68,6 +68,165 @@ func TestDryRunPrintsResolvedConfig(t *testing.T) {
 	}
 }
 
+func TestDryRunLoadsLocalSkills(t *testing.T) {
+	dir := t.TempDir()
+	writeTestSkill(t, dir, "review", `---
+description: Review code changes.
+when_to_use: reviewing a diff
+tags: review, quality
+---
+Check correctness first.
+`)
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--dry-run",
+		"--cwd", repoRoot(t),
+		"--skill-dir", dir,
+		"--provider", "openai",
+		"--model", "example-model",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"skills: true",
+		"skill_dir: " + dir,
+		"skills_loaded: 1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestInspectToolsIncludesProgressiveSkillTools(t *testing.T) {
+	dir := t.TempDir()
+	writeTestSkill(t, dir, "review", `---
+description: Review code changes.
+---
+Check correctness first.
+`)
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--inspect-tools",
+		"--cwd", repoRoot(t),
+		"--skill-dir", dir,
+		"--provider", "openai",
+		"--model", "example-model",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"tool: search_skills",
+		"tool: load_skill",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("inspect output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestInteractiveSkillsCommandListsDiscoveredSkills(t *testing.T) {
+	dir := t.TempDir()
+	writeTestSkill(t, dir, "cli", `---
+description: Use when improving CLI commands.
+when_to_use: changing CLI behavior
+---
+Prefer small command contracts.
+`)
+	var stdout, stderr bytes.Buffer
+	err := RunWithIO(context.Background(), []string{
+		"--interactive",
+		"--cwd", repoRoot(t),
+		"--skill-dir", dir,
+		"--provider", "openai",
+		"--model", "example-model",
+	}, strings.NewReader("/skills\n/quit\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("RunWithIO() error = %v", err)
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"skills: 1 loaded",
+		"- cli: Use when improving CLI commands.",
+		"use when: changing CLI behavior",
+		filepath.Join(dir, "cli", "SKILL.md"),
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDefaultSkillDirsLoadUserBeforeWorkspace(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dirs := defaultSkillDirs(cwd)
+	if len(dirs) < 2 {
+		t.Fatalf("defaultSkillDirs() returned too few dirs: %#v", dirs)
+	}
+	userDir := filepath.Join(home, ".memax-code", "skills")
+	workspaceDir := filepath.Join(cwd, ".memax-code", "skills")
+	if dirs[0] != userDir {
+		t.Fatalf("defaultSkillDirs()[0] = %q, want user dir %q; dirs=%#v", dirs[0], userDir, dirs)
+	}
+	if dirs[1] != workspaceDir {
+		t.Fatalf("defaultSkillDirs()[1] = %q, want workspace dir %q; dirs=%#v", dirs[1], workspaceDir, dirs)
+	}
+}
+
+func TestLoadCLISkillsWorkspaceOverridesUserSkillName(t *testing.T) {
+	userDir := t.TempDir()
+	workspaceDir := t.TempDir()
+	writeTestSkill(t, userDir, "review", `---
+description: User review skill.
+---
+User skill content.
+`)
+	writeTestSkill(t, workspaceDir, "review", `---
+description: Workspace review skill.
+---
+Workspace skill content.
+`)
+
+	items, err := loadCLISkills(context.Background(), []string{userDir, workspaceDir})
+	if err != nil {
+		t.Fatalf("loadCLISkills() error = %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("loadCLISkills() loaded %d skills, want 1: %#v", len(items), items)
+	}
+	if got, want := items[0].Description, "Workspace review skill."; got != want {
+		t.Fatalf("skill description = %q, want %q", got, want)
+	}
+	if got, want := items[0].Content, "Workspace skill content."; got != want {
+		t.Fatalf("skill content = %q, want %q", got, want)
+	}
+}
+
+func TestDisabledSkillsWarnWhenSkillDirsConfigured(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"--dry-run",
+		"--no-skills",
+		"--skill-dir", dir,
+		"--provider", "openai",
+		"--model", "example-model",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(stderr.String(), "warning: skills are disabled; configured skill directories will be ignored") {
+		t.Fatalf("stderr missing disabled-skills warning:\n%s", stderr.String())
+	}
+}
+
 func TestDryRunPrintsEffortOverride(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := Run(context.Background(), []string{
@@ -3561,6 +3720,17 @@ func repoRoot(t *testing.T) string {
 		t.Fatalf("resolve repo root: %v", err)
 	}
 	return root
+}
+
+func writeTestSkill(t *testing.T, root, name, content string) {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create skill dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write skill: %v", err)
+	}
 }
 
 func userMessage(text string) model.Message {

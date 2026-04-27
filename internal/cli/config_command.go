@@ -58,7 +58,11 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 	webEnabled := fs.Bool("web", true, "write web=true to enable default web tools")
 	noWeb := fs.Bool("no-web", false, "write web=false to disable default web tools")
 	webFetchMaxBytes := fs.Int("web-fetch-max-bytes", defaultWebFetchMaxBytes, "maximum bytes the default web fetcher reads per URL")
+	skillsEnabled := fs.Bool("skills", true, "write skills=true to enable local SKILL.md discovery")
+	noSkills := fs.Bool("no-skills", false, "write skills=false to disable local SKILL.md discovery")
+	skillDirs := newStringListFlag()
 	verifyCommands := newVerifyCommandsFlag()
+	fs.Var(skillDirs, "skill-dir", "write a local skills directory containing */SKILL.md; repeat to include multiple dirs")
 	fs.Var(verifyCommands, "verify-command", "add a verification command as name=command; repeat for test, lint, typecheck, or default (default wins over test for empty/default requests)")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: memax-code config init [flags]")
@@ -152,6 +156,19 @@ func runConfigInit(args []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("web-fetch-max-bytes must be greater than 0")
 		}
 		cfg.WebFetchMaxBytes = intPtr(normalizedWebFetchMaxBytes(*webFetchMaxBytes))
+	}
+	noSkillsFlagSet := flagWasSet(fs, "no-skills")
+	if flagWasSet(fs, "skills") && noSkillsFlagSet {
+		return fmt.Errorf("--skills cannot be combined with --no-skills; choose one")
+	}
+	if noSkillsFlagSet {
+		*skillsEnabled = !*noSkills
+	}
+	if flagWasSet(fs, "skills") || noSkillsFlagSet {
+		cfg.Skills = boolPtr(*skillsEnabled)
+	}
+	if skillDirs.set {
+		cfg.SkillDirs = append([]string(nil), skillDirs.values...)
 	}
 	if verifyCommands.set {
 		cfg.VerifyCommands = cloneStringMap(verifyCommands.values)

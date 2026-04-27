@@ -163,6 +163,7 @@ func interactiveCommandSpecs() []interactiveCommandSpec {
 		{Name: "/help", Usage: "/help", Description: "show available slash commands"},
 		{Name: "/status", Usage: "/status", Description: "show active runtime settings"},
 		{Name: "/context", Usage: "/context [TARGET]", Description: "show context budgets and active checkpoint"},
+		{Name: "/skills", Usage: "/skills", Description: "list discovered local skills"},
 		{Name: "/mcp", Usage: "/mcp [NAME]", Description: "show configured MCP servers and loaded tools"},
 		{Name: "/session", Usage: "/session", Description: "show the active session"},
 		{Name: "/pick", Usage: "/pick", Description: "list recent sessions with numbers"},
@@ -222,6 +223,8 @@ func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, cu
 		if err := printInteractiveContext(ctx, w, opts, *currentSession, arg); err != nil {
 			fmt.Fprintf(w, "error: %v\n", err)
 		}
+	case "/skills":
+		printInteractiveSkills(ctx, w, opts)
 	case "/mcp":
 		printInteractiveMCP(w, opts, arg)
 	case "/draft":
@@ -343,6 +346,16 @@ func printInteractiveStatus(ctx context.Context, w io.Writer, opts options, curr
 	fmt.Fprintf(w, "  active_session: %s\n", valueOrUnset(currentSession))
 	fmt.Fprintf(w, "  saved_sessions: %d\n", len(candidates))
 	fmt.Fprintf(w, "  verification: %s\n", verificationMode(opts.CWD, opts.VerifyCommands))
+	if opts.SkillsEnabled {
+		count, err := countCLISkills(ctx, opts.SkillDirs)
+		if err != nil {
+			fmt.Fprintf(w, "  skills: error: %v\n", err)
+		} else {
+			fmt.Fprintf(w, "  skills: %d loaded\n", count)
+		}
+	} else {
+		fmt.Fprintln(w, "  skills: disabled")
+	}
 	if len(opts.VerifyCommands) > 0 {
 		for _, name := range sortedMapKeys(opts.VerifyCommands) {
 			fmt.Fprintf(w, "  verify_command.%s: %s\n", name, opts.VerifyCommands[name])

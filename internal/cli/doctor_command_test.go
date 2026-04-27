@@ -102,6 +102,41 @@ func TestDoctorReportsCustomVerification(t *testing.T) {
 	}
 }
 
+func TestDoctorNoSkillsWarnsOnlyForExplicitSkillDirs(t *testing.T) {
+	clearDoctorEnv(t)
+	t.Setenv("HOME", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{
+		"doctor",
+		"--no-skills",
+		"--cwd", repoRoot(t),
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "[ok] skills: disabled") {
+		t.Fatalf("doctor output missing disabled status:\n%s", out)
+	} else if strings.Contains(out, "configured skill directories ignored") {
+		t.Fatalf("doctor unexpectedly warned for default skill dirs:\n%s", out)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	err = Run(context.Background(), []string{
+		"doctor",
+		"--no-skills",
+		"--skill-dir", t.TempDir(),
+		"--cwd", repoRoot(t),
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run() with explicit skill dir error = %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "[warn] skills: disabled; configured skill directories ignored") {
+		t.Fatalf("doctor output missing explicit-dir warning:\n%s", out)
+	}
+}
+
 func TestDoctorFailsForInvalidSessionDir(t *testing.T) {
 	clearDoctorEnv(t)
 	t.Setenv("HOME", t.TempDir())
@@ -266,6 +301,8 @@ func clearDoctorEnv(t *testing.T) {
 		"MEMAX_CODE_SESSION_DIR",
 		"MEMAX_CODE_HISTORY_FILE",
 		"MEMAX_CODE_INHERIT_COMMAND_ENV",
+		"MEMAX_CODE_SKILLS",
+		"MEMAX_CODE_SKILL_DIRS",
 		"OPENAI_API_KEY",
 		"OPENAI_MODEL",
 		"ANTHROPIC_API_KEY",

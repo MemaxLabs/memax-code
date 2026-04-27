@@ -69,37 +69,40 @@ func RunWithIO(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 }
 
 type options struct {
-	Prompt            string
-	CWD               string
-	Provider          provider
-	Model             string
-	Profile           string
-	Effort            string
-	Preset            string
-	UI                renderMode
-	EventStream       eventStreamMode
-	ConfigPath        string
-	ConfigLoaded      bool
-	Compaction        compactionMode
-	ContextWindow     int
-	ContextSummary    int
-	ModelCapabilities model.Capabilities
-	ModelRegistryInfo string
-	SessionDir        string
-	HistoryFile       string
-	ResumeSessionID   string
-	ListSessions      bool
-	ShowSessionID     string
-	InspectTools      bool
-	DryRun            bool
-	Interactive       bool
-	InheritCommandEnv bool
-	WebEnabled        bool
-	WebFetchMaxBytes  int
-	VerifyCommands    map[string]string
-	MCPServers        map[string]mcpServerConfig
-	RuntimeMCPTools   []tool.Tool
-	RuntimeMCPReady   bool
+	Prompt              string
+	CWD                 string
+	Provider            provider
+	Model               string
+	Profile             string
+	Effort              string
+	Preset              string
+	UI                  renderMode
+	EventStream         eventStreamMode
+	ConfigPath          string
+	ConfigLoaded        bool
+	Compaction          compactionMode
+	ContextWindow       int
+	ContextSummary      int
+	ModelCapabilities   model.Capabilities
+	ModelRegistryInfo   string
+	SessionDir          string
+	HistoryFile         string
+	ResumeSessionID     string
+	ListSessions        bool
+	ShowSessionID       string
+	InspectTools        bool
+	DryRun              bool
+	Interactive         bool
+	InheritCommandEnv   bool
+	WebEnabled          bool
+	WebFetchMaxBytes    int
+	SkillsEnabled       bool
+	SkillDirs           []string
+	SkillDirsConfigured bool
+	VerifyCommands      map[string]string
+	MCPServers          map[string]mcpServerConfig
+	RuntimeMCPTools     []tool.Tool
+	RuntimeMCPReady     bool
 }
 
 func parseArgs(args []string, output io.Writer) (options, error) {
@@ -143,6 +146,10 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	webEnabled := fs.Bool("web", true, "enable default web tools")
 	noWeb := fs.Bool("no-web", false, "disable default web tools")
 	webFetchMaxBytes := fs.Int("web-fetch-max-bytes", defaultWebFetchMaxBytes, "maximum bytes the default web fetcher reads per URL")
+	skillDirsFlag := newStringListFlag()
+	skillsEnabled := fs.Bool("skills", true, "enable local SKILL.md discovery")
+	noSkills := fs.Bool("no-skills", false, "disable local SKILL.md discovery")
+	fs.Var(skillDirsFlag, "skill-dir", "replace default skill discovery with a local skills directory containing */SKILL.md; repeat to include multiple dirs")
 
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: memax-code [flags] [PROMPT]\n")
@@ -320,6 +327,27 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		return options{}, fmt.Errorf("web-fetch-max-bytes must be greater than 0")
 	}
 	webFetchMax = normalizedWebFetchMaxBytes(webFetchMax)
+	skillsFlagSet := flagWasSet(fs, "skills")
+	noSkillsFlagSet := flagWasSet(fs, "no-skills")
+	if skillsFlagSet && noSkillsFlagSet {
+		return options{}, fmt.Errorf("--skills cannot be combined with --no-skills; choose one")
+	}
+	if noSkillsFlagSet {
+		skillsFlagSet = true
+		*skillsEnabled = !*noSkills
+	}
+	skills, err := boolSetting(*skillsEnabled, skillsFlagSet, "MEMAX_CODE_SKILLS", cfg.Skills, true)
+	if err != nil {
+		return options{}, err
+	}
+	skillDirsConfigured := flagWasSet(fs, "skill-dir") || strings.TrimSpace(os.Getenv("MEMAX_CODE_SKILL_DIRS")) != "" || len(cfg.SkillDirs) > 0
+	if !skills && skillDirsConfigured {
+		fmt.Fprintln(output, "warning: skills are disabled; configured skill directories will be ignored")
+	}
+	skillDirs, err := skillDirsSetting(skillDirsFlag, flagWasSet(fs, "skill-dir"), "MEMAX_CODE_SKILL_DIRS", cfg.SkillDirs, absCWD)
+	if err != nil {
+		return options{}, err
+	}
 	verifyCommands, verifyCommandsSource, err := verifyCommandsSetting(verifyCommandsFlag, "MEMAX_CODE_VERIFY_COMMANDS", cfg.VerifyCommands)
 	if err != nil {
 		if verifyCommandsSource == settingSourceConfig {
@@ -329,31 +357,34 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 	}
 
 	opts = options{
-		Prompt:            strings.TrimSpace(strings.Join(fs.Args(), " ")),
-		CWD:               absCWD,
-		Provider:          providerName,
-		Model:             strings.TrimSpace(modelValue),
-		Profile:           strings.TrimSpace(profileSetting.Value),
-		Effort:            strings.TrimSpace(effortSetting.Value),
-		Preset:            strings.TrimSpace(presetSetting.Value),
-		UI:                ui,
-		EventStream:       eventStreamMode,
-		ConfigPath:        configPath,
-		ConfigLoaded:      configLoaded,
-		Compaction:        compaction,
-		ContextWindow:     contextWindowValue,
-		ContextSummary:    contextSummaryValue,
-		SessionDir:        resolvedSessionDir,
-		HistoryFile:       resolvedHistoryFile,
-		ResumeSessionID:   strings.TrimSpace(*resumeSessionID),
-		ListSessions:      *listSessionsFlag,
-		InspectTools:      *inspectTools,
-		DryRun:            *dryRun,
-		InheritCommandEnv: inheritEnv,
-		WebEnabled:        web,
-		WebFetchMaxBytes:  webFetchMax,
-		VerifyCommands:    verifyCommands,
-		MCPServers:        cloneMCPServers(cfg.MCPServers),
+		Prompt:              strings.TrimSpace(strings.Join(fs.Args(), " ")),
+		CWD:                 absCWD,
+		Provider:            providerName,
+		Model:               strings.TrimSpace(modelValue),
+		Profile:             strings.TrimSpace(profileSetting.Value),
+		Effort:              strings.TrimSpace(effortSetting.Value),
+		Preset:              strings.TrimSpace(presetSetting.Value),
+		UI:                  ui,
+		EventStream:         eventStreamMode,
+		ConfigPath:          configPath,
+		ConfigLoaded:        configLoaded,
+		Compaction:          compaction,
+		ContextWindow:       contextWindowValue,
+		ContextSummary:      contextSummaryValue,
+		SessionDir:          resolvedSessionDir,
+		HistoryFile:         resolvedHistoryFile,
+		ResumeSessionID:     strings.TrimSpace(*resumeSessionID),
+		ListSessions:        *listSessionsFlag,
+		InspectTools:        *inspectTools,
+		DryRun:              *dryRun,
+		InheritCommandEnv:   inheritEnv,
+		WebEnabled:          web,
+		WebFetchMaxBytes:    webFetchMax,
+		SkillsEnabled:       skills,
+		SkillDirs:           skillDirs,
+		SkillDirsConfigured: skillDirsConfigured,
+		VerifyCommands:      verifyCommands,
+		MCPServers:          cloneMCPServers(cfg.MCPServers),
 	}
 	if interactive {
 		if *dryRun {
@@ -463,6 +494,8 @@ type fileConfig struct {
 	InheritCommandEnv *bool                      `json:"inherit_command_env,omitempty"`
 	Web               *bool                      `json:"web,omitempty"`
 	WebFetchMaxBytes  *int                       `json:"web_fetch_max_bytes,omitempty"`
+	Skills            *bool                      `json:"skills,omitempty"`
+	SkillDirs         []string                   `json:"skill_dirs,omitempty"`
 	VerifyCommands    map[string]string          `json:"verify_commands,omitempty"`
 	MCPServers        map[string]mcpServerConfig `json:"mcp_servers,omitempty"`
 }
@@ -710,6 +743,29 @@ func (f *stringFlag) Set(value string) error {
 	return nil
 }
 
+type stringListFlag struct {
+	values []string
+	set    bool
+}
+
+func newStringListFlag() *stringListFlag {
+	return &stringListFlag{}
+}
+
+func (f *stringListFlag) String() string {
+	return strings.Join(f.values, string(os.PathListSeparator))
+}
+
+func (f *stringListFlag) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("value is required")
+	}
+	f.values = append(f.values, value)
+	f.set = true
+	return nil
+}
+
 func envDefault(key, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 		return value
@@ -768,6 +824,18 @@ func renderDryRun(w io.Writer, opts options) error {
 	fmt.Fprintf(w, "web: %t\n", opts.WebEnabled)
 	if opts.WebEnabled {
 		fmt.Fprintf(w, "web_fetch_max_bytes: %d\n", opts.WebFetchMaxBytes)
+	}
+	fmt.Fprintf(w, "skills: %t\n", opts.SkillsEnabled)
+	if opts.SkillsEnabled {
+		for _, dir := range opts.SkillDirs {
+			fmt.Fprintf(w, "skill_dir: %s\n", dir)
+		}
+		count, err := countCLISkills(context.Background(), opts.SkillDirs)
+		if err != nil {
+			fmt.Fprintf(w, "skills_status: error: %v\n", err)
+		} else {
+			fmt.Fprintf(w, "skills_loaded: %d\n", count)
+		}
 	}
 	if len(opts.VerifyCommands) > 0 {
 		for _, name := range sortedMapKeys(opts.VerifyCommands) {

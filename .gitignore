@@ -16,6 +16,8 @@
 *.coverprofile
 coverage.out
 coverage.html
+go.work
+go.work.sum
 
 # Project-local Memax session/runtime state
 .memax-code/
@@ -33,3 +35,6 @@ coverage.html
 *.swp
 *.swo
 *~
+
+# Refs
+.refs/

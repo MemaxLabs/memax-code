@@ -38,6 +38,7 @@ This repository is intentionally separate from the SDK:
 - root-confined workspace and command tools
 - bounded `web_fetch` for HTTP(S) pages with private-network protections
 - stdio MCP server tools loaded from local config
+- local `SKILL.md` bundles with progressive metadata-first loading
 - managed command sessions for long-running processes
 - bounded subagents for exploration, review, and isolated worker tasks
 - automatic context compaction with model-visible summaries for long sessions
@@ -145,6 +146,11 @@ Example config:
   "inherit_command_env": true,
   "web": true,
   "web_fetch_max_bytes": 524288,
+  "skills": true,
+  "skill_dirs": [
+    ".memax-code/skills",
+    ".agents/skills"
+  ],
   "mcp_servers": {
     "docs": {
       "command": "docs-mcp-server",
@@ -214,6 +220,7 @@ control local state without calling a model:
 /help
 /status
 /context
+/skills
 /mcp
 /pick
 /show latest
@@ -322,6 +329,28 @@ message sizes are bounded by SDK defaults; config can override them with
 `startup_timeout`, `tool_timeout`, `max_result_bytes`, and
 `max_rpc_message_bytes`. Interactive sessions start configured MCP servers once
 and reuse the discovered tools across turns.
+
+### Skills
+
+Memax Code discovers local skills by default from user and workspace skill
+directories containing `*/SKILL.md` files. Workspace skills load after user
+skills, so project-local skills take precedence when names collide. Skills use progressive disclosure:
+the model sees lightweight metadata first, can search large catalogs with
+`search_skills`, and must call `load_skill` before full instructions enter
+context.
+
+Useful options:
+
+```sh
+memax-code --skill-dir .memax-code/skills "use the matching project skill"
+memax-code --no-skills "ignore local skills for this run"
+```
+
+`--skill-dir` replaces the default discovery list for that run; repeat it for
+each directory you want included.
+
+Inside the interactive shell, `/skills` lists discovered skill metadata and
+source paths. `memax-code doctor` validates local skill loading.
 
 ### Verification
 

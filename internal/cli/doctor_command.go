@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -136,11 +137,29 @@ func doctorChecks(opts options) []doctorCheck {
 		apiKeyDoctorCheck(opts),
 		sessionDirDoctorCheck(opts.SessionDir),
 		historyFileDoctorCheck(opts.HistoryFile),
+		skillsDoctorCheck(opts),
 		verificationDoctorCheck(mode, opts.VerifyCommands),
 		commandDoctorCheck("git", false),
 		commandDoctorCheck("go", mode == "go"),
 	}
 	return checks
+}
+
+func skillsDoctorCheck(opts options) doctorCheck {
+	if !opts.SkillsEnabled {
+		if opts.SkillDirsConfigured {
+			return doctorCheck{Level: doctorWarn, Name: "skills", Message: "disabled; configured skill directories ignored"}
+		}
+		return doctorCheck{Level: doctorOK, Name: "skills", Message: "disabled"}
+	}
+	count, err := countCLISkills(context.Background(), opts.SkillDirs)
+	if err != nil {
+		return doctorCheck{Level: doctorFail, Name: "skills", Message: err.Error()}
+	}
+	if count == 0 {
+		return doctorCheck{Level: doctorOK, Name: "skills", Message: "enabled; no local skills found"}
+	}
+	return doctorCheck{Level: doctorOK, Name: "skills", Message: fmt.Sprintf("enabled; %d loaded", count)}
 }
 
 func configDoctorCheck(opts options) doctorCheck {
