@@ -174,7 +174,9 @@ future model turns continue from the summary checkpoint plus newer messages
 instead of re-summarizing the same old prefix repeatedly. The local estimator is
 conservative because provider tokenizers differ; the runtime preserves headroom
 rather than risking a provider context-window error. Set `"compaction": "off"`
-or pass `--compaction off` to disable this behavior for debugging.
+or pass `--compaction off` to disable this behavior for debugging. In the
+interactive shell, `/context` shows the active context budgets, raw transcript
+message count, model-visible message count, and latest persisted checkpoint.
 
 ## Interactive shell
 
@@ -187,6 +189,7 @@ control local state without calling a model:
 ```text
 /help
 /status
+/context
 /pick
 /show latest
 /sessions

@@ -6,6 +6,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
@@ -162,6 +163,10 @@ func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, cu
 		if composer != nil {
 			fmt.Fprintf(w, "  %s\n", composer.statusLine())
 		}
+	case "/context":
+		if err := printInteractiveContext(ctx, w, opts, *currentSession, arg); err != nil {
+			fmt.Fprintf(w, "error: %v\n", err)
+		}
 	case "/draft":
 		if composer == nil {
 			fmt.Fprintln(w, "drafts are unavailable")
@@ -290,6 +295,53 @@ func printInteractiveStatus(ctx context.Context, w io.Writer, opts options, curr
 	return nil
 }
 
+func printInteractiveContext(ctx context.Context, w io.Writer, opts options, currentSession, raw string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fmt.Fprintln(w, "context:")
+	printContextBudgetFields(w, opts, "  ")
+
+	target := strings.TrimSpace(raw)
+	if target == "" {
+		target = "current"
+	}
+	if target == "current" {
+		if strings.TrimSpace(currentSession) == "" {
+			fmt.Fprintln(w, "  active_session: <unset>")
+			fmt.Fprintln(w, "  active_view: <unset>")
+			return nil
+		}
+		target = currentSession
+	}
+	id, err := resolveInteractiveSessionID(ctx, opts, target, "context")
+	if err != nil {
+		return err
+	}
+	view, err := session.NewJSONLStore(opts.SessionDir).MessageView(ctx, id)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "  session: %s\n", id)
+	fmt.Fprintf(w, "  raw_messages: %d\n", view.RawMessageCount)
+	fmt.Fprintf(w, "  active_messages: %d\n", len(view.Messages))
+	if view.Compaction == nil {
+		fmt.Fprintln(w, "  active_checkpoint: none")
+		return nil
+	}
+	checkpoint := view.Compaction
+	fmt.Fprintf(w, "  active_checkpoint: %s\n", checkpoint.ID)
+	fmt.Fprintf(w, "  checkpoint_created_at: %s\n", checkpoint.CreatedAt.Format(time.RFC3339))
+	fmt.Fprintf(w, "  checkpoint_policy: %s\n", checkpoint.Policy)
+	fmt.Fprintf(w, "  checkpoint_reason: %s\n", checkpoint.Reason)
+	fmt.Fprintf(w, "  checkpoint_raw_messages: %d\n", checkpoint.RawMessageCount)
+	fmt.Fprintf(w, "  summary_hash: %s\n", valueOrUnset(checkpoint.SummaryHash))
+	if preview := strings.TrimSpace(checkpoint.SummaryPreview); preview != "" {
+		fmt.Fprintf(w, "  summary_preview: %s\n", preview)
+	}
+	return nil
+}
+
 func showInteractiveSession(ctx context.Context, w io.Writer, opts options, currentSession, raw string) error {
 	raw = strings.TrimSpace(raw)
 	switch strings.ToLower(raw) {
@@ -402,6 +454,7 @@ func printInteractiveHelp(w io.Writer) {
 	fmt.Fprintln(w, "slash commands:")
 	fmt.Fprintln(w, "  /help              show this help")
 	fmt.Fprintln(w, "  /status            show active runtime settings")
+	fmt.Fprintln(w, "  /context [TARGET]  show context budgets and active checkpoint")
 	fmt.Fprintln(w, "  /session           show the active session")
 	fmt.Fprintln(w, "  /pick              list recent sessions with numbers")
 	fmt.Fprintln(w, "  /show [TARGET]     show current, latest, number, or ID")

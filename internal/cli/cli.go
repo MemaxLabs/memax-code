@@ -747,20 +747,7 @@ func renderDryRun(w io.Writer, opts options) error {
 	fmt.Fprintf(w, "effort_description: %s\n", effort.Description())
 	fmt.Fprintf(w, "preset: %s\n", opts.Preset)
 	fmt.Fprintf(w, "ui: %s\n", opts.UI)
-	fmt.Fprintf(w, "compaction: %s\n", opts.Compaction)
-	if opts.Compaction == compactionModeOff {
-		fmt.Fprintln(w, "context_window: disabled")
-		fmt.Fprintln(w, "context_summary_tokens: disabled")
-	} else {
-		budgets := resolveContextBudgets(opts, nil)
-		fmt.Fprintf(w, "context_window: %d\n", budgets.WindowTokens)
-		fmt.Fprintf(w, "context_summary_tokens: %d\n", budgets.SummaryTokens)
-		fmt.Fprintf(w, "context_main_tokens: %d\n", budgets.MainTokens)
-		fmt.Fprintf(w, "context_retry_tokens: %d\n", budgets.RetryTokens)
-		if opts.ModelRegistryInfo != "" {
-			fmt.Fprintf(w, "model_registry: %s\n", opts.ModelRegistryInfo)
-		}
-	}
+	printContextBudgetFields(w, opts, "")
 	fmt.Fprintf(w, "config: %s\n", opts.ConfigPath)
 	fmt.Fprintf(w, "config_loaded: %t\n", opts.ConfigLoaded)
 	fmt.Fprintf(w, "cwd: %s\n", opts.CWD)
@@ -788,4 +775,21 @@ func valueOrUnset(value string) string {
 		return "<unset>"
 	}
 	return value
+}
+
+func printContextBudgetFields(w io.Writer, opts options, prefix string) {
+	fmt.Fprintf(w, "%scompaction: %s\n", prefix, opts.Compaction)
+	if opts.Compaction == compactionModeOff {
+		fmt.Fprintf(w, "%scontext_window: disabled\n", prefix)
+		fmt.Fprintf(w, "%scontext_summary_tokens: disabled\n", prefix)
+		return
+	}
+	budgets := resolveContextBudgets(opts, nil)
+	fmt.Fprintf(w, "%scontext_window: %d\n", prefix, budgets.WindowTokens)
+	fmt.Fprintf(w, "%scontext_summary_tokens: %d\n", prefix, budgets.SummaryTokens)
+	fmt.Fprintf(w, "%scontext_main_tokens: %d\n", prefix, budgets.MainTokens)
+	fmt.Fprintf(w, "%scontext_retry_tokens: %d\n", prefix, budgets.RetryTokens)
+	if opts.ModelRegistryInfo != "" {
+		fmt.Fprintf(w, "%smodel_registry: %s\n", prefix, opts.ModelRegistryInfo)
+	}
 }

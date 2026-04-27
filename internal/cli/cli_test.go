@@ -1773,6 +1773,144 @@ func TestRunInteractiveStatus(t *testing.T) {
 	}
 }
 
+func TestRunInteractiveContextShowsActiveCompactionCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, userMessage("old context")); err != nil {
+		t.Fatalf("Append(old) error = %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, userMessage("newer context")); err != nil {
+		t.Fatalf("Append(newer) error = %v", err)
+	}
+	if err := store.SaveCompaction(ctx, sess.ID, session.CompactionCheckpoint{
+		ID:              "00000000-0000-7000-8000-000000000123",
+		CreatedAt:       time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC),
+		RawMessageCount: 2,
+		Messages: []model.Message{{
+			Role: model.RoleUser,
+			Content: []model.ContentBlock{
+				{Type: model.ContentText, Text: "Earlier context summary: old + newer"},
+			},
+		}},
+		Policy:         "test-policy",
+		Reason:         "budget",
+		SummaryHash:    "abc123",
+		SummaryPreview: "old + newer",
+	}); err != nil {
+		t.Fatalf("SaveCompaction() error = %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = RunWithIO(ctx, []string{
+		"--interactive",
+		"--provider", "openai",
+		"--model", "example-model",
+		"--ui", "plain",
+		"--session-dir", sessionDir,
+		"--context-window", "64000",
+		"--context-summary-tokens", "4096",
+	}, strings.NewReader("/resume latest\n/context\n/quit\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("RunWithIO() error = %v", err)
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"resumed session: " + sess.ID,
+		"context:",
+		"compaction: auto",
+		"context_window: 64000",
+		"context_summary_tokens: 4096",
+		"context_main_tokens: 51200",
+		"context_retry_tokens: 35200",
+		"session: " + sess.ID,
+		"raw_messages: 2",
+		"active_messages: 1",
+		"active_checkpoint: 00000000-0000-7000-8000-000000000123",
+		"checkpoint_policy: test-policy",
+		"checkpoint_reason: budget",
+		"summary_hash: abc123",
+		"summary_preview: old + newer",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunInteractiveContextHandlesDisabledAndUnsetSession(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	err := RunWithIO(ctx, []string{
+		"--interactive",
+		"--provider", "openai",
+		"--model", "example-model",
+		"--ui", "plain",
+		"--session-dir", sessionDir,
+		"--compaction", "off",
+	}, strings.NewReader("/context\n/quit\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("RunWithIO() error = %v", err)
+	}
+	out := stderr.String()
+	for _, want := range []string{
+		"context:",
+		"compaction: off",
+		"context_window: disabled",
+		"context_summary_tokens: disabled",
+		"active_session: <unset>",
+		"active_view: <unset>",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("interactive stderr missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunInteractiveContextShowsUncompactedSessionByExplicitTargets(t *testing.T) {
+	ctx := context.Background()
+	sessionDir := t.TempDir()
+	store := session.NewJSONLStore(sessionDir)
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, userMessage("plain context")); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = RunWithIO(ctx, []string{
+		"--interactive",
+		"--provider", "openai",
+		"--model", "example-model",
+		"--ui", "plain",
+		"--session-dir", sessionDir,
+	}, strings.NewReader("/context latest\n/context 1\n/context "+sess.ID+"\n/quit\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("RunWithIO() error = %v", err)
+	}
+	out := stderr.String()
+	if got := strings.Count(out, "session: "+sess.ID); got != 3 {
+		t.Fatalf("session line count = %d, want 3:\n%s", got, out)
+	}
+	if got := strings.Count(out, "raw_messages: 1"); got != 3 {
+		t.Fatalf("raw_messages count = %d, want 3:\n%s", got, out)
+	}
+	if got := strings.Count(out, "active_messages: 1"); got != 3 {
+		t.Fatalf("active_messages count = %d, want 3:\n%s", got, out)
+	}
+	if got := strings.Count(out, "active_checkpoint: none"); got != 3 {
+		t.Fatalf("active_checkpoint count = %d, want 3:\n%s", got, out)
+	}
+}
+
 func TestRunResumeWithoutPromptStartsInteractiveShellOnTerminalIO(t *testing.T) {
 	ctx := context.Background()
 	sessionDir := t.TempDir()
