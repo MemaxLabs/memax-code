@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"golang.org/x/term"
 )
 
@@ -97,6 +98,8 @@ type options struct {
 	WebFetchMaxBytes  int
 	VerifyCommands    map[string]string
 	MCPServers        map[string]mcpServerConfig
+	RuntimeMCPTools   []tool.Tool
+	RuntimeMCPReady   bool
 }
 
 func parseArgs(args []string, output io.Writer) (options, error) {

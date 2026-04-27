@@ -36,6 +36,15 @@ func runInteractiveWithEventRunner(ctx context.Context, stdin io.Reader, stdout,
 	if runPrompt == nil {
 		runPrompt = runPromptWithSession
 	}
+	if len(opts.MCPServers) > 0 && !opts.RuntimeMCPReady {
+		mcpTools, cleanup, err := prepareMCPTools(ctx, opts)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		opts.RuntimeMCPTools = mcpTools
+		opts.RuntimeMCPReady = true
+	}
 	resolvedUI := resolveInteractiveMode(opts.UI, stdout)
 	if resolvedUI == renderModeApp {
 		return runInteractiveAppWithEvents(ctx, stdin, stdout, opts, runPrompt, runEvents)
@@ -346,7 +355,11 @@ func printInteractiveStatus(ctx context.Context, w io.Writer, opts options, curr
 			if server.SupportsParallelToolCalls {
 				parallel = "parallel"
 			}
-			fmt.Fprintf(w, "  mcp_server.%s: %s %s %s\n", name, status, parallel, server.Command)
+			fmt.Fprintf(w, "  mcp_server.%s: %s %s %s", name, status, parallel, server.Command)
+			if suffix := server.runtimeSummary(); suffix != "" {
+				fmt.Fprintf(w, " %s", suffix)
+			}
+			fmt.Fprintln(w)
 		}
 	}
 	fmt.Fprintf(w, "  inherit_command_env: %t\n", opts.InheritCommandEnv)
@@ -372,6 +385,9 @@ func printInteractiveMCP(w io.Writer, opts options) {
 		fmt.Fprintf(w, "  %s: %s %s %s", name, status, parallel, server.Command)
 		if len(server.Args) > 0 {
 			fmt.Fprintf(w, " %s", strings.Join(server.Args, " "))
+		}
+		if suffix := server.runtimeSummary(); suffix != "" {
+			fmt.Fprintf(w, " (%s)", suffix)
 		}
 		fmt.Fprintln(w)
 	}

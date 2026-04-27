@@ -152,7 +152,10 @@ Example config:
       "env": {
         "DOCS_TOKEN": "..."
       },
-      "supports_parallel_tool_calls": true
+      "supports_parallel_tool_calls": true,
+      "startup_timeout": "30s",
+      "tool_timeout": "120s",
+      "max_result_bytes": 131072
     }
   },
   "verify_commands": {
@@ -297,7 +300,7 @@ tools to the model as normal Memax tools. Tool names use
 Add, inspect, and remove servers with:
 
 ```sh
-memax-code mcp add docs --env DOCS_TOKEN=... -- docs-mcp-server --stdio
+memax-code mcp add docs --env DOCS_TOKEN=... --startup-timeout 30s --tool-timeout 120s -- docs-mcp-server --stdio
 memax-code mcp list
 memax-code mcp remove docs
 ```
@@ -305,6 +308,10 @@ memax-code mcp remove docs
 Inside the interactive shell, `/mcp` shows the configured servers. Disabled
 servers stay in config but are not started. `supports_parallel_tool_calls`
 should only be enabled for servers whose tools are safe to call concurrently.
+MCP startup, tool calls, and result sizes are bounded by SDK defaults; config
+can override them with `startup_timeout`, `tool_timeout`, and
+`max_result_bytes`. Interactive sessions start configured MCP servers once and
+reuse the discovered tools across turns.
 
 ### Verification
 

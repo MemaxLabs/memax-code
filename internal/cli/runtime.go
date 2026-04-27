@@ -335,7 +335,13 @@ func buildStack(opts options) (coding.Stack, error) {
 }
 
 func buildStackWithModel(opts options, client model.Client) (coding.Stack, error) {
-	stack, _, err := buildStackWithModelForRun(context.Background(), opts, client)
+	if len(opts.MCPServers) > 0 && !opts.RuntimeMCPReady {
+		return coding.Stack{}, fmt.Errorf("configure MCP servers: use buildStackWithModelForRun so server processes remain open")
+	}
+	stack, cleanup, err := buildStackWithModelForRun(context.Background(), opts, client)
+	if cleanup != nil {
+		defer cleanup()
+	}
 	return stack, err
 }
 
@@ -438,13 +444,48 @@ func buildStackWithModelForRun(ctx context.Context, opts options, client model.C
 }
 
 func configureMCPServers(ctx context.Context, opts options, registry *tool.Registry) (func(), error) {
-	if len(opts.MCPServers) == 0 {
+	if opts.RuntimeMCPReady {
+		if err := registerMCPTools(registry, opts.RuntimeMCPTools); err != nil {
+			return nil, err
+		}
 		return func() {}, nil
 	}
-	var toolsets []mcpbridge.ToolSet
+	toolsets, cleanup, err := discoverMCPToolsets(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	if err := registerMCPToolsets(registry, toolsets); err != nil {
+		cleanup()
+		return nil, err
+	}
+	return cleanup, nil
+}
+
+type runtimeMCPToolSet struct {
+	name string
+	set  mcpbridge.ToolSet
+}
+
+func prepareMCPTools(ctx context.Context, opts options) ([]tool.Tool, func(), error) {
+	toolsets, cleanup, err := discoverMCPToolsets(ctx, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	var tools []tool.Tool
+	for _, discovered := range toolsets {
+		tools = append(tools, discovered.set.Tools()...)
+	}
+	return tools, cleanup, nil
+}
+
+func discoverMCPToolsets(ctx context.Context, opts options) ([]runtimeMCPToolSet, func(), error) {
+	if len(opts.MCPServers) == 0 {
+		return nil, func() {}, nil
+	}
+	var toolsets []runtimeMCPToolSet
 	cleanup := func() {
 		for i := len(toolsets) - 1; i >= 0; i-- {
-			_ = toolsets[i].Close()
+			_ = toolsets[i].set.Close()
 		}
 	}
 	for _, name := range sortedMapKeysMCP(opts.MCPServers) {
@@ -452,33 +493,77 @@ func configureMCPServers(ctx context.Context, opts options, registry *tool.Regis
 		if !server.enabled() {
 			continue
 		}
-		cfg := mcpbridge.ServerConfig{
-			Name:                      name,
-			Command:                   server.Command,
-			Args:                      append([]string(nil), server.Args...),
-			Env:                       cloneStringMap(server.Env),
-			CWD:                       server.CWD,
-			SupportsParallelToolCalls: server.SupportsParallelToolCalls,
+		cfg, err := mcpBridgeServerConfig(name, server)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
 		}
 		client, err := mcpbridge.NewStdioClient(ctx, cfg)
 		if err != nil {
 			cleanup()
-			return nil, fmt.Errorf("configure MCP server %s: %w", name, err)
+			return nil, nil, fmt.Errorf("configure MCP server %s: %w", name, err)
 		}
 		set, err := mcpbridge.DiscoverTools(ctx, client, cfg)
 		if err != nil {
 			_ = client.Close()
 			cleanup()
-			return nil, fmt.Errorf("configure MCP server %s: %w", name, err)
+			return nil, nil, fmt.Errorf("configure MCP server %s: %w", name, err)
 		}
-		if err := set.Register(registry); err != nil {
-			_ = set.Close()
-			cleanup()
-			return nil, fmt.Errorf("configure MCP server %s: %w", name, err)
-		}
-		toolsets = append(toolsets, set)
+		toolsets = append(toolsets, runtimeMCPToolSet{name: name, set: set})
 	}
-	return cleanup, nil
+	return toolsets, cleanup, nil
+}
+
+func mcpBridgeServerConfig(name string, server mcpServerConfig) (mcpbridge.ServerConfig, error) {
+	startupTimeout, err := parseOptionalMCPDuration(name, "startup_timeout", server.StartupTimeout)
+	if err != nil {
+		return mcpbridge.ServerConfig{}, err
+	}
+	toolTimeout, err := parseOptionalMCPDuration(name, "tool_timeout", server.ToolTimeout)
+	if err != nil {
+		return mcpbridge.ServerConfig{}, err
+	}
+	return mcpbridge.ServerConfig{
+		Name:                      name,
+		Command:                   server.Command,
+		Args:                      append([]string(nil), server.Args...),
+		Env:                       cloneStringMap(server.Env),
+		CWD:                       server.CWD,
+		SupportsParallelToolCalls: server.SupportsParallelToolCalls,
+		StartupTimeout:            startupTimeout,
+		ToolTimeout:               toolTimeout,
+		MaxResultBytes:            server.MaxResultBytes,
+	}, nil
+}
+
+func parseOptionalMCPDuration(serverName, field, raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("configure MCP server %s: %s must be a Go duration like 30s or 2m: %w", serverName, field, err)
+	}
+	return value, nil
+}
+
+func registerMCPToolsets(registry *tool.Registry, toolsets []runtimeMCPToolSet) error {
+	for _, discovered := range toolsets {
+		if err := discovered.set.Register(registry); err != nil {
+			return fmt.Errorf("configure MCP server %s: %w", discovered.name, err)
+		}
+	}
+	return nil
+}
+
+func registerMCPTools(registry *tool.Registry, tools []tool.Tool) error {
+	for _, t := range tools {
+		if err := registry.Register(t); err != nil {
+			return fmt.Errorf("configure MCP tool %q: %w", t.Spec().Name, err)
+		}
+	}
+	return nil
 }
 
 func normalizedWebFetchMaxBytes(value int) int {

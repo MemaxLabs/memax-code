@@ -7,6 +7,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 )
 
 type mcpServerConfig struct {
@@ -16,6 +17,9 @@ type mcpServerConfig struct {
 	CWD                       string            `json:"cwd,omitempty"`
 	Enabled                   *bool             `json:"enabled,omitempty"`
 	SupportsParallelToolCalls bool              `json:"supports_parallel_tool_calls,omitempty"`
+	StartupTimeout            string            `json:"startup_timeout,omitempty"`
+	ToolTimeout               string            `json:"tool_timeout,omitempty"`
+	MaxResultBytes            int               `json:"max_result_bytes,omitempty"`
 }
 
 func (c mcpServerConfig) enabled() bool {
@@ -65,6 +69,9 @@ func runMCPAdd(args []string, stdout, stderr io.Writer) error {
 	cwd := fs.String("cwd", "", "working directory for the MCP server process")
 	parallel := fs.Bool("parallel", false, "mark this server's tools safe for parallel calls")
 	disabled := fs.Bool("disabled", false, "add the server but keep it disabled")
+	startupTimeout := fs.String("startup-timeout", "", "startup timeout for initialize/tools/list, such as 30s; empty uses the SDK default")
+	toolTimeout := fs.String("tool-timeout", "", "per-tool-call timeout, such as 120s; empty uses the SDK default")
+	maxResultBytes := fs.Int("max-result-bytes", 0, "maximum bytes returned per MCP tool result; 0 uses the SDK default")
 	envs := newMCPEnvFlag()
 	fs.Var(envs, "env", "environment variable KEY=VALUE for the MCP server; repeatable")
 	fs.Usage = func() {
@@ -86,6 +93,14 @@ func runMCPAdd(args []string, stdout, stderr io.Writer) error {
 	if command == "" {
 		return fmt.Errorf("mcp add requires COMMAND")
 	}
+	startupTimeoutValue, err := normalizeMCPDurationFlag("startup-timeout", *startupTimeout)
+	if err != nil {
+		return err
+	}
+	toolTimeoutValue, err := normalizeMCPDurationFlag("tool-timeout", *toolTimeout)
+	if err != nil {
+		return err
+	}
 	configPath, cfg, err := loadWritableConfig(*configRaw)
 	if err != nil {
 		return err
@@ -101,6 +116,9 @@ func runMCPAdd(args []string, stdout, stderr io.Writer) error {
 		CWD:                       strings.TrimSpace(*cwd),
 		Enabled:                   boolPtr(enabled),
 		SupportsParallelToolCalls: *parallel,
+		StartupTimeout:            startupTimeoutValue,
+		ToolTimeout:               toolTimeoutValue,
+		MaxResultBytes:            *maxResultBytes,
 	}
 	if err := writeConfigFile(configPath, cfg, true); err != nil {
 		return err
@@ -145,9 +163,41 @@ func runMCPList(args []string, stdout, stderr io.Writer) error {
 		if server.SupportsParallelToolCalls {
 			parallel = "parallel"
 		}
-		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s %s\n", name, status, parallel, server.Command, strings.Join(server.Args, " "))
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s", name, status, parallel, server.Command)
+		if len(server.Args) > 0 {
+			fmt.Fprintf(stdout, " %s", strings.Join(server.Args, " "))
+		}
+		if suffix := server.runtimeSummary(); suffix != "" {
+			fmt.Fprintf(stdout, "\t%s", suffix)
+		}
+		fmt.Fprintln(stdout)
 	}
 	return nil
+}
+
+func normalizeMCPDurationFlag(flagName, value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if _, err := time.ParseDuration(value); err != nil {
+		return "", fmt.Errorf("--%s must be a Go duration like 30s or 2m: %w", flagName, err)
+	}
+	return value, nil
+}
+
+func (c mcpServerConfig) runtimeSummary() string {
+	var parts []string
+	if c.StartupTimeout != "" {
+		parts = append(parts, "startup_timeout="+c.StartupTimeout)
+	}
+	if c.ToolTimeout != "" {
+		parts = append(parts, "tool_timeout="+c.ToolTimeout)
+	}
+	if c.MaxResultBytes != 0 {
+		parts = append(parts, fmt.Sprintf("max_result_bytes=%d", c.MaxResultBytes))
+	}
+	return strings.Join(parts, " ")
 }
 
 func runMCPRemove(args []string, stdout, stderr io.Writer) error {
