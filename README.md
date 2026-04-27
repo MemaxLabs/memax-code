@@ -181,6 +181,10 @@ interactive shell, `/context` shows the active context budgets, raw transcript
 message count, model-visible message count, and latest persisted checkpoint.
 The displayed budget is the configured or registry-derived planning budget; a
 live provider client may still report a more specific limit when a turn is sent.
+Human transcript renderers keep routine context-selection telemetry quiet and
+only show actual compaction rows, for example
+`~ context compacted 19 -> 8 messages`; `plain` and `--event-stream json`
+continue to expose the detailed per-turn context counts for wrappers and logs.
 
 ## Interactive shell
 
