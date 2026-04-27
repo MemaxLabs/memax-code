@@ -1108,7 +1108,10 @@ func (c *appProgramTranscriptCompactor) compactAssistantLineChunk(line string, c
 func compactAppProgramLocalLine(kind, text string) string {
 	switch kind {
 	case "user":
-		return appProgramUserStyle.Render(text)
+		// Queued transcript lines are followed by Bubble Tea's end-of-line
+		// erase. Reset here so the prompt-chip background cannot leak into
+		// the spacer row after a submitted prompt.
+		return appProgramUserStyle.Render(text) + appProgramResetSGR
 	case "error":
 		return appProgramErrorStyle.Render("! " + text)
 	default:

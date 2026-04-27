@@ -2602,6 +2602,33 @@ func TestAppProgramUserPromptTranscriptHasVerticalPadding(t *testing.T) {
 	}
 }
 
+func TestAppProgramUserPromptTranscriptResetsBeforeSpacer(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.transcript = appTranscriptTail{}
+
+	model.appendLocalTranscriptLine("user", "› inspect the repo")
+	lines := model.drainPendingPrints()
+	if len(lines) < 2 {
+		t.Fatalf("user prompt should emit prompt row and spacer, got %#v", lines)
+	}
+	promptAt := -1
+	for i, line := range lines {
+		if strings.Contains(line, "inspect the repo") {
+			promptAt = i
+			break
+		}
+	}
+	if promptAt < 0 {
+		t.Fatalf("prompt row missing from pending prints: %#v", lines)
+	}
+	if !strings.HasSuffix(lines[promptAt], appProgramResetSGR) {
+		t.Fatalf("prompt row must reset before Bubble Tea paints the following spacer:\n%q", lines[promptAt])
+	}
+	if promptAt+1 >= len(lines) || lines[promptAt+1] != "" {
+		t.Fatalf("prompt row should be followed by a plain blank spacer, got %#v", lines)
+	}
+}
+
 func TestAppProgramToolCallsHaveSpacing(t *testing.T) {
 	app := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	app.transcript = appTranscriptTail{}
