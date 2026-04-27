@@ -385,11 +385,10 @@ func printInteractiveMCPStatusSummary(w io.Writer, opts options) {
 	orphanTools := 0
 	disabledServerTools := 0
 	if opts.RuntimeMCPReady {
-		for _, tools := range runtimeMCPToolsByServer(opts) {
-			loadedTools += len(tools)
-		}
-		orphanTools = runtimeMCPOrphanToolCount(opts)
-		disabledServerTools = runtimeMCPDisabledServerToolCount(opts)
+		counts := runtimeMCPToolStatusCounts(opts)
+		loadedTools = counts.Loaded
+		orphanTools = counts.Orphan
+		disabledServerTools = counts.DisabledServer
 	}
 	loaded := "not loaded"
 	if opts.RuntimeMCPReady {
@@ -483,6 +482,12 @@ type runtimeMCPToolInfo struct {
 	Flags       string
 }
 
+type runtimeMCPToolCounts struct {
+	Loaded         int
+	Orphan         int
+	DisabledServer int
+}
+
 func runtimeMCPToolsByServer(opts options) map[string][]runtimeMCPToolInfo {
 	out := map[string][]runtimeMCPToolInfo{}
 	serverKeys := runtimeMCPEnabledServerKeys(opts.MCPServers)
@@ -516,31 +521,26 @@ func runtimeMCPToolsByServer(opts options) map[string][]runtimeMCPToolInfo {
 	return out
 }
 
-func runtimeMCPOrphanToolCount(opts options) int {
-	serverKeys := runtimeMCPServerKeys(opts.MCPServers)
-	orphanTools := 0
-	for _, t := range opts.RuntimeMCPTools {
-		spec := t.Spec()
-		if _, _, ok := splitRuntimeMCPToolName(spec.Name, serverKeys); !ok {
-			orphanTools++
-		}
-	}
-	return orphanTools
-}
-
-func runtimeMCPDisabledServerToolCount(opts options) int {
+func runtimeMCPToolStatusCounts(opts options) runtimeMCPToolCounts {
+	enabledKeys := runtimeMCPEnabledServerKeys(opts.MCPServers)
 	disabledKeys := runtimeMCPDisabledServerKeys(opts.MCPServers)
-	if len(disabledKeys) == 0 {
-		return 0
-	}
-	disabledTools := 0
+	allKeys := runtimeMCPServerKeys(opts.MCPServers)
+	var counts runtimeMCPToolCounts
 	for _, t := range opts.RuntimeMCPTools {
 		spec := t.Spec()
+		if _, _, ok := splitRuntimeMCPToolName(spec.Name, enabledKeys); ok {
+			counts.Loaded++
+			continue
+		}
 		if _, _, ok := splitRuntimeMCPToolName(spec.Name, disabledKeys); ok {
-			disabledTools++
+			counts.DisabledServer++
+			continue
+		}
+		if _, _, ok := splitRuntimeMCPToolName(spec.Name, allKeys); !ok {
+			counts.Orphan++
 		}
 	}
-	return disabledTools
+	return counts
 }
 
 func runtimeMCPServerKeys(servers map[string]mcpServerConfig) []string {

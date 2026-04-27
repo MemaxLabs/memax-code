@@ -1932,6 +1932,37 @@ func TestInteractiveStatusShowsMCPRuntimeSummary(t *testing.T) {
 	}
 }
 
+func TestInteractiveStatusMCPRuntimeSummaryPrefersEnabledServerOnKeyCollision(t *testing.T) {
+	opts := options{
+		Provider: providerOpenAI,
+		Model:    "example-model",
+		CWD:      repoRoot(t),
+		MCPServers: map[string]mcpServerConfig{
+			"docs api": {Command: "docs-server"},
+			"docs.api": {Command: "disabled-docs-server", Enabled: boolPtr(false)},
+		},
+		RuntimeMCPReady: true,
+		RuntimeMCPTools: []tool.Tool{
+			tool.Definition{ToolSpec: model.ToolSpec{Name: "mcp__docs_api__search"}},
+		},
+	}
+
+	var out bytes.Buffer
+	if err := printInteractiveStatus(context.Background(), &out, opts, ""); err != nil {
+		t.Fatalf("printInteractiveStatus() error = %v", err)
+	}
+	got := out.String()
+	want := "mcp: 2 configured, 1 enabled, 1 disabled, 1 tool(s) loaded across enabled servers"
+	if !strings.Contains(got, want) {
+		t.Fatalf("interactive status missing %q:\n%s", want, got)
+	}
+	for _, notWant := range []string{"orphan tool(s)", "disabled-server tool(s)"} {
+		if strings.Contains(got, notWant) {
+			t.Fatalf("interactive status unexpectedly contains %q:\n%s", notWant, got)
+		}
+	}
+}
+
 func TestInteractiveMCPGroupsToolsForSanitizedServerNames(t *testing.T) {
 	opts := options{
 		MCPServers: map[string]mcpServerConfig{
