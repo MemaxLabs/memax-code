@@ -200,7 +200,7 @@ func TestAppProgramSlashCompletionFiltersCommands(t *testing.T) {
 	model.resize()
 
 	got := ansi.Strip(model.View())
-	for _, want := range []string{"/context", "Show context budgets"} {
+	for _, want := range []string{"/context", "show context budgets"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("slash completion missing %q:\n%s", want, got)
 		}
@@ -239,6 +239,81 @@ func TestAppProgramSlashCompletionUsesArrowSelectionBeforeHistory(t *testing.T) 
 	}
 	if model.slashMenu.selected == 0 {
 		t.Fatal("down did not move slash completion selection")
+	}
+}
+
+func TestAppProgramSlashCompletionEnterDispatchesExactCommand(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.width = 100
+	model.input.SetValue("/help")
+
+	if _, handled := model.updateKey(tea.KeyMsg{Type: tea.KeyEnter}); !handled {
+		t.Fatal("enter did not handle exact slash command")
+	}
+	if got := model.input.Value(); got != "" {
+		t.Fatalf("input after exact command enter = %q, want empty", got)
+	}
+	view := strings.Join(model.transcript.entries, "\n")
+	for _, want := range []string{"slash commands:", "/context [TARGET]", "/resume TARGET"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("help output missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestAppProgramSlashCompletionDoubleSlashSuppressesPopup(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.width = 100
+	model.input.SetValue("//help")
+	model.resize()
+
+	if model.slashCompletionActive() {
+		t.Fatal("double-slash prompt activated slash completion")
+	}
+	if got := ansi.Strip(model.View()); strings.Contains(got, "show available slash commands") {
+		t.Fatalf("double-slash prompt rendered slash completion:\n%s", got)
+	}
+}
+
+func TestAppProgramSlashCompletionEscDismissesUntilEdit(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.input.SetValue("/s")
+
+	if !model.slashCompletionActive() {
+		t.Fatal("slash completion inactive before esc")
+	}
+	if _, handled := model.updateKey(tea.KeyMsg{Type: tea.KeyEsc}); !handled {
+		t.Fatal("esc did not dismiss slash completion")
+	}
+	if got, want := model.input.Value(), "/s"; got != want {
+		t.Fatalf("input after esc = %q, want %q", got, want)
+	}
+	if model.slashCompletionActive() {
+		t.Fatal("slash completion still active after esc")
+	}
+
+	model.input.SetValue("/se")
+	model.updateSlashCompletionAfterInputChange("/s")
+	if !model.slashCompletionActive() {
+		t.Fatal("slash completion did not reopen after editing dismissed input")
+	}
+}
+
+func TestAppProgramSlashCompletionSelectionWraps(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.input.SetValue("/s")
+
+	matches := model.slashCompletionMatches()
+	if len(matches) < 2 {
+		t.Fatalf("need multiple /s matches, got %d", len(matches))
+	}
+	model.moveSlashCompletion(-1)
+	if got, want := model.slashMenu.selected, len(matches)-1; got != want {
+		t.Fatalf("selection after up wrap = %d, want %d", got, want)
+	}
+	model.moveSlashCompletion(1)
+	if got, want := model.slashMenu.selected, 0; got != want {
+		t.Fatalf("selection after down wrap = %d, want %d", got, want)
 	}
 }
 

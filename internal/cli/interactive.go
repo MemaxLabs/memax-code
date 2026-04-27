@@ -141,28 +141,29 @@ type interactiveCommandResult struct {
 
 type interactiveCommandSpec struct {
 	Name        string
+	Usage       string
 	Description string
 }
 
 func interactiveCommandSpecs() []interactiveCommandSpec {
 	return []interactiveCommandSpec{
-		{Name: "/help", Description: "Show available slash commands"},
-		{Name: "/status", Description: "Show active runtime settings"},
-		{Name: "/context", Description: "Show context budgets and active checkpoint"},
-		{Name: "/session", Description: "Show the active session"},
-		{Name: "/pick", Description: "List recent sessions with numbers"},
-		{Name: "/show", Description: "Show current, latest, number, or ID"},
-		{Name: "/sessions", Description: "List saved sessions"},
-		{Name: "/resume", Description: "Resume by ID, latest, or number"},
-		{Name: "/new", Description: "Start the next prompt in a new session"},
-		{Name: "/draft", Description: "Start a multi-line draft"},
-		{Name: "/append", Description: "Append one line to the draft"},
-		{Name: "/show-draft", Description: "Show the active draft"},
-		{Name: "/submit", Description: "Send the active draft"},
-		{Name: "/cancel", Description: "Discard the active draft"},
-		{Name: "/history", Description: "List remembered prompts"},
-		{Name: "/recall", Description: "Recall a prompt into the draft"},
-		{Name: "/quit", Description: "Exit Memax Code"},
+		{Name: "/help", Usage: "/help", Description: "show available slash commands"},
+		{Name: "/status", Usage: "/status", Description: "show active runtime settings"},
+		{Name: "/context", Usage: "/context [TARGET]", Description: "show context budgets and active checkpoint"},
+		{Name: "/session", Usage: "/session", Description: "show the active session"},
+		{Name: "/pick", Usage: "/pick", Description: "list recent sessions with numbers"},
+		{Name: "/show", Usage: "/show [TARGET]", Description: "show current, latest, number, or ID"},
+		{Name: "/sessions", Usage: "/sessions", Description: "list saved sessions"},
+		{Name: "/resume", Usage: "/resume TARGET", Description: "resume by ID, latest, or number"},
+		{Name: "/new", Usage: "/new", Description: "start the next prompt in a new session"},
+		{Name: "/draft", Usage: "/draft [TEXT]", Description: "start a multi-line draft"},
+		{Name: "/append", Usage: "/append TEXT", Description: "append one line to the draft"},
+		{Name: "/show-draft", Usage: "/show-draft", Description: "show the active draft"},
+		{Name: "/submit", Usage: "/submit", Description: "send the active draft"},
+		{Name: "/cancel", Usage: "/cancel", Description: "discard the active draft"},
+		{Name: "/history", Usage: "/history", Description: "list remembered prompts"},
+		{Name: "/recall", Usage: "/recall [N|latest]", Description: "recall a prompt into the draft"},
+		{Name: "/quit", Usage: "/quit", Description: "exit Memax Code"},
 	}
 }
 
@@ -493,7 +494,7 @@ func unescapeInteractivePrompt(line string) string {
 func printInteractiveHelp(w io.Writer) {
 	fmt.Fprintln(w, "slash commands:")
 	for _, spec := range interactiveCommandSpecs() {
-		fmt.Fprintf(w, "  %-18s %s\n", spec.Name, strings.ToLower(spec.Description[:1])+spec.Description[1:])
+		fmt.Fprintf(w, "  %-18s %s\n", spec.Usage, spec.Description)
 	}
 	fmt.Fprintln(w, "  //PROMPT           send a prompt that starts with /")
 }

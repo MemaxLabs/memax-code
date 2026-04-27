@@ -331,7 +331,7 @@ func (m *appProgramModel) slashCompletionMatches() []interactiveCommandSpec {
 	matches := make([]interactiveCommandSpec, 0, len(specs))
 	for _, spec := range specs {
 		name := strings.TrimPrefix(spec.Name, "/")
-		if prefix == "" || strings.HasPrefix(name, strings.ToLower(prefix)) {
+		if strings.HasPrefix(name, prefix) {
 			matches = append(matches, spec)
 		}
 	}
@@ -857,7 +857,7 @@ func (m *appProgramModel) slashCompletionView(width int) string {
 	}
 	end := min(len(matches), start+maxRows)
 	nameWidth := appProgramSlashCompletionNameWidth(matches[start:end])
-	descWidth := width - nameWidth - 5
+	descWidth := width - nameWidth - 4
 	if descWidth < 10 {
 		descWidth = 10
 	}
