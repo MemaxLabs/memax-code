@@ -591,6 +591,9 @@ func (m *appProgramModel) View() string {
 	}
 	rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 	rows = append(rows, m.composerView(renderWidth))
+	// The composer intentionally leaves its background SGR active so Bubble
+	// Tea's end-of-line erase paints the full-width input band. The next row
+	// must reset SGR before writing status text.
 	rows = append(rows, m.bottomStatusView(renderWidth))
 	if m.showHelp {
 		rows = append(rows, m.helpView(renderWidth))
@@ -730,7 +733,8 @@ func appProgramComposerFillLine(width int) string {
 		return ""
 	}
 	// Keep the background active so Bubble Tea's own end-of-line erase paints
-	// the full-width band without writing reflowable spacer cells.
+	// the full-width band without writing reflowable spacer cells. The width
+	// guard is defensive for direct helper calls; composerView normalizes width.
 	return appProgramResetSGR + appProgramComposerBackgroundSGR
 }
 

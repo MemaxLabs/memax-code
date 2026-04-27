@@ -2515,6 +2515,23 @@ func TestAppProgramComposerViewAvoidsReflowableFullWidthRows(t *testing.T) {
 	}
 }
 
+func TestAppProgramComposerBoundaryResetsStatusStyle(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.width = 80
+	model.resize()
+	raw := model.View()
+	for _, line := range strings.Split(raw, "\n") {
+		if !strings.Contains(line, "Memax Code") {
+			continue
+		}
+		if !strings.HasPrefix(line, appProgramResetSGR) {
+			t.Fatalf("status row after composer must reset SGR before writing text:\n%q", raw)
+		}
+		return
+	}
+	t.Fatalf("status row not found in view:\n%q", raw)
+}
+
 func TestAppProgramFlushPrintsBatchesTranscriptLines(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.width = 64

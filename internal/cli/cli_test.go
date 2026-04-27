@@ -2859,6 +2859,9 @@ func tmuxPaneHasSingleLiveDraft(t *testing.T, sessionName, draft string) (bool, 
 			return false, out
 		}
 	}
+	if count := strings.Count(out, "Welcome. Type a task or /help."); count > 1 {
+		return false, out
+	}
 	if count := strings.Count(out, "F1 help"); count != 1 {
 		return false, out
 	}
