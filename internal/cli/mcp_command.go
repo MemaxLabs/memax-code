@@ -504,7 +504,7 @@ func redactMCPArgs(args []string) []string {
 			continue
 		}
 		key, _, hasValue := strings.Cut(arg, "=")
-		if hasValue && isMCPSecretFlag(key) {
+		if hasValue && (isMCPSecretFlag(key) || isMCPSecretKey(key)) {
 			out[i] = key + "=<redacted>"
 			continue
 		}
@@ -546,7 +546,11 @@ func isMCPSecretFlag(value string) bool {
 	if !strings.HasPrefix(value, "-") {
 		return false
 	}
-	value = strings.TrimLeft(strings.ToLower(strings.TrimSpace(value)), "-")
+	return isMCPSecretKey(strings.TrimLeft(value, "-"))
+}
+
+func isMCPSecretKey(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
 	value = strings.ReplaceAll(value, "_", "-")
 	for _, marker := range []string{
 		"api-key",

@@ -98,6 +98,8 @@ func TestMCPGetRedactsEnvironment(t *testing.T) {
 					"sk-test-secret-value-12345",
 					"https://user:supersecret@auth.example.com/api",
 					"sk-standalone-secret-value-67890",
+					"password=hunter2",
+					"client_secret=client-secret-value",
 					"/etc/auth-tokens/config.json",
 					"/important/config.json",
 					"--server-with-secret-feature",
@@ -125,7 +127,7 @@ func TestMCPGetRedactsEnvironment(t *testing.T) {
 		"name: docs",
 		"enabled: true",
 		"command: https://redacted@example.com/docs-server",
-		"args: --stdio --token=<redacted> --api-key <redacted> https://redacted@auth.example.com/api <redacted> /etc/auth-tokens/config.json /important/config.json --server-with-secret-feature value-that-is-not-a-secret",
+		"args: --stdio --token=<redacted> --api-key <redacted> https://redacted@auth.example.com/api <redacted> password=<redacted> client_secret=<redacted> /etc/auth-tokens/config.json /important/config.json --server-with-secret-feature value-that-is-not-a-secret",
 		"DOCS_TOKEN=<redacted>",
 		"PUBLIC_HINT=<redacted>",
 		"inherit_env: true",
@@ -135,7 +137,7 @@ func TestMCPGetRedactsEnvironment(t *testing.T) {
 			t.Fatalf("mcp get output missing %q:\n%s", want, out)
 		}
 	}
-	for _, leaked := range []string{"secret-token", "also-hidden", "password", "supersecret", "sk-test-secret-value-12345", "sk-standalone-secret-value-67890"} {
+	for _, leaked := range []string{"secret-token", "also-hidden", "hunter2", "supersecret", "sk-test-secret-value-12345", "sk-standalone-secret-value-67890", "client-secret-value"} {
 		if strings.Contains(out, leaked) {
 			t.Fatalf("mcp get leaked %q:\n%s", leaked, out)
 		}
@@ -146,8 +148,8 @@ func TestMCPGetRedactsEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mcp get --json error = %v", err)
 	}
-	if strings.Contains(stdout.String(), "secret-token") || strings.Contains(stdout.String(), "password") || strings.Contains(stdout.String(), "supersecret") ||
-		strings.Contains(stdout.String(), "sk-test-secret-value-12345") || strings.Contains(stdout.String(), "sk-standalone-secret-value-67890") || !strings.Contains(stdout.String(), `"<redacted>"`) ||
+	if strings.Contains(stdout.String(), "secret-token") || strings.Contains(stdout.String(), "hunter2") || strings.Contains(stdout.String(), "supersecret") ||
+		strings.Contains(stdout.String(), "sk-test-secret-value-12345") || strings.Contains(stdout.String(), "sk-standalone-secret-value-67890") || strings.Contains(stdout.String(), "client-secret-value") || !strings.Contains(stdout.String(), `"<redacted>"`) ||
 		!strings.Contains(stdout.String(), `"enabled": true`) {
 		t.Fatalf("mcp get --json redaction output:\n%s", stdout.String())
 	}
@@ -157,8 +159,8 @@ func TestMCPGetRedactsEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mcp list error = %v", err)
 	}
-	if strings.Contains(stdout.String(), "secret-token") || strings.Contains(stdout.String(), "password") || strings.Contains(stdout.String(), "supersecret") ||
-		strings.Contains(stdout.String(), "sk-test-secret-value-12345") || strings.Contains(stdout.String(), "sk-standalone-secret-value-67890") {
+	if strings.Contains(stdout.String(), "secret-token") || strings.Contains(stdout.String(), "hunter2") || strings.Contains(stdout.String(), "supersecret") ||
+		strings.Contains(stdout.String(), "sk-test-secret-value-12345") || strings.Contains(stdout.String(), "sk-standalone-secret-value-67890") || strings.Contains(stdout.String(), "client-secret-value") {
 		t.Fatalf("mcp list leaked a secret-bearing value:\n%s", stdout.String())
 	}
 }
