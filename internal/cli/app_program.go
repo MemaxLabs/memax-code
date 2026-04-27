@@ -841,7 +841,7 @@ func (m *appProgramModel) phaseLabel() string {
 }
 
 func (m *appProgramModel) helpView(width int) string {
-	return appProgramFitLine(appProgramMutedStyle.Render("/help /status /session /pick /show /sessions /resume /new /draft /submit /cancel /quit"), width)
+	return appProgramFitLine(appProgramMutedStyle.Render("/help /status /context /mcp /session /pick /show /sessions /resume /new /draft /submit /cancel /quit"), width)
 }
 
 func (m *appProgramModel) slashCompletionView(width int) string {

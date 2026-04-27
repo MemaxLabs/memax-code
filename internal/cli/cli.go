@@ -26,6 +26,9 @@ func RunWithIO(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	if len(args) > 0 && args[0] == "config" {
 		return runConfigCommand(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "mcp" {
+		return runMCPCommand(args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "doctor" {
 		return runDoctorCommand(args[1:], stdout, stderr)
 	}
@@ -93,6 +96,7 @@ type options struct {
 	WebEnabled        bool
 	WebFetchMaxBytes  int
 	VerifyCommands    map[string]string
+	MCPServers        map[string]mcpServerConfig
 }
 
 func parseArgs(args []string, output io.Writer) (options, error) {
@@ -346,6 +350,7 @@ func parseArgs(args []string, output io.Writer) (options, error) {
 		WebEnabled:        web,
 		WebFetchMaxBytes:  webFetchMax,
 		VerifyCommands:    verifyCommands,
+		MCPServers:        cloneMCPServers(cfg.MCPServers),
 	}
 	if interactive {
 		if *dryRun {
@@ -441,21 +446,22 @@ func shouldImplicitlyStartInteractive(stdin io.Reader, stdout, stderr io.Writer,
 }
 
 type fileConfig struct {
-	Provider          string            `json:"provider,omitempty"`
-	Model             string            `json:"model,omitempty"`
-	Profile           string            `json:"profile,omitempty"`
-	Effort            string            `json:"effort,omitempty"`
-	Preset            string            `json:"preset,omitempty"`
-	UI                string            `json:"ui,omitempty"`
-	Compaction        string            `json:"compaction,omitempty"`
-	ContextWindow     *int              `json:"context_window,omitempty"`
-	ContextSummary    *int              `json:"context_summary_tokens,omitempty"`
-	SessionDir        string            `json:"session_dir,omitempty"`
-	HistoryFile       string            `json:"history_file,omitempty"`
-	InheritCommandEnv *bool             `json:"inherit_command_env,omitempty"`
-	Web               *bool             `json:"web,omitempty"`
-	WebFetchMaxBytes  *int              `json:"web_fetch_max_bytes,omitempty"`
-	VerifyCommands    map[string]string `json:"verify_commands,omitempty"`
+	Provider          string                     `json:"provider,omitempty"`
+	Model             string                     `json:"model,omitempty"`
+	Profile           string                     `json:"profile,omitempty"`
+	Effort            string                     `json:"effort,omitempty"`
+	Preset            string                     `json:"preset,omitempty"`
+	UI                string                     `json:"ui,omitempty"`
+	Compaction        string                     `json:"compaction,omitempty"`
+	ContextWindow     *int                       `json:"context_window,omitempty"`
+	ContextSummary    *int                       `json:"context_summary_tokens,omitempty"`
+	SessionDir        string                     `json:"session_dir,omitempty"`
+	HistoryFile       string                     `json:"history_file,omitempty"`
+	InheritCommandEnv *bool                      `json:"inherit_command_env,omitempty"`
+	Web               *bool                      `json:"web,omitempty"`
+	WebFetchMaxBytes  *int                       `json:"web_fetch_max_bytes,omitempty"`
+	VerifyCommands    map[string]string          `json:"verify_commands,omitempty"`
+	MCPServers        map[string]mcpServerConfig `json:"mcp_servers,omitempty"`
 }
 
 func loadConfig(path string, explicit bool) (fileConfig, bool, error) {
@@ -763,6 +769,20 @@ func renderDryRun(w io.Writer, opts options) error {
 	if len(opts.VerifyCommands) > 0 {
 		for _, name := range sortedMapKeys(opts.VerifyCommands) {
 			fmt.Fprintf(w, "verify_command.%s: %s\n", name, opts.VerifyCommands[name])
+		}
+	}
+	if len(opts.MCPServers) > 0 {
+		for _, name := range sortedMapKeysMCP(opts.MCPServers) {
+			server := opts.MCPServers[name]
+			status := "enabled"
+			if !server.enabled() {
+				status = "disabled"
+			}
+			parallel := "serial"
+			if server.SupportsParallelToolCalls {
+				parallel = "parallel"
+			}
+			fmt.Fprintf(w, "mcp_server.%s: %s %s %s\n", name, status, parallel, server.Command)
 		}
 	}
 	fmt.Fprintf(w, "inherit_command_env: %t\n", opts.InheritCommandEnv)

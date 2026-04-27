@@ -150,6 +150,7 @@ func interactiveCommandSpecs() []interactiveCommandSpec {
 		{Name: "/help", Usage: "/help", Description: "show available slash commands"},
 		{Name: "/status", Usage: "/status", Description: "show active runtime settings"},
 		{Name: "/context", Usage: "/context [TARGET]", Description: "show context budgets and active checkpoint"},
+		{Name: "/mcp", Usage: "/mcp", Description: "show configured MCP servers"},
 		{Name: "/session", Usage: "/session", Description: "show the active session"},
 		{Name: "/pick", Usage: "/pick", Description: "list recent sessions with numbers"},
 		{Name: "/show", Usage: "/show [TARGET]", Description: "show current, latest, number, or ID"},
@@ -208,6 +209,8 @@ func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, cu
 		if err := printInteractiveContext(ctx, w, opts, *currentSession, arg); err != nil {
 			fmt.Fprintf(w, "error: %v\n", err)
 		}
+	case "/mcp":
+		printInteractiveMCP(w, opts)
 	case "/draft":
 		if composer == nil {
 			fmt.Fprintln(w, "drafts are unavailable")
@@ -332,8 +335,46 @@ func printInteractiveStatus(ctx context.Context, w io.Writer, opts options, curr
 			fmt.Fprintf(w, "  verify_command.%s: %s\n", name, opts.VerifyCommands[name])
 		}
 	}
+	if len(opts.MCPServers) > 0 {
+		for _, name := range sortedMapKeysMCP(opts.MCPServers) {
+			server := opts.MCPServers[name]
+			status := "enabled"
+			if !server.enabled() {
+				status = "disabled"
+			}
+			parallel := "serial"
+			if server.SupportsParallelToolCalls {
+				parallel = "parallel"
+			}
+			fmt.Fprintf(w, "  mcp_server.%s: %s %s %s\n", name, status, parallel, server.Command)
+		}
+	}
 	fmt.Fprintf(w, "  inherit_command_env: %t\n", opts.InheritCommandEnv)
 	return nil
+}
+
+func printInteractiveMCP(w io.Writer, opts options) {
+	if len(opts.MCPServers) == 0 {
+		fmt.Fprintln(w, "no MCP servers")
+		return
+	}
+	fmt.Fprintln(w, "mcp servers:")
+	for _, name := range sortedMapKeysMCP(opts.MCPServers) {
+		server := opts.MCPServers[name]
+		status := "enabled"
+		if !server.enabled() {
+			status = "disabled"
+		}
+		parallel := "serial"
+		if server.SupportsParallelToolCalls {
+			parallel = "parallel"
+		}
+		fmt.Fprintf(w, "  %s: %s %s %s", name, status, parallel, server.Command)
+		if len(server.Args) > 0 {
+			fmt.Fprintf(w, " %s", strings.Join(server.Args, " "))
+		}
+		fmt.Fprintln(w)
+	}
 }
 
 func printInteractiveContext(ctx context.Context, w io.Writer, opts options, currentSession, raw string) error {

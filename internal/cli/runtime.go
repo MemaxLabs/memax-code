@@ -16,6 +16,7 @@ import (
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
+	"github.com/MemaxLabs/memax-go-agent-sdk/mcpbridge"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/coding"
@@ -57,10 +58,11 @@ func runPromptWithEvents(ctx context.Context, opts options, observe func(memaxag
 		return "", err
 	}
 
-	stack, err := buildStackWithModel(opts, client)
+	stack, cleanup, err := buildStackWithModelForRun(queryCtx, opts, client)
 	if err != nil {
 		return "", err
 	}
+	defer cleanup()
 	agentOpts := stack.WithModel(client)
 	agentOpts.SessionID = opts.ResumeSessionID
 	events, err := memaxagent.Query(queryCtx, opts.Prompt, agentOpts)
@@ -92,10 +94,11 @@ func runPromptWithEventsRendered(ctx context.Context, stdout io.Writer, opts opt
 		return "", err
 	}
 
-	stack, err := buildStackWithModel(opts, client)
+	stack, cleanup, err := buildStackWithModelForRun(queryCtx, opts, client)
 	if err != nil {
 		return "", err
 	}
+	defer cleanup()
 	agentOpts := stack.WithModel(client)
 	agentOpts.SessionID = opts.ResumeSessionID
 	events, err := memaxagent.Query(queryCtx, opts.Prompt, agentOpts)
@@ -193,11 +196,12 @@ func showSession(ctx context.Context, stdout io.Writer, opts options) error {
 	return nil
 }
 
-func inspectTools(_ context.Context, stdout io.Writer, opts options) error {
-	stack, err := buildStack(opts)
+func inspectTools(ctx context.Context, stdout io.Writer, opts options) error {
+	stack, cleanup, err := buildStackWithModelForRun(ctx, opts, nil)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	specs := append([]model.ToolSpec(nil), stack.Registry().Specs()...)
 	sort.SliceStable(specs, func(i, j int) bool {
 		return specs[i].Name < specs[j].Name
@@ -331,18 +335,23 @@ func buildStack(opts options) (coding.Stack, error) {
 }
 
 func buildStackWithModel(opts options, client model.Client) (coding.Stack, error) {
+	stack, _, err := buildStackWithModelForRun(context.Background(), opts, client)
+	return stack, err
+}
+
+func buildStackWithModelForRun(ctx context.Context, opts options, client model.Client) (coding.Stack, func(), error) {
 	preset, err := parsePreset(opts.Preset)
 	if err != nil {
-		return coding.Stack{}, err
+		return coding.Stack{}, nil, err
 	}
 	config, err := preset.Config()
 	if err != nil {
-		return coding.Stack{}, err
+		return coding.Stack{}, nil, err
 	}
 
 	ws, err := workspace.NewOSStore(opts.CWD)
 	if err != nil {
-		return coding.Stack{}, fmt.Errorf("open workspace: %w", err)
+		return coding.Stack{}, nil, fmt.Errorf("open workspace: %w", err)
 	}
 	runnerOpts := []commandtools.OSRunnerOption{}
 	sessionOpts := []commandtools.OSSessionManagerOption{}
@@ -352,11 +361,11 @@ func buildStackWithModel(opts options, client model.Client) (coding.Stack, error
 	}
 	runner, err := commandtools.NewOSRunner(opts.CWD, runnerOpts...)
 	if err != nil {
-		return coding.Stack{}, fmt.Errorf("create command runner: %w", err)
+		return coding.Stack{}, nil, fmt.Errorf("create command runner: %w", err)
 	}
 	commandSessions, err := commandtools.NewOSSessionManager(opts.CWD, sessionOpts...)
 	if err != nil {
-		return coding.Stack{}, fmt.Errorf("create command session manager: %w", err)
+		return coding.Stack{}, nil, fmt.Errorf("create command session manager: %w", err)
 	}
 
 	taskStore := tasktools.NewMemoryStore(nil)
@@ -391,12 +400,12 @@ func buildStackWithModel(opts options, client model.Client) (coding.Stack, error
 			DefaultMaxBytes: webFetchMaxBytes,
 		})
 		if err != nil {
-			return coding.Stack{}, fmt.Errorf("configure web tools: %w", err)
+			return coding.Stack{}, nil, fmt.Errorf("configure web tools: %w", err)
 		}
 	}
 	delegate, err := codingSubagentTool(client, config, taskStore, webFetch)
 	if err != nil {
-		return coding.Stack{}, err
+		return coding.Stack{}, nil, err
 	}
 	baseRegistry := config.Base.Tools
 	if baseRegistry == nil {
@@ -406,11 +415,15 @@ func buildStackWithModel(opts options, client model.Client) (coding.Stack, error
 	}
 	if webFetch != nil {
 		if err := baseRegistry.Register(webFetch); err != nil {
-			return coding.Stack{}, fmt.Errorf("configure web tools: %w", err)
+			return coding.Stack{}, nil, fmt.Errorf("configure web tools: %w", err)
 		}
 	}
 	if err := baseRegistry.Register(delegate); err != nil {
-		return coding.Stack{}, fmt.Errorf("configure subagents: %w", err)
+		return coding.Stack{}, nil, fmt.Errorf("configure subagents: %w", err)
+	}
+	cleanupMCP, err := configureMCPServers(ctx, opts, baseRegistry)
+	if err != nil {
+		return coding.Stack{}, nil, err
 	}
 	config.Base.Tools = baseRegistry
 	config.Base.AppendSystemPrompt = appendPromptSection(config.Base.AppendSystemPrompt, cliToolContractGuidance)
@@ -418,9 +431,54 @@ func buildStackWithModel(opts options, client model.Client) (coding.Stack, error
 	config.Base.AppendSystemPrompt = appendPromptSection(config.Base.AppendSystemPrompt, cliVisibleProgressGuidance)
 	stack, err := coding.New(config)
 	if err != nil {
-		return coding.Stack{}, fmt.Errorf("configure runtime: %w", userFacingError(err))
+		cleanupMCP()
+		return coding.Stack{}, nil, fmt.Errorf("configure runtime: %w", userFacingError(err))
 	}
-	return stack, nil
+	return stack, cleanupMCP, nil
+}
+
+func configureMCPServers(ctx context.Context, opts options, registry *tool.Registry) (func(), error) {
+	if len(opts.MCPServers) == 0 {
+		return func() {}, nil
+	}
+	var toolsets []mcpbridge.ToolSet
+	cleanup := func() {
+		for i := len(toolsets) - 1; i >= 0; i-- {
+			_ = toolsets[i].Close()
+		}
+	}
+	for _, name := range sortedMapKeysMCP(opts.MCPServers) {
+		server := opts.MCPServers[name]
+		if !server.enabled() {
+			continue
+		}
+		cfg := mcpbridge.ServerConfig{
+			Name:                      name,
+			Command:                   server.Command,
+			Args:                      append([]string(nil), server.Args...),
+			Env:                       cloneStringMap(server.Env),
+			CWD:                       server.CWD,
+			SupportsParallelToolCalls: server.SupportsParallelToolCalls,
+		}
+		client, err := mcpbridge.NewStdioClient(ctx, cfg)
+		if err != nil {
+			cleanup()
+			return nil, fmt.Errorf("configure MCP server %s: %w", name, err)
+		}
+		set, err := mcpbridge.DiscoverTools(ctx, client, cfg)
+		if err != nil {
+			_ = client.Close()
+			cleanup()
+			return nil, fmt.Errorf("configure MCP server %s: %w", name, err)
+		}
+		if err := set.Register(registry); err != nil {
+			_ = set.Close()
+			cleanup()
+			return nil, fmt.Errorf("configure MCP server %s: %w", name, err)
+		}
+		toolsets = append(toolsets, set)
+	}
+	return cleanup, nil
 }
 
 func normalizedWebFetchMaxBytes(value int) int {

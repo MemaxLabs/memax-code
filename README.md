@@ -37,6 +37,7 @@ This repository is intentionally separate from the SDK:
 - OpenAI and Anthropic provider adapters through the SDK
 - root-confined workspace and command tools
 - bounded `web_fetch` for HTTP(S) pages with private-network protections
+- stdio MCP server tools loaded from local config
 - managed command sessions for long-running processes
 - bounded subagents for exploration, review, and isolated worker tasks
 - automatic context compaction with model-visible summaries for long sessions
@@ -144,6 +145,16 @@ Example config:
   "inherit_command_env": true,
   "web": true,
   "web_fetch_max_bytes": 524288,
+  "mcp_servers": {
+    "docs": {
+      "command": "docs-mcp-server",
+      "args": ["--stdio"],
+      "env": {
+        "DOCS_TOKEN": "..."
+      },
+      "supports_parallel_tool_calls": true
+    }
+  },
   "verify_commands": {
     "test": "npm test",
     "lint": "npm run lint"
@@ -198,6 +209,7 @@ control local state without calling a model:
 /help
 /status
 /context
+/mcp
 /pick
 /show latest
 /sessions
@@ -275,6 +287,24 @@ retrieval. It:
 
 The response cap is configurable with `--web-fetch-max-bytes` and limited to
 4 MiB.
+
+### MCP servers
+
+Memax Code can load stdio MCP servers from config and expose their advertised
+tools to the model as normal Memax tools. Tool names use
+`mcp__<server>__<tool>` so they remain namespaced and collision-resistant.
+
+Add, inspect, and remove servers with:
+
+```sh
+memax-code mcp add docs --env DOCS_TOKEN=... -- docs-mcp-server --stdio
+memax-code mcp list
+memax-code mcp remove docs
+```
+
+Inside the interactive shell, `/mcp` shows the configured servers. Disabled
+servers stay in config but are not started. `supports_parallel_tool_calls`
+should only be enabled for servers whose tools are safe to call concurrently.
 
 ### Verification
 
