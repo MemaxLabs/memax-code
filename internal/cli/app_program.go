@@ -1973,6 +1973,9 @@ func appFormatToolLine(line string) string {
 }
 
 func appToolDisplayName(name string) string {
+	if display, ok := appMCPToolDisplayName(name); ok {
+		return display
+	}
 	switch name {
 	case "run_command", "start_command":
 		return "Bash"
@@ -2003,6 +2006,27 @@ func appToolDisplayName(name string) string {
 	default:
 		return statusValue(name)
 	}
+}
+
+func appMCPToolDisplayName(name string) (string, bool) {
+	trimmed := strings.TrimSpace(name)
+	if !strings.HasPrefix(trimmed, "mcp__") {
+		return "", false
+	}
+	body := strings.TrimPrefix(trimmed, "mcp__")
+	server, remote, ok := strings.Cut(body, "__")
+	if !ok || strings.TrimSpace(server) == "" || strings.TrimSpace(remote) == "" {
+		return "MCP", true
+	}
+	// MCP server names may contain the sanitized "__" separator. The rightmost
+	// separator is the best display boundary for Memax-generated tool names.
+	if i := strings.LastIndex(body, "__"); i > 0 && i+2 < len(body) {
+		server = body[:i]
+		remote = body[i+2:]
+	}
+	server = strings.ReplaceAll(server, "__", "_")
+	remote = strings.ReplaceAll(remote, "__", "_")
+	return "MCP " + server + "." + remote, true
 }
 
 func appToolUseDisplay(toolUse *model.ToolUse) string {

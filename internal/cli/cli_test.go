@@ -1892,6 +1892,44 @@ func TestInteractiveMCPShowsLoadedToolsAndDiagnostics(t *testing.T) {
 	}
 }
 
+func TestInteractiveStatusShowsMCPRuntimeSummary(t *testing.T) {
+	opts := options{
+		Provider:   providerOpenAI,
+		Model:      "example-model",
+		Profile:    "fast",
+		Effort:     "auto",
+		Preset:     "interactive_dev",
+		UI:         "app",
+		CWD:        repoRoot(t),
+		SessionDir: t.TempDir(),
+		MCPServers: map[string]mcpServerConfig{
+			"docs":     {Command: "docs-server", SupportsParallelToolCalls: true},
+			"disabled": {Command: "disabled-server", Enabled: boolPtr(false)},
+		},
+		RuntimeMCPReady: true,
+		RuntimeMCPTools: []tool.Tool{
+			tool.Definition{ToolSpec: model.ToolSpec{Name: "mcp__docs__search"}},
+			tool.Definition{ToolSpec: model.ToolSpec{Name: "mcp__docs__lookup"}},
+		},
+	}
+
+	var out bytes.Buffer
+	if err := printInteractiveStatus(context.Background(), &out, opts, ""); err != nil {
+		t.Fatalf("printInteractiveStatus() error = %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"mcp: 2 configured, 1 enabled, 1 disabled, 2 tool(s) loaded",
+		"mcp_details: /mcp or /mcp NAME",
+		"mcp_server.docs: enabled parallel docs-server",
+		"mcp_server.disabled: disabled serial disabled-server",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("interactive status missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestInteractiveMCPGroupsToolsForSanitizedServerNames(t *testing.T) {
 	opts := options{
 		MCPServers: map[string]mcpServerConfig{

@@ -349,6 +349,7 @@ func printInteractiveStatus(ctx context.Context, w io.Writer, opts options, curr
 		}
 	}
 	if len(opts.MCPServers) > 0 {
+		printInteractiveMCPStatusSummary(w, opts)
 		for _, name := range sortedMapKeysMCP(opts.MCPServers) {
 			server := opts.MCPServers[name]
 			status := "enabled"
@@ -368,6 +369,30 @@ func printInteractiveStatus(ctx context.Context, w io.Writer, opts options, curr
 	}
 	fmt.Fprintf(w, "  inherit_command_env: %t\n", opts.InheritCommandEnv)
 	return nil
+}
+
+func printInteractiveMCPStatusSummary(w io.Writer, opts options) {
+	enabled := 0
+	disabled := 0
+	for _, server := range opts.MCPServers {
+		if server.enabled() {
+			enabled++
+		} else {
+			disabled++
+		}
+	}
+	loadedTools := 0
+	if opts.RuntimeMCPReady {
+		for _, tools := range runtimeMCPToolsByServer(opts) {
+			loadedTools += len(tools)
+		}
+	}
+	loaded := "not loaded"
+	if opts.RuntimeMCPReady {
+		loaded = fmt.Sprintf("%d tool(s) loaded", loadedTools)
+	}
+	fmt.Fprintf(w, "  mcp: %d configured, %d enabled, %d disabled, %s\n", len(opts.MCPServers), enabled, disabled, loaded)
+	fmt.Fprintln(w, "  mcp_details: /mcp or /mcp NAME")
 }
 
 func printInteractiveMCP(w io.Writer, opts options, raw string) {

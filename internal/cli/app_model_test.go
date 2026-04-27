@@ -1584,6 +1584,34 @@ func TestAppProgramStructuredWorkspaceToolLabelsIncludeInputs(t *testing.T) {
 	}
 }
 
+func TestAppProgramStructuredMCPToolLabelsAreFriendly(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:    "tool-1",
+		Name:  "mcp__docs_api__search",
+		Input: json.RawMessage(`{"query":"agent runtime"}`),
+	}})
+	before := ansi.Strip(strings.Join(m.activeActivityLines(), "\n"))
+	if !strings.Contains(before, "• MCP docs_api.search") {
+		t.Fatalf("MCP tool invocation did not use friendly label:\n%s", before)
+	}
+	if strings.Contains(before, "mcp__docs_api__search") {
+		t.Fatalf("MCP tool invocation leaked internal tool name:\n%s", before)
+	}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		ToolUseID: "tool-1",
+		Name:      "mcp__docs_api__search",
+		Content:   "Found 2 docs",
+	}})
+	after := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(after, "• MCP docs_api.search\n  └ ok: 1 line, 12B") {
+		t.Fatalf("MCP tool result did not stay grouped under friendly label:\n%s", after)
+	}
+}
+
 func TestAppProgramStructuredToolUseStartMergesWithFinalToolUse(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
