@@ -173,8 +173,10 @@ checkpoint: the raw JSONL transcript remains available for inspection, while
 future model turns continue from the summary checkpoint plus newer messages
 instead of re-summarizing the same old prefix repeatedly. The local estimator is
 conservative because provider tokenizers differ; the runtime preserves headroom
-rather than risking a provider context-window error. Set `"compaction": "off"`
-or pass `--compaction off` to disable this behavior for debugging. In the
+rather than risking a provider context-window error. The CLI uses hysteresis:
+it compacts down to a target budget, then waits for the transcript to grow past
+a higher trigger budget before summarizing again. Set `"compaction": "off"` or
+pass `--compaction off` to disable this behavior for debugging. In the
 interactive shell, `/context` shows the active context budgets, raw transcript
 message count, model-visible message count, and latest persisted checkpoint.
 The displayed budget is the configured or registry-derived planning budget; a

@@ -58,12 +58,12 @@ func (f *appTranscriptFormatter) appendEvent(event memaxagent.Event) {
 	case memaxagent.EventToolResult:
 		f.appendToolResult(event.ToolResult)
 	case memaxagent.EventContextApplied:
-		if event.Context != nil {
-			f.appendActivityLine(appProgramDimStyle.Render(fmt.Sprintf("~ context selected messages=%d/%d", event.Context.SentMessages, event.Context.OriginalMessages)))
-		}
+		// Keep routine context-selection events out of the human transcript.
+		// Compaction events remain visible; machine-readable event streams still
+		// expose both event kinds.
 	case memaxagent.EventContextCompacted:
 		if event.Compaction != nil {
-			f.appendActivityLine(appProgramDimStyle.Render(contextCompactionLine(event.Compaction.SummarizedMessages, event.Compaction.SentMessages)))
+			f.appendActivityLine(appProgramDimStyle.Render(contextCompactionLine(event.Compaction.OriginalMessages, event.Compaction.SentMessages)))
 		}
 	case memaxagent.EventWorkspaceCheckpoint:
 		if event.Workspace != nil {

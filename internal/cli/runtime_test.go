@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
@@ -164,6 +165,28 @@ func TestBuildStackConfiguresAutomaticContextPolicies(t *testing.T) {
 	}
 	if agentOpts.ContextRetry == nil {
 		t.Fatal("ContextRetry = nil, want automatic retry policy")
+	}
+	mainPolicy, ok := agentOpts.Context.(contextwindow.PreserveImportant)
+	if !ok {
+		t.Fatalf("Context = %T, want contextwindow.PreserveImportant", agentOpts.Context)
+	}
+	mainBudget, ok := mainPolicy.Policy.(contextwindow.SummarizingBudget)
+	if !ok {
+		t.Fatalf("Context inner policy = %T, want contextwindow.SummarizingBudget", mainPolicy.Policy)
+	}
+	if mainBudget.MaxTokens != 51200 || mainBudget.TriggerTokens != 57600 {
+		t.Fatalf("main budget = max %d trigger %d, want 51200/57600", mainBudget.MaxTokens, mainBudget.TriggerTokens)
+	}
+	retryPolicy, ok := agentOpts.ContextRetry.(contextwindow.PreserveImportant)
+	if !ok {
+		t.Fatalf("ContextRetry = %T, want contextwindow.PreserveImportant", agentOpts.ContextRetry)
+	}
+	retryBudget, ok := retryPolicy.Policy.(contextwindow.SummarizingBudget)
+	if !ok {
+		t.Fatalf("ContextRetry inner policy = %T, want contextwindow.SummarizingBudget", retryPolicy.Policy)
+	}
+	if retryBudget.MaxTokens != 35200 || retryBudget.TriggerTokens != 0 {
+		t.Fatalf("retry budget = max %d trigger %d, want 35200/0", retryBudget.MaxTokens, retryBudget.TriggerTokens)
 	}
 }
 

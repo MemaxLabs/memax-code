@@ -9,6 +9,7 @@ import (
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
@@ -292,6 +293,62 @@ func TestAppRenderPrintsCompactSessionLineWithoutStructuredHeader(t *testing.T) 
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("app output leaked structured session chrome %q:\n%s", unwanted, got)
 		}
+	}
+}
+
+func TestAppRenderShowsOnlyCompactionContextEvents(t *testing.T) {
+	events := make(chan memaxagent.Event, 3)
+	events <- memaxagent.Event{
+		Kind:    memaxagent.EventContextApplied,
+		Context: &memaxagent.ContextEvent{OriginalMessages: 19, SentMessages: 8},
+	}
+	events <- memaxagent.Event{
+		Kind: memaxagent.EventContextCompacted,
+		Compaction: &contextwindow.CompactionRecord{
+			OriginalMessages: 19,
+			SentMessages:     8,
+		},
+	}
+	close(events)
+
+	var out bytes.Buffer
+	if err := renderWith(&out, events, &appRenderState{}); err != nil {
+		t.Fatalf("renderWith(app) error = %v", err)
+	}
+	got := ansi.Strip(out.String())
+	if strings.Contains(got, "context selected") {
+		t.Fatalf("app output leaked routine context-selection row:\n%s", got)
+	}
+	if !strings.Contains(got, "~ context compacted 19 -> 8 messages") {
+		t.Fatalf("app output missing compact compaction row:\n%s", got)
+	}
+}
+
+func TestStructuredRenderShowsOnlyCompactionContextEvents(t *testing.T) {
+	events := make(chan memaxagent.Event, 3)
+	events <- memaxagent.Event{
+		Kind:    memaxagent.EventContextApplied,
+		Context: &memaxagent.ContextEvent{OriginalMessages: 19, SentMessages: 8},
+	}
+	events <- memaxagent.Event{
+		Kind: memaxagent.EventContextCompacted,
+		Compaction: &contextwindow.CompactionRecord{
+			OriginalMessages: 19,
+			SentMessages:     8,
+		},
+	}
+	close(events)
+
+	var out bytes.Buffer
+	if err := renderWith(&out, events, &tuiRenderState{}); err != nil {
+		t.Fatalf("renderWith(tui) error = %v", err)
+	}
+	got := ansi.Strip(out.String())
+	if strings.Contains(got, "context selected") {
+		t.Fatalf("structured output leaked routine context-selection row:\n%s", got)
+	}
+	if !strings.Contains(got, "~ context compacted 19 -> 8 messages") {
+		t.Fatalf("structured output missing compact compaction row:\n%s", got)
 	}
 }
 

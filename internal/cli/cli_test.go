@@ -49,6 +49,7 @@ func TestDryRunPrintsResolvedConfig(t *testing.T) {
 		"ui: auto",
 		"compaction: auto",
 		"context_window: 200000",
+		"context_trigger_tokens: 180000",
 		"context_summary_tokens: 8192",
 		"context_main_tokens: 160000",
 		"context_retry_tokens: 110000",
@@ -249,8 +250,8 @@ func TestParseEnablesCompactionByDefault(t *testing.T) {
 		t.Fatalf("effectiveContextSummaryTokens() = %d, want 8192", got)
 	}
 	budgets := resolveContextBudgets(opts, nil)
-	if budgets.WindowTokens != 272000 || budgets.SummaryTokens != 8192 || budgets.RetryTokens >= budgets.MainTokens {
-		t.Fatalf("resolveContextBudgets() = %+v, want resolved budgets with retry < main", budgets)
+	if budgets.WindowTokens != 272000 || budgets.TriggerTokens != 244800 || budgets.SummaryTokens != 8192 || budgets.RetryTokens >= budgets.MainTokens {
+		t.Fatalf("resolveContextBudgets() = %+v, want resolved budgets with trigger and retry < main", budgets)
 	}
 }
 
@@ -289,6 +290,7 @@ func TestDryRunUsesModelsDevRegistryForContextWindow(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{
 		"context_window: 1050000",
+		"context_trigger_tokens: 945000",
 		"context_main_tokens: 840000",
 		"context_retry_tokens: 577500",
 		"model_registry: remote models.dev",
@@ -1824,6 +1826,7 @@ func TestRunInteractiveContextShowsActiveCompactionCheckpoint(t *testing.T) {
 		"context:",
 		"compaction: auto",
 		"context_window: 64000",
+		"context_trigger_tokens: 57600",
 		"context_summary_tokens: 4096",
 		"context_main_tokens: 51200",
 		"context_retry_tokens: 35200",

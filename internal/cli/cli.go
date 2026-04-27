@@ -786,9 +786,10 @@ func printContextBudgetFields(w io.Writer, opts options, prefix string) {
 	}
 	budgets := resolveContextBudgets(opts, nil)
 	fmt.Fprintf(w, "%scontext_window: %d\n", prefix, budgets.WindowTokens)
-	fmt.Fprintf(w, "%scontext_summary_tokens: %d\n", prefix, budgets.SummaryTokens)
 	fmt.Fprintf(w, "%scontext_main_tokens: %d\n", prefix, budgets.MainTokens)
+	fmt.Fprintf(w, "%scontext_trigger_tokens: %d\n", prefix, budgets.TriggerTokens)
 	fmt.Fprintf(w, "%scontext_retry_tokens: %d\n", prefix, budgets.RetryTokens)
+	fmt.Fprintf(w, "%scontext_summary_tokens: %d\n", prefix, budgets.SummaryTokens)
 	if opts.ModelRegistryInfo != "" {
 		fmt.Fprintf(w, "%smodel_registry: %s\n", prefix, opts.ModelRegistryInfo)
 	}

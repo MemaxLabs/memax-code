@@ -201,12 +201,12 @@ func (s *tuiRenderState) Render(w io.Writer, event memaxagent.Event) error {
 			}
 		}
 	case memaxagent.EventContextApplied:
-		if event.Context != nil {
-			s.renderActivity(w, fmt.Sprintf("~ context selected messages=%d/%d", event.Context.SentMessages, event.Context.OriginalMessages))
-		}
+		// Keep routine context-selection events out of the human transcript.
+		// Compaction events remain visible; machine-readable event streams still
+		// expose both event kinds.
 	case memaxagent.EventContextCompacted:
 		if event.Compaction != nil {
-			s.renderActivity(w, contextCompactionLine(event.Compaction.SummarizedMessages, event.Compaction.SentMessages))
+			s.renderActivity(w, contextCompactionLine(event.Compaction.OriginalMessages, event.Compaction.SentMessages))
 		}
 	case memaxagent.EventWorkspaceCheckpoint:
 		if event.Workspace != nil {
@@ -578,9 +578,9 @@ func renderEvent(w io.Writer, event memaxagent.Event) error {
 	return nil
 }
 
-func contextCompactionLine(summarized, sent int) string {
-	if summarized > 0 && sent > 0 {
-		return fmt.Sprintf("~ context compacted summarized=%d sent=%d", summarized, sent)
+func contextCompactionLine(original, sent int) string {
+	if original > 0 && sent > 0 {
+		return fmt.Sprintf("~ context compacted %d -> %d messages", original, sent)
 	}
 	return "~ context compacted"
 }

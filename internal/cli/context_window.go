@@ -26,6 +26,7 @@ const (
 
 type resolvedContextBudgets struct {
 	WindowTokens  int
+	TriggerTokens int
 	SummaryTokens int
 	MainTokens    int
 	RetryTokens   int
@@ -136,6 +137,14 @@ func resolveContextBudgets(opts options, client model.Client) resolvedContextBud
 		mainBudget = window
 	}
 
+	triggerBudget := int(float64(window) * 0.90)
+	if triggerBudget < mainBudget {
+		triggerBudget = mainBudget
+	}
+	if triggerBudget > window {
+		triggerBudget = window
+	}
+
 	retryBudget := int(float64(window) * 0.55)
 	if retryBudget <= summaryTokens {
 		retryBudget = summaryTokens + 1
@@ -146,6 +155,7 @@ func resolveContextBudgets(opts options, client model.Client) resolvedContextBud
 
 	return resolvedContextBudgets{
 		WindowTokens:  window,
+		TriggerTokens: triggerBudget,
 		SummaryTokens: summaryTokens,
 		MainTokens:    mainBudget,
 		RetryTokens:   retryBudget,
@@ -176,6 +186,7 @@ func contextPolicies(opts options, client model.Client) (contextwindow.Policy, c
 	return contextwindow.PreserveImportant{
 			Policy: contextwindow.SummarizingBudget{
 				MaxTokens:        budgets.MainTokens,
+				TriggerTokens:    budgets.TriggerTokens,
 				MaxSummaryTokens: budgets.SummaryTokens,
 				Estimate:         estimateApproxTokens,
 				Summarizer:       summarizer,
