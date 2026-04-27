@@ -139,6 +139,46 @@ type interactiveCommandResult struct {
 	SubmitPrompt string
 }
 
+type interactiveCommandSpec struct {
+	Name        string
+	Description string
+}
+
+func interactiveCommandSpecs() []interactiveCommandSpec {
+	return []interactiveCommandSpec{
+		{Name: "/help", Description: "Show available slash commands"},
+		{Name: "/status", Description: "Show active runtime settings"},
+		{Name: "/context", Description: "Show context budgets and active checkpoint"},
+		{Name: "/session", Description: "Show the active session"},
+		{Name: "/pick", Description: "List recent sessions with numbers"},
+		{Name: "/show", Description: "Show current, latest, number, or ID"},
+		{Name: "/sessions", Description: "List saved sessions"},
+		{Name: "/resume", Description: "Resume by ID, latest, or number"},
+		{Name: "/new", Description: "Start the next prompt in a new session"},
+		{Name: "/draft", Description: "Start a multi-line draft"},
+		{Name: "/append", Description: "Append one line to the draft"},
+		{Name: "/show-draft", Description: "Show the active draft"},
+		{Name: "/submit", Description: "Send the active draft"},
+		{Name: "/cancel", Description: "Discard the active draft"},
+		{Name: "/history", Description: "List remembered prompts"},
+		{Name: "/recall", Description: "Recall a prompt into the draft"},
+		{Name: "/quit", Description: "Exit Memax Code"},
+	}
+}
+
+func knownInteractiveCommand(name string) bool {
+	switch name {
+	case "/exit", "/draft-show":
+		return true
+	}
+	for _, spec := range interactiveCommandSpecs() {
+		if spec.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func handleInteractiveCommand(ctx context.Context, w io.Writer, opts options, currentSession *string, composer *interactiveComposer, line string) interactiveCommandResult {
 	name, arg := splitInteractiveCommand(line)
 	switch name {
@@ -452,22 +492,8 @@ func unescapeInteractivePrompt(line string) string {
 
 func printInteractiveHelp(w io.Writer) {
 	fmt.Fprintln(w, "slash commands:")
-	fmt.Fprintln(w, "  /help              show this help")
-	fmt.Fprintln(w, "  /status            show active runtime settings")
-	fmt.Fprintln(w, "  /context [TARGET]  show context budgets and active checkpoint")
-	fmt.Fprintln(w, "  /session           show the active session")
-	fmt.Fprintln(w, "  /pick              list recent sessions with numbers")
-	fmt.Fprintln(w, "  /show [TARGET]     show current, latest, number, or ID")
-	fmt.Fprintln(w, "  /sessions          list saved sessions")
-	fmt.Fprintln(w, "  /resume TARGET     resume by ID, latest, or number")
-	fmt.Fprintln(w, "  /new               start the next prompt in a new session")
-	fmt.Fprintln(w, "  /draft [TEXT]      start a multi-line draft")
-	fmt.Fprintln(w, "  /append TEXT       append one line to the draft")
-	fmt.Fprintln(w, "  /show-draft        show the active draft")
-	fmt.Fprintln(w, "  /submit            send the active draft")
-	fmt.Fprintln(w, "  /cancel            discard the active draft")
-	fmt.Fprintln(w, "  /history           list remembered prompts")
-	fmt.Fprintln(w, "  /recall [N|latest] recall a prompt into the draft")
-	fmt.Fprintln(w, "  /quit              exit")
+	for _, spec := range interactiveCommandSpecs() {
+		fmt.Fprintf(w, "  %-18s %s\n", spec.Name, strings.ToLower(spec.Description[:1])+spec.Description[1:])
+	}
 	fmt.Fprintln(w, "  //PROMPT           send a prompt that starts with /")
 }

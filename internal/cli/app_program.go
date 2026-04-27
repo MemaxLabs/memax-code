@@ -46,6 +46,8 @@ var (
 	appProgramInlineCodeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("188"))
 	appProgramQuoteStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Italic(true)
 	appProgramStatusMetaStyle    = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("242"))
+	appProgramSuggestionStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
+	appProgramSuggestionActive   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
 )
 
 const (
@@ -68,6 +70,12 @@ type appProgramPromptDoneMsg struct {
 }
 
 type appProgramTickMsg time.Time
+
+type appProgramSlashCompletion struct {
+	selected     int
+	dismissedFor string
+	prefix       string
+}
 
 type appProgramModel struct {
 	ctx       context.Context
@@ -95,6 +103,7 @@ type appProgramModel struct {
 	spinner       int
 	tickArmed     bool
 	turnStartedAt time.Time
+	slashMenu     appProgramSlashCompletion
 }
 
 func newAppProgramModel(ctx context.Context, opts options, runPrompt interactivePromptRunner) *appProgramModel {
@@ -196,6 +205,8 @@ func (m *appProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.syncComposerDraftFromInput()
 	if m.input.Value() != beforeInput {
 		m.composer.history.ResetTraversal()
+		m.updateSlashCompletionAfterInputChange(beforeInput)
+		m.clampSlashCompletion()
 		m.resize()
 	}
 	return m, m.withRender(cmd)
@@ -231,24 +242,46 @@ func (m *appProgramModel) updateKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.showHelp = !m.showHelp
 		return nil, true
 	case "esc":
+		if m.slashCompletionActive() {
+			m.slashMenu.dismissedFor = m.input.Value()
+			return nil, true
+		}
 		if strings.TrimSpace(m.input.Value()) != "" {
 			m.input.Reset()
 			m.syncComposerDraftFromInput()
+			m.resetSlashCompletion()
 			return nil, true
 		}
 	case "alt+enter", "shift+enter":
 		m.insertInputNewline()
 		return nil, true
+	case "tab":
+		if m.slashCompletionActive() {
+			m.acceptSlashCompletion()
+			return nil, true
+		}
 	case "up":
+		if m.slashCompletionActive() {
+			m.moveSlashCompletion(-1)
+			return nil, true
+		}
 		if m.inputCursorAtTop() {
 			return m.recallPreviousPrompt(), true
 		}
 	case "down":
+		if m.slashCompletionActive() {
+			m.moveSlashCompletion(1)
+			return nil, true
+		}
 		if m.inputCursorAtBottom() {
 			return m.recallNextPrompt(), true
 		}
 	case "enter", "ctrl+m", "ctrl+j":
 		if m.consumeTrailingBackslashForNewline() {
+			return nil, true
+		}
+		if m.slashCompletionActive() && !m.inputHasExactSlashCommand() {
+			m.acceptSlashCompletion()
 			return nil, true
 		}
 		if m.composer.draftActive {
@@ -262,9 +295,111 @@ func (m *appProgramModel) updateKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	return nil, false
 }
 
+func (m *appProgramModel) resetSlashCompletion() {
+	m.slashMenu = appProgramSlashCompletion{}
+}
+
+func (m *appProgramModel) updateSlashCompletionAfterInputChange(previous string) {
+	current := m.input.Value()
+	if current == previous {
+		return
+	}
+	m.slashMenu.dismissedFor = ""
+	previousPrefix, previousOK := appProgramSlashCommandPrefix(previous)
+	currentPrefix, currentOK := appProgramSlashCommandPrefix(current)
+	if !currentOK {
+		m.slashMenu.selected = 0
+		m.slashMenu.prefix = ""
+		return
+	}
+	if !previousOK || previousPrefix != currentPrefix || m.slashMenu.prefix != currentPrefix {
+		m.slashMenu.selected = 0
+	}
+	m.slashMenu.prefix = currentPrefix
+}
+
+func (m *appProgramModel) slashCompletionActive() bool {
+	return len(m.slashCompletionMatches()) > 0
+}
+
+func (m *appProgramModel) slashCompletionMatches() []interactiveCommandSpec {
+	prefix, ok := appProgramSlashCommandPrefix(m.input.Value())
+	if !ok || m.input.Value() == m.slashMenu.dismissedFor {
+		return nil
+	}
+	specs := interactiveCommandSpecs()
+	matches := make([]interactiveCommandSpec, 0, len(specs))
+	for _, spec := range specs {
+		name := strings.TrimPrefix(spec.Name, "/")
+		if prefix == "" || strings.HasPrefix(name, strings.ToLower(prefix)) {
+			matches = append(matches, spec)
+		}
+	}
+	return matches
+}
+
+func appProgramSlashCommandPrefix(value string) (string, bool) {
+	if value == "" || strings.HasPrefix(value, "//") || !strings.HasPrefix(value, "/") {
+		return "", false
+	}
+	if strings.Contains(value, "\n") {
+		return "", false
+	}
+	token := strings.TrimPrefix(value, "/")
+	if strings.ContainsAny(token, " \t") {
+		return "", false
+	}
+	return strings.ToLower(token), true
+}
+
+func (m *appProgramModel) clampSlashCompletion() {
+	matches := m.slashCompletionMatches()
+	if len(matches) == 0 {
+		m.slashMenu.selected = 0
+		return
+	}
+	if m.slashMenu.selected >= len(matches) {
+		m.slashMenu.selected = len(matches) - 1
+	}
+	if m.slashMenu.selected < 0 {
+		m.slashMenu.selected = 0
+	}
+}
+
+func (m *appProgramModel) moveSlashCompletion(delta int) {
+	matches := m.slashCompletionMatches()
+	if len(matches) == 0 {
+		m.slashMenu.selected = 0
+		return
+	}
+	m.slashMenu.selected = (m.slashMenu.selected + delta) % len(matches)
+	if m.slashMenu.selected < 0 {
+		m.slashMenu.selected += len(matches)
+	}
+}
+
+func (m *appProgramModel) acceptSlashCompletion() {
+	matches := m.slashCompletionMatches()
+	if len(matches) == 0 {
+		return
+	}
+	m.clampSlashCompletion()
+	m.input.SetValue(matches[m.slashMenu.selected].Name + " ")
+	m.input.CursorEnd()
+	m.syncComposerDraftFromInput()
+	m.resetSlashCompletion()
+	m.resize()
+}
+
+func (m *appProgramModel) inputHasExactSlashCommand() bool {
+	name, _ := splitInteractiveCommand(m.input.Value())
+	return knownInteractiveCommand(name)
+}
+
 func (m *appProgramModel) insertInputNewline() {
 	m.input.InsertRune('\n')
 	m.syncComposerDraftFromInput()
+	m.resetSlashCompletion()
 	m.resize()
 }
 
@@ -275,6 +410,7 @@ func (m *appProgramModel) consumeTrailingBackslashForNewline() bool {
 	}
 	m.input.SetValue(strings.TrimSuffix(value, "\\") + "\n")
 	m.syncComposerDraftFromInput()
+	m.resetSlashCompletion()
 	m.resize()
 	return true
 }
@@ -310,6 +446,7 @@ func (m *appProgramModel) handleCommand(text string) tea.Cmd {
 		return m.startPrompt(result.SubmitPrompt)
 	}
 	m.syncComposerView()
+	m.resetSlashCompletion()
 	return nil
 }
 
@@ -591,6 +728,9 @@ func (m *appProgramModel) View() string {
 	}
 	rows = appendAppProgramBlankRows(rows, appProgramBottomInset)
 	rows = append(rows, m.composerView(renderWidth))
+	if suggestions := m.slashCompletionView(renderWidth); suggestions != "" {
+		rows = append(rows, suggestions)
+	}
 	// The composer intentionally leaves its background SGR active so Bubble
 	// Tea's end-of-line erase paints the full-width input band. The next row
 	// must reset SGR before writing status text.
@@ -702,6 +842,60 @@ func (m *appProgramModel) phaseLabel() string {
 
 func (m *appProgramModel) helpView(width int) string {
 	return appProgramFitLine(appProgramMutedStyle.Render("/help /status /session /pick /show /sessions /resume /new /draft /submit /cancel /quit"), width)
+}
+
+func (m *appProgramModel) slashCompletionView(width int) string {
+	matches := m.slashCompletionMatches()
+	if len(matches) == 0 {
+		return ""
+	}
+	selected := appProgramClampedSelection(m.slashMenu.selected, len(matches))
+	const maxRows = 7
+	start := 0
+	if selected >= maxRows {
+		start = selected - maxRows + 1
+	}
+	end := min(len(matches), start+maxRows)
+	nameWidth := appProgramSlashCompletionNameWidth(matches[start:end])
+	descWidth := width - nameWidth - 5
+	if descWidth < 10 {
+		descWidth = 10
+	}
+	lines := make([]string, 0, end-start)
+	for i, spec := range matches[start:end] {
+		index := start + i
+		cursor := " "
+		nameStyle := appProgramToolStyle
+		descStyle := appProgramSuggestionStyle
+		if index == selected {
+			cursor = "›"
+			nameStyle = appProgramSuggestionActive
+			descStyle = appProgramMarkdownStyle
+		}
+		name := nameStyle.Render(spec.Name) + strings.Repeat(" ", max(0, nameWidth-lipgloss.Width(spec.Name)))
+		desc := descStyle.Render(appProgramFitLine(spec.Description, descWidth))
+		line := fmt.Sprintf("%s %s  %s", cursor, name, desc)
+		lines = append(lines, appProgramResetSGR+appProgramFitLine(line, width))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func appProgramClampedSelection(selected, length int) int {
+	if length <= 0 || selected < 0 {
+		return 0
+	}
+	if selected >= length {
+		return length - 1
+	}
+	return selected
+}
+
+func appProgramSlashCompletionNameWidth(specs []interactiveCommandSpec) int {
+	width := 0
+	for _, spec := range specs {
+		width = max(width, lipgloss.Width(spec.Name))
+	}
+	return max(width, len("/help"))
 }
 
 func (m *appProgramModel) composerView(width int) string {

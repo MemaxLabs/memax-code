@@ -193,6 +193,55 @@ func TestAppProgramComposerHistoryDoesNotStealUpInsideMultilineInput(t *testing.
 	}
 }
 
+func TestAppProgramSlashCompletionFiltersCommands(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.width = 100
+	model.input.SetValue("/con")
+	model.resize()
+
+	got := ansi.Strip(model.View())
+	for _, want := range []string{"/context", "Show context budgets"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("slash completion missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "/help") {
+		t.Fatalf("slash completion did not filter by prefix:\n%s", got)
+	}
+}
+
+func TestAppProgramSlashCompletionTabAcceptsSelection(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.input.SetValue("/con")
+
+	if _, handled := model.updateKey(tea.KeyMsg{Type: tea.KeyTab}); !handled {
+		t.Fatal("tab did not handle active slash completion")
+	}
+	if got, want := model.input.Value(), "/context "; got != want {
+		t.Fatalf("input after tab = %q, want %q", got, want)
+	}
+	if model.slashCompletionActive() {
+		t.Fatalf("slash completion still active after accept")
+	}
+}
+
+func TestAppProgramSlashCompletionUsesArrowSelectionBeforeHistory(t *testing.T) {
+	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	model.composer.loadHistory([]string{"old prompt"})
+	model.input.SetValue("/s")
+	model.input.CursorStart()
+
+	if _, handled := model.updateKey(tea.KeyMsg{Type: tea.KeyDown}); !handled {
+		t.Fatal("down did not move slash completion")
+	}
+	if got := model.input.Value(); got != "/s" {
+		t.Fatalf("slash completion navigation changed input/history: %q", got)
+	}
+	if model.slashMenu.selected == 0 {
+		t.Fatal("down did not move slash completion selection")
+	}
+}
+
 func TestAppProgramBackslashEnterInsertsNewline(t *testing.T) {
 	model := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	model.input.SetValue("line one\\")
