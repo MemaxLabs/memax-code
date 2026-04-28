@@ -711,6 +711,63 @@ func TestAppProgramStructuredLongCommandUsesCompactPreview(t *testing.T) {
 	}
 }
 
+func TestAppProgramStructuredLongCommandToolResultWithoutLifecycleMetadataStaysCompact(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	command := strings.Join([]string{
+		"mkdir -p /tmp/claude-review",
+		"cat > /tmp/claude-review/prompt.txt <<'EOF'",
+		"Review the follow-up fix for blank-heavy assistant stream normalization.",
+		`{"type":"system","subtype":"init","tools":["Task","Bash","Edit"]}`,
+		"EOF",
+	}, "\n")
+	commandJSON, err := json.Marshal(command)
+	if err != nil {
+		t.Fatalf("marshal command: %v", err)
+	}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolUse, ToolUse: &model.ToolUse{
+		ID:    "tool-run-1",
+		Name:  "run_command",
+		Input: json.RawMessage(`{"command":` + string(commandJSON) + `}`),
+	}})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Command:   command,
+	}})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		ExitCode:  0,
+	}})
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventToolResult, ToolResult: &model.ToolResult{
+		ToolUseID: "tool-run-1",
+		Name:      "run_command",
+		Content:   "",
+	}})
+
+	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	compact := "• Bash(mkdir -p /tmp/claude-review ; cat > /tmp/claude-review/prompt.txt <<'EOF' ; ... +3 lines (ctrl+t to view transcript))"
+	if count := strings.Count(got, compact); count != 1 {
+		t.Fatalf("compact command count = %d, want 1:\n%s", count, got)
+	}
+	if count := strings.Count(got, "• Bash("); count != 1 {
+		t.Fatalf("command header count = %d, want 1:\n%s", count, got)
+	}
+	if !strings.Contains(got, compact+"\n  └ done id=cmd-1 exit=0") {
+		t.Fatalf("long command completion did not attach under compact invocation:\n%s", got)
+	}
+	for _, unwanted := range []string{
+		"Review the follow-up fix",
+		`"type":"system"`,
+		"\nEOF",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("long command fallback leaked %q:\n%s", unwanted, got)
+		}
+	}
+}
+
 func TestAppProgramStructuredCommandResultSummarizesRuntime(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}

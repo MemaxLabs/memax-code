@@ -2081,7 +2081,10 @@ func appToolUseDisplayWithMCPServers(toolUse *model.ToolUse, serverKeys []string
 		name = "tool"
 	}
 	if command := appToolUseCommand(toolUse); command != "" {
-		return name + "(" + command + ")"
+		if name == "Bash" {
+			return appCommandDisplay(command)
+		}
+		return name + "(" + appCommandPreview(command) + ")"
 	}
 	if subagent, ok := appToolUseSubagentInput(toolUse); ok {
 		display := name + "(" + subagent.Agent + ")"
@@ -2268,7 +2271,7 @@ func appFormatCommandLine(status, raw string) string {
 		}
 		return strings.Join(parts, " ")
 	}
-	parts := []string{"Bash(" + command + ")", "started"}
+	parts := []string{appCommandDisplay(command), "started"}
 	if id := fields["id"]; id != "" {
 		parts = append(parts, "id="+id)
 	}
