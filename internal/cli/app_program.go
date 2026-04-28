@@ -2300,7 +2300,47 @@ func appCommandDisplay(command string) string {
 	if command == "" {
 		return "Bash"
 	}
-	return "Bash(" + command + ")"
+	return "Bash(" + appCommandPreview(command) + ")"
+}
+
+func appCommandPreview(command string) string {
+	lines := appPreviewLines(command)
+	if len(lines) == 0 {
+		return ""
+	}
+	const maxPreviewLines = 2
+	const maxPreviewLineChars = 96
+	const maxPreviewBodyChars = 120
+	hiddenLines := 0
+	if len(lines) > maxPreviewLines {
+		hiddenLines = len(lines) - maxPreviewLines
+		lines = lines[:maxPreviewLines]
+	}
+	parts := make([]string, 0, len(lines)+1)
+	for _, line := range lines {
+		parts = append(parts, appInlineSnippet(line, maxPreviewLineChars))
+	}
+	if hiddenLines > 0 {
+		body := appInlineSnippet(strings.Join(parts, " ; "), maxPreviewBodyChars)
+		return body + fmt.Sprintf(" ; ... +%d lines (ctrl+t to view transcript)", hiddenLines)
+	}
+	preview := strings.Join(parts, " ; ")
+	return appInlineSnippet(preview, 180)
+}
+
+func appPreviewLines(text string) []string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	raw := strings.Split(text, "\n")
+	lines := make([]string, 0, len(raw))
+	for _, line := range raw {
+		line = strings.Join(strings.Fields(line), " ")
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func appParseActivityFields(raw string) map[string]string {

@@ -666,6 +666,51 @@ func TestAppProgramStructuredRunCommandRendersBeforeResult(t *testing.T) {
 	}
 }
 
+func TestAppProgramStructuredLongCommandUsesCompactPreview(t *testing.T) {
+	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
+	m.transcript = appTranscriptTail{}
+
+	command := strings.Join([]string{
+		"mkdir -p /tmp/claude-review",
+		"cat > /tmp/claude-review/prompt.txt <<'EOF'",
+		"Review the follow-up fix for blank-heavy assistant stream normalization.",
+		`{"type":"system","subtype":"init","tools":["Task","Bash","Edit"]}`,
+		"EOF",
+	}, "\n")
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandStarted, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		Command:   command,
+	}})
+
+	got := ansi.Strip(m.View())
+	for _, want := range []string{
+		"• Bash(mkdir -p /tmp/claude-review ; cat > /tmp/claude-review/prompt.txt <<",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("long command transcript missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"Review the follow-up fix",
+		`"type":"system"`,
+		"\nEOF",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("long command transcript leaked %q:\n%s", unwanted, got)
+		}
+	}
+
+	m.appendEvent(memaxagent.Event{Kind: memaxagent.EventCommandFinished, Command: &memaxagent.CommandEvent{
+		CommandID: "cmd-1",
+		ExitCode:  0,
+	}})
+
+	got = ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
+	if !strings.Contains(got, "• Bash(mkdir -p /tmp/claude-review ; cat > /tmp/claude-review/prompt.txt <<'EOF' ; ... +3 lines (ctrl+t to view transcript))") {
+		t.Fatalf("finalized long command transcript did not keep compact preview:\n%s", got)
+	}
+}
+
 func TestAppProgramStructuredCommandResultSummarizesRuntime(t *testing.T) {
 	m := newAppProgramModel(context.Background(), options{CWD: "."}, nil)
 	m.transcript = appTranscriptTail{}
@@ -860,7 +905,7 @@ func TestAppProgramStructuredParallelRunCommandsRenderLiveThenFinalizeGrouped(t 
 
 	live := ansi.Strip(m.View())
 	for _, command := range commands {
-		if !strings.Contains(live, "• Bash("+command+")") {
+		if !strings.Contains(live, "• "+appCommandDisplay(command)) {
 			t.Fatalf("live command missing %q:\n%s", command, live)
 		}
 	}
@@ -889,7 +934,7 @@ func TestAppProgramStructuredParallelRunCommandsRenderLiveThenFinalizeGrouped(t 
 
 	got := ansi.Strip(strings.Join(m.transcript.lines(maxAppTranscriptLines), "\n"))
 	for _, command := range commands {
-		want := "• Bash(" + command + ")\n  └ done exit=0"
+		want := "• " + appCommandDisplay(command) + "\n  └ done exit=0"
 		if !strings.Contains(got, want) {
 			t.Fatalf("finished command did not finalize as one grouped block %q:\n%s", want, got)
 		}
